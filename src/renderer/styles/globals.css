@@ -1,0 +1,155 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Base styles */
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html, body, #root {
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+}
+
+body {
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  background-color: #1a1a1a;
+  color: #e4e4e4;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: #1a1a1a;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #404040;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #505050;
+}
+
+/* Title bar drag region */
+.titlebar-drag-region {
+  -webkit-app-region: drag;
+}
+
+.titlebar-no-drag {
+  -webkit-app-region: no-drag;
+}
+
+/* Code and pre styling */
+code, pre {
+  font-family: 'JetBrains Mono', 'Menlo', 'Monaco', monospace;
+}
+
+/* Monaco editor overrides */
+.monaco-editor {
+  --vscode-editor-background: #1a1a1a !important;
+}
+
+/* Xterm.js overrides */
+.xterm {
+  padding: 8px;
+}
+
+.xterm-viewport {
+  overflow-y: auto !important;
+}
+
+/* Animation utilities */
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes slideUp {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+.animate-fade-in {
+  animation: fadeIn 0.2s ease-out;
+}
+
+.animate-slide-up {
+  animation: slideUp 0.3s ease-out;
+}
+
+.animate-pulse {
+  animation: pulse 2s infinite;
+}
+
+/* Status indicator colors */
+.status-running {
+  @apply bg-green-500;
+}
+
+.status-stopped {
+  @apply bg-gray-500;
+}
+
+.status-error {
+  @apply bg-red-500;
+}
+
+.status-starting, .status-stopping, .status-creating {
+  @apply bg-yellow-500 animate-pulse;
+}
+
+/* Chat message styling */
+.message-user {
+  @apply bg-blue-600/20 border-blue-600/30;
+}
+
+.message-assistant {
+  @apply bg-claude-surface border-claude-border;
+}
+
+/* Tool call styling */
+.tool-call {
+  @apply bg-amber-500/10 border-amber-500/30 rounded-lg p-3 my-2;
+}
+
+.tool-result {
+  @apply bg-green-500/10 border-green-500/30 rounded-lg p-3 my-2;
+}
+
+/* Split pane resizer */
+.split-resizer {
+  @apply bg-claude-border hover:bg-claude-accent transition-colors cursor-col-resize;
+  width: 4px;
+}
+
+.split-resizer:hover {
+  width: 4px;
+}
+
+/* Radix UI overrides */
+[data-radix-popper-content-wrapper] {
+  z-index: 50 !important;
+}
