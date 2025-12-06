@@ -179,26 +179,30 @@ export default function MainContent() {
         )}
       </div>
 
-      {/* Terminal panel (always visible at bottom when in chat mode) */}
+      {/* Terminal panel (visible at bottom when in chat mode and height > 0) */}
       {activePanel === 'chat' && (
         <>
-          {/* Terminal resize handle */}
+          {/* Terminal resize handle - always visible for expanding */}
           <div
             className={`h-1 hover:h-1.5 bg-claude-border hover:bg-claude-accent cursor-row-resize flex items-center justify-center transition-all ${
               isTerminalResizing ? 'h-1.5 bg-claude-accent' : ''
             }`}
             onMouseDown={handleTerminalResizeMouseDown}
+            onDoubleClick={() => setTerminalHeight(terminalHeight === 0 ? 300 : 0)}
+            title={terminalHeight === 0 ? 'Double-click to open terminal' : 'Double-click to close terminal'}
           >
             <GripVertical size={12} className="text-claude-text-secondary opacity-0 hover:opacity-100 rotate-90" />
           </div>
 
-          {/* Terminal container with dynamic height */}
-          <div
-            className="border-t border-claude-border"
-            style={{ height: terminalHeight }}
-          >
-            <TerminalContainer session={activeSession} compact />
-          </div>
+          {/* Terminal container with dynamic height - hidden when height is 0 */}
+          {terminalHeight > 0 && (
+            <div
+              className="border-t border-claude-border"
+              style={{ height: terminalHeight }}
+            >
+              <TerminalContainer session={activeSession} compact />
+            </div>
+          )}
         </>
       )}
     </div>

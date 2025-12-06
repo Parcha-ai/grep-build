@@ -14,9 +14,16 @@ export default function SessionList() {
     );
   }
 
+  // Sort sessions by updatedAt in descending order (most recent first)
+  const sortedSessions = [...sessions].sort((a, b) => {
+    const aTime = new Date(a.updatedAt).getTime();
+    const bTime = new Date(b.updatedAt).getTime();
+    return bTime - aTime;
+  });
+
   return (
     <div className="px-2 pb-2 space-y-1">
-      {sessions.map((session) => (
+      {sortedSessions.map((session) => (
         <SessionCard
           key={session.id}
           session={session}

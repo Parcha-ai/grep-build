@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { File, Folder, Search, Hash, Code, X } from 'lucide-react';
+import { File, Folder, Search, X, Loader2 } from 'lucide-react';
 
 export interface FileEntry {
   name: string;
@@ -24,6 +24,7 @@ interface MentionAutocompleteProps {
   onClose: () => void;
 }
 
+// File type colors using Tailwind classes
 const FILE_ICON_COLORS: Record<string, string> = {
   '.ts': 'text-blue-400',
   '.tsx': 'text-blue-400',
@@ -113,46 +114,50 @@ export default function MentionAutocomplete({
 
   const getFileIcon = (file: FileEntry) => {
     if (file.type === 'folder') {
-      return <Folder size={14} className="text-amber-400" />;
+      return <Folder size={12} className="text-amber-400" />;
     }
     const color = FILE_ICON_COLORS[file.extension || ''] || 'text-claude-text-secondary';
-    return <File size={14} className={color} />;
+    return <File size={12} className={color} />;
   };
 
   return (
     <div
-      className="absolute z-50 bg-claude-surface border border-claude-border rounded-lg shadow-xl overflow-hidden"
+      className="absolute z-50 overflow-hidden font-mono bg-claude-surface border border-claude-border shadow-xl"
       style={{
         top: position.top,
         left: position.left,
-        width: 350,
-        maxHeight: 300,
+        width: 340,
+        maxHeight: 280,
+        borderRadius: 0,
       }}
     >
-      {/* Header */}
-      <div className="flex items-center justify-between px-3 py-2 border-b border-claude-border bg-claude-bg/50">
-        <div className="flex items-center gap-2 text-xs text-claude-text-secondary">
-          <Search size={12} />
-          <span>Search files & folders</span>
+      {/* Header - brutalist */}
+      <div className="flex items-center justify-between px-2.5 py-1.5 bg-claude-bg/50 border-b border-claude-border">
+        <div className="flex items-center gap-1.5 text-[10px] text-claude-text-secondary">
+          <Search size={10} />
+          <span style={{ letterSpacing: '0.05em' }}>SEARCH FILES</span>
         </div>
         <button
           onClick={onClose}
-          className="p-1 rounded hover:bg-claude-bg text-claude-text-secondary hover:text-claude-text"
+          className="p-0.5 hover:bg-claude-bg text-claude-text-secondary"
+          style={{ borderRadius: 0 }}
         >
-          <X size={12} />
+          <X size={10} />
         </button>
       </div>
 
       {/* Results */}
-      <div ref={listRef} className="overflow-y-auto max-h-[240px]">
+      <div ref={listRef} className="overflow-y-auto max-h-[200px]">
         {isLoading ? (
-          <div className="p-4 text-center text-claude-text-secondary text-sm">
-            <div className="w-4 h-4 border-2 border-claude-accent border-t-transparent rounded-full animate-spin mx-auto mb-2" />
-            Searching...
+          <div className="p-4 text-center">
+            <Loader2 size={14} className="animate-spin mx-auto mb-1 text-claude-accent" />
+            <span className="text-[10px] text-claude-text-secondary" style={{ letterSpacing: '0.05em' }}>
+              SEARCHING...
+            </span>
           </div>
         ) : files.length === 0 ? (
-          <div className="p-4 text-center text-claude-text-secondary text-sm">
-            {query ? 'No matching files found' : 'Type to search files...'}
+          <div className="p-4 text-center text-[10px] text-claude-text-secondary" style={{ letterSpacing: '0.05em' }}>
+            {query ? 'NO FILES FOUND' : 'TYPE TO SEARCH...'}
           </div>
         ) : (
           files.map((file, index) => (
@@ -167,32 +172,43 @@ export default function MentionAutocomplete({
                   displayName: file.relativePath,
                 })
               }
-              className={`w-full flex items-center gap-2 px-3 py-2 text-left text-sm transition-colors ${
+              className={`w-full flex items-center gap-2 px-2.5 py-1.5 text-left transition-colors ${
                 index === selectedIndex
                   ? 'bg-claude-accent/20 text-claude-text'
                   : 'text-claude-text-secondary hover:bg-claude-bg'
               }`}
+              style={{
+                borderLeft: index === selectedIndex ? '2px solid var(--claude-accent)' : '2px solid transparent',
+              }}
             >
               {getFileIcon(file)}
-              <span className="flex-1 truncate font-mono text-xs">{file.relativePath}</span>
-              <span className="text-[10px] text-claude-text-secondary capitalize">
-                {file.type}
+              <span className="flex-1 truncate text-[11px]">
+                {file.relativePath}
+              </span>
+              <span
+                className="text-[9px] font-bold px-1 bg-claude-bg"
+                style={{ letterSpacing: '0.05em', borderRadius: 0 }}
+              >
+                {file.type === 'folder' ? 'DIR' : 'FILE'}
               </span>
             </button>
           ))
         )}
       </div>
 
-      {/* Footer hint */}
-      <div className="px-3 py-1.5 border-t border-claude-border bg-claude-bg/50 flex items-center gap-3 text-[10px] text-claude-text-secondary">
-        <span>
-          <kbd className="px-1 bg-claude-surface rounded">↑↓</kbd> navigate
+      {/* Footer hint - brutalist */}
+      <div className="px-2.5 py-1.5 flex items-center gap-3 text-[9px] bg-claude-bg/50 border-t border-claude-border text-claude-text-secondary">
+        <span className="flex items-center gap-1">
+          <kbd className="px-1 font-bold bg-claude-surface" style={{ borderRadius: 0 }}>↑↓</kbd>
+          <span>NAV</span>
         </span>
-        <span>
-          <kbd className="px-1 bg-claude-surface rounded">↵</kbd> select
+        <span className="flex items-center gap-1">
+          <kbd className="px-1 font-bold bg-claude-surface" style={{ borderRadius: 0 }}>↵</kbd>
+          <span>SELECT</span>
         </span>
-        <span>
-          <kbd className="px-1 bg-claude-surface rounded">esc</kbd> close
+        <span className="flex items-center gap-1">
+          <kbd className="px-1 font-bold bg-claude-surface" style={{ borderRadius: 0 }}>ESC</kbd>
+          <span>CLOSE</span>
         </span>
       </div>
     </div>

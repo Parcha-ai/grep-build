@@ -28,13 +28,18 @@ export default function ChatContainer({ session }: ChatContainerProps) {
   }, [sessionMessages, streamContent, streamingToolCalls]);
 
   return (
-    <div className="flex-1 flex flex-col overflow-hidden">
-      {/* Header */}
-      <div className="h-12 border-b border-claude-border flex items-center px-4">
-        <h2 className="font-medium">{session.name}</h2>
+    <div className="flex-1 flex flex-col overflow-hidden font-mono bg-claude-bg">
+      {/* Header - brutalist */}
+      <div className="h-10 border-b border-claude-border flex items-center px-4 bg-claude-surface/50">
+        <h2 className="text-xs font-bold text-claude-text uppercase" style={{ letterSpacing: '0.1em' }}>
+          {session.name}
+        </h2>
         {session.status === 'running' && (
-          <span className="ml-2 px-2 py-0.5 text-xs bg-green-500/20 text-green-500 rounded">
-            Running
+          <span
+            className="ml-2 px-1.5 py-0.5 text-[9px] font-bold uppercase bg-green-500/20 text-green-500"
+            style={{ borderRadius: 0, letterSpacing: '0.05em' }}
+          >
+            ACTIVE
           </span>
         )}
       </div>

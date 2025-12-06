@@ -64,4 +64,8 @@ export function registerClaudeHandlers(ipcMain: IpcMain): void {
   ipcMain.on(IPC_CHANNELS.CLAUDE_CANCEL, (_, sessionId: string) => {
     claudeService.cancelQuery(sessionId);
   });
+
+  ipcMain.handle(IPC_CHANNELS.CLAUDE_GET_MESSAGES, async (_, sessionId: string) => {
+    return claudeService.getMessages(sessionId);
+  });
 }

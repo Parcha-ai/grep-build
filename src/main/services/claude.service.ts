@@ -1,6 +1,9 @@
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import type { SDKMessage } from '@anthropic-ai/claude-agent-sdk';
 import Store from 'electron-store';
+import * as fs from 'fs';
+import * as path from 'path';
+import * as os from 'os';
 import type { ChatMessage, ToolCall, Session } from '../../shared/types';
 
 interface StreamEvent {
@@ -183,5 +186,181 @@ export class ClaudeService {
       controller.abort();
       this.activeQueries.delete(sessionId);
     }
+  }
+
+  /**
+   * Get project slug from path - matches SDK's convention
+   */
+  private getProjectSlug(projectPath: string): string {
+    // SDK uses a slug based on the absolute path
+    // Format: sanitized path with special chars replaced
+    return projectPath
+      .replace(/^\//, '')
+      .replace(/\//g, '-')
+      .replace(/[^a-zA-Z0-9-_]/g, '_')
+      .toLowerCase();
+  }
+
+  /**
+   * Get messages from SDK transcript files for a session
+   */
+  async getMessages(sessionId: string): Promise<ChatMessage[]> {
+    const session = this.sessionStore.get(`sessions.${sessionId}`) as Session | undefined;
+    if (!session) {
+      console.error('Session not found:', sessionId);
+      return [];
+    }
+
+    const projectPath = session.worktreePath || session.repoPath;
+    if (!projectPath) {
+      return [];
+    }
+
+    // Look for transcript files in ~/.claude/projects/{project-slug}/
+    const claudeDir = path.join(os.homedir(), '.claude', 'projects');
+    const projectSlug = this.getProjectSlug(projectPath);
+    const projectDir = path.join(claudeDir, projectSlug);
+
+    try {
+      // Check if directory exists
+      if (!fs.existsSync(projectDir)) {
+        // Try alternate slug formats
+        const dirs = fs.existsSync(claudeDir) ? fs.readdirSync(claudeDir) : [];
+        const matchingDir = dirs.find(d =>
+          d.toLowerCase().includes(path.basename(projectPath).toLowerCase())
+        );
+        if (!matchingDir) {
+          console.log('No transcript directory found for project:', projectPath);
+          return [];
+        }
+        return this.parseTranscriptsFromDir(path.join(claudeDir, matchingDir));
+      }
+
+      return this.parseTranscriptsFromDir(projectDir);
+    } catch (error) {
+      console.error('Error reading transcripts:', error);
+      return [];
+    }
+  }
+
+  /**
+   * Parse all JSONL transcript files from a directory into ChatMessages
+   */
+  private parseTranscriptsFromDir(dir: string): ChatMessage[] {
+    const messages: ChatMessage[] = [];
+    const seenIds = new Set<string>();
+
+    try {
+      const files = fs.readdirSync(dir)
+        .filter(f => f.endsWith('.jsonl'))
+        .sort(); // Sort to get chronological order
+
+      for (const file of files) {
+        const filePath = path.join(dir, file);
+        const content = fs.readFileSync(filePath, 'utf-8');
+        const lines = content.split('\n').filter(line => line.trim());
+
+        for (const line of lines) {
+          try {
+            const entry = JSON.parse(line);
+            const msg = this.parseTranscriptEntry(entry);
+            if (msg && !seenIds.has(msg.id)) {
+              seenIds.add(msg.id);
+              messages.push(msg);
+            }
+          } catch {
+            // Skip malformed lines
+          }
+        }
+      }
+    } catch (error) {
+      console.error('Error parsing transcripts from dir:', dir, error);
+    }
+
+    return messages;
+  }
+
+  /**
+   * Parse a single transcript entry into a ChatMessage
+   */
+  private parseTranscriptEntry(entry: Record<string, unknown>): ChatMessage | null {
+    // SDK transcript format varies - handle different message types
+    const type = entry.type as string;
+
+    if (type === 'user' || type === 'human') {
+      const content = this.extractContent(entry);
+      if (!content) return null;
+      return {
+        id: (entry.id as string) || `user-${Date.now()}-${Math.random()}`,
+        role: 'user',
+        content,
+        timestamp: entry.timestamp ? new Date(entry.timestamp as string) : new Date(),
+      };
+    }
+
+    if (type === 'assistant') {
+      const content = this.extractContent(entry);
+      const toolCalls = this.extractToolCalls(entry);
+      return {
+        id: (entry.id as string) || `assistant-${Date.now()}-${Math.random()}`,
+        role: 'assistant',
+        content: content || '',
+        toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
+        timestamp: entry.timestamp ? new Date(entry.timestamp as string) : new Date(),
+      };
+    }
+
+    return null;
+  }
+
+  /**
+   * Extract text content from various message formats
+   */
+  private extractContent(entry: Record<string, unknown>): string {
+    // Direct content string
+    if (typeof entry.content === 'string') {
+      return entry.content;
+    }
+
+    // Content array (Claude API format)
+    if (Array.isArray(entry.content)) {
+      return entry.content
+        .filter((block: { type?: string; text?: string }) => block.type === 'text')
+        .map((block: { text?: string }) => block.text || '')
+        .join('\n');
+    }
+
+    // Message wrapper
+    if (entry.message && typeof entry.message === 'object') {
+      return this.extractContent(entry.message as Record<string, unknown>);
+    }
+
+    return '';
+  }
+
+  /**
+   * Extract tool calls from message content
+   */
+  private extractToolCalls(entry: Record<string, unknown>): ToolCall[] {
+    const toolCalls: ToolCall[] = [];
+
+    const content = entry.content || (entry.message as Record<string, unknown>)?.content;
+    if (!Array.isArray(content)) return toolCalls;
+
+    for (const block of content) {
+      if (block.type === 'tool_use') {
+        toolCalls.push({
+          id: block.id || '',
+          name: block.name || '',
+          input: block.input || {},
+          status: 'completed',
+          result: block.result,
+          startedAt: new Date(),
+          completedAt: new Date(),
+        });
+      }
+    }
+
+    return toolCalls;
   }
 }

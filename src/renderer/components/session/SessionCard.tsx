@@ -1,5 +1,5 @@
 import React from 'react';
-import { Play, Square, Trash2, Circle, GitBranch } from 'lucide-react';
+import { Play, Square, Trash2, GitBranch } from 'lucide-react';
 import { useSessionStore } from '../../stores/session.store';
 import type { Session } from '../../../shared/types';
 
@@ -15,17 +15,17 @@ export default function SessionCard({ session, isActive, onClick }: SessionCardP
   const getStatusColor = () => {
     switch (session.status) {
       case 'running':
-        return 'text-green-500 fill-green-500';
+        return 'bg-green-500';
       case 'stopped':
-        return 'text-gray-500 fill-gray-500';
+        return 'bg-gray-500';
       case 'error':
-        return 'text-red-500 fill-red-500';
+        return 'bg-red-500';
       case 'starting':
       case 'stopping':
       case 'creating':
-        return 'text-yellow-500 fill-yellow-500 animate-pulse';
+        return 'bg-yellow-500';
       default:
-        return 'text-gray-500 fill-gray-500';
+        return 'bg-gray-500';
     }
   };
 
@@ -46,54 +46,72 @@ export default function SessionCard({ session, isActive, onClick }: SessionCardP
     }
   };
 
+  const isAnimating =
+    session.status === 'starting' ||
+    session.status === 'stopping' ||
+    session.status === 'creating';
+
   return (
     <div
       onClick={onClick}
-      className={`p-3 rounded-lg cursor-pointer transition-colors group ${
+      className={`px-3 py-2 cursor-pointer transition-colors group font-mono ${
         isActive
-          ? 'bg-claude-accent/20 border border-claude-accent/50'
-          : 'hover:bg-claude-bg border border-transparent'
+          ? 'bg-claude-accent/20'
+          : 'hover:bg-claude-bg'
       }`}
+      style={{
+        borderLeft: isActive ? '2px solid var(--claude-accent)' : '2px solid transparent',
+      }}
     >
       <div className="flex items-start gap-2">
-        {/* Status indicator */}
-        <Circle size={8} className={`mt-1.5 ${getStatusColor()}`} />
+        {/* Status indicator - square */}
+        <div
+          className={`w-2 h-2 mt-1 flex-shrink-0 ${getStatusColor()} ${isAnimating ? 'animate-pulse' : ''}`}
+          style={{ borderRadius: 0 }}
+        />
 
         {/* Content */}
         <div className="flex-1 min-w-0">
-          <h4 className="font-medium text-sm truncate">{session.name}</h4>
-          <div className="flex items-center gap-1.5 mt-1 text-xs text-claude-text-secondary">
-            <GitBranch size={12} />
-            <span className="font-mono truncate">{session.branch}</span>
+          <h4 className={`text-xs font-bold truncate ${isActive ? 'text-claude-text' : 'text-claude-text-secondary'}`}>
+            {session.name}
+          </h4>
+          <div className="flex items-center gap-1 mt-0.5 text-claude-text-secondary">
+            <GitBranch size={10} />
+            <span className="text-[10px] truncate">
+              {session.branch}
+            </span>
           </div>
         </div>
 
-        {/* Actions */}
-        <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+        {/* Actions - brutalist */}
+        <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
           {session.status === 'stopped' && (
             <button
               onClick={handleStart}
-              className="p-1 rounded hover:bg-claude-surface transition-colors text-green-500"
+              className="p-1 transition-colors hover:bg-green-500/20 text-green-500"
+              style={{ borderRadius: 0 }}
               title="Start session"
             >
-              <Play size={14} />
+              <Play size={12} />
             </button>
           )}
           {session.status === 'running' && (
             <button
               onClick={handleStop}
-              className="p-1 rounded hover:bg-claude-surface transition-colors text-yellow-500"
+              className="p-1 transition-colors hover:bg-yellow-500/20 text-yellow-500"
+              style={{ borderRadius: 0 }}
               title="Stop session"
             >
-              <Square size={14} />
+              <Square size={12} />
             </button>
           )}
           <button
             onClick={handleDelete}
-            className="p-1 rounded hover:bg-claude-surface transition-colors text-red-400"
+            className="p-1 transition-colors hover:bg-red-500/20 text-red-400"
+            style={{ borderRadius: 0 }}
             title="Delete session"
           >
-            <Trash2 size={14} />
+            <Trash2 size={12} />
           </button>
         </div>
       </div>

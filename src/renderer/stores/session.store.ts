@@ -31,6 +31,7 @@ interface SessionState {
   updateToolCall: (sessionId: string, toolCallId: string, updates: Partial<ToolCall>) => void;
   setStreaming: (sessionId: string, isStreaming: boolean) => void;
   sendMessage: (sessionId: string, message: string, attachments?: unknown[]) => Promise<void>;
+  loadMessages: (sessionId: string) => Promise<void>;
   subscribeToClaude: () => () => void;
 }
 
@@ -43,9 +44,31 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   currentToolCalls: {},
 
   setActiveSession: (sessionId) => {
-    set({ activeSessionId: sessionId });
-    // Persist active session
+    const { loadMessages } = get();
+
+    set((state) => {
+      // Update the session's updatedAt timestamp when it becomes active
+      const updatedSessions = sessionId
+        ? state.sessions.map(session =>
+            session.id === sessionId
+              ? { ...session, updatedAt: new Date() }
+              : session
+          )
+        : state.sessions;
+
+      return {
+        activeSessionId: sessionId,
+        sessions: updatedSessions
+      };
+    });
+
+    // Persist active session and update timestamp in backend
     window.electronAPI.dev.setActiveSession(sessionId);
+    if (sessionId) {
+      window.electronAPI.sessions.update(sessionId, { updatedAt: new Date() });
+      // Load messages for this session from SDK transcripts
+      loadMessages(sessionId);
+    }
   },
 
   addSession: (session) => {
@@ -59,11 +82,18 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
       // Verify the active session still exists
       const sessionExists = sessions.some((s) => s.id === activeSessionId);
+      const validActiveSessionId = sessionExists ? activeSessionId : null;
 
       set({
         sessions,
-        activeSessionId: sessionExists ? activeSessionId : null,
+        activeSessionId: validActiveSessionId,
       });
+
+      // Load messages for the active session
+      if (validActiveSessionId) {
+        const { loadMessages } = get();
+        loadMessages(validActiveSessionId);
+      }
     } catch (error) {
       console.error('Failed to load sessions:', error);
     }
@@ -162,6 +192,15 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   sendMessage: async (sessionId, message, attachments) => {
     const { addMessage, setStreaming } = get();
 
+    // Update session's updatedAt timestamp for recent activity
+    set((state) => ({
+      sessions: state.sessions.map(session =>
+        session.id === sessionId
+          ? { ...session, updatedAt: new Date() }
+          : session
+      ),
+    }));
+
     // Add user message
     const userMessage: ChatMessage = {
       id: Date.now().toString(),
@@ -176,9 +215,27 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
     try {
       await window.electronAPI.claude.sendMessage(sessionId, message, attachments);
+      // Update timestamp in backend as well
+      window.electronAPI.sessions.update(sessionId, { updatedAt: new Date() });
     } catch (error) {
       setStreaming(sessionId, false);
       console.error('Failed to send message:', error);
+    }
+  },
+
+  loadMessages: async (sessionId) => {
+    try {
+      const messages = await window.electronAPI.claude.getMessages(sessionId);
+      if (messages && messages.length > 0) {
+        set((state) => ({
+          messages: {
+            ...state.messages,
+            [sessionId]: messages,
+          },
+        }));
+      }
+    } catch (error) {
+      console.error('Failed to load messages:', error);
     }
   },
 

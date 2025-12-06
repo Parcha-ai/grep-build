@@ -1,7 +1,7 @@
-import React, { useMemo } from 'react';
-import { User, Bot } from 'lucide-react';
+import React from 'react';
+import { User } from 'lucide-react';
+import ReactMarkdown from 'react-markdown';
 import ToolCallCard from './ToolCallCard';
-import { parseMessageContent, type MessagePart } from '../../utils/messageParser';
 import type { ChatMessage, ToolCall } from '../../../shared/types';
 
 interface MessageBubbleProps {
@@ -13,46 +13,129 @@ interface MessageBubbleProps {
 export default function MessageBubble({ message, isStreaming, streamingToolCalls }: MessageBubbleProps) {
   const isUser = message.role === 'user';
 
-  // Parse text content for code blocks (no longer extracting tool calls from text)
-  const parsedParts = useMemo(() => {
-    if (isUser || !message.content) {
-      return message.content ? [{ type: 'text' as const, content: message.content }] : [];
-    }
-    return parseMessageContent(message.content);
-  }, [message.content, isUser]);
-
   // Use streaming tool calls if provided, otherwise use message.toolCalls
   const toolCalls = streamingToolCalls || message.toolCalls || [];
 
   return (
-    <div className={`flex gap-3 ${isUser ? 'flex-row-reverse' : ''}`}>
-      {/* Avatar */}
-      <div
-        className={`w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 ${
-          isUser ? 'bg-blue-600' : 'bg-claude-accent'
-        }`}
-      >
-        {isUser ? (
-          <User size={16} className="text-white" />
-        ) : (
-          <Bot size={16} className="text-white" />
-        )}
-      </div>
+    <div className={`flex gap-2 ${isUser ? 'flex-row-reverse' : ''}`}>
+      {/* Avatar - only for user messages */}
+      {isUser && (
+        <div
+          className="w-7 h-7 flex items-center justify-center flex-shrink-0 bg-blue-600"
+          style={{ borderRadius: 0 }}
+        >
+          <User size={14} className="text-white" />
+        </div>
+      )}
 
       {/* Content */}
-      <div className={`flex-1 max-w-[85%] ${isUser ? 'text-right' : ''}`}>
+      <div className={`flex-1 ${isUser ? 'max-w-[85%] text-right' : ''}`}>
         {isUser ? (
-          // User messages - simple bubble
-          <div className="inline-block rounded-xl px-4 py-3 bg-blue-600 text-white">
-            <p className="whitespace-pre-wrap">{message.content}</p>
+          // User messages - brutalist bubble
+          <div
+            className="inline-block px-3 py-2 bg-blue-600"
+            style={{ borderRadius: 0 }}
+          >
+            <p className="whitespace-pre-wrap text-white font-mono text-sm">{message.content}</p>
           </div>
         ) : (
-          // Assistant messages - text content + tool calls
+          // Assistant messages - markdown content + tool calls
           <div className="space-y-2">
-            {/* Render text/code content */}
-            {parsedParts.map((part, index) => (
-              <MessagePartRenderer key={`part-${index}`} part={part} />
-            ))}
+            {/* Render markdown content */}
+            {message.content && (
+              <div className="prose prose-invert prose-sm max-w-none font-mono text-claude-text">
+                <ReactMarkdown
+                  components={{
+                    // Custom code block rendering
+                    code({ className, children, ...props }) {
+                      const match = /language-(\w+)/.exec(className || '');
+                      const isBlock = String(children).includes('\n') || match;
+
+                      if (isBlock) {
+                        return (
+                          <div className="overflow-hidden border border-claude-border my-2" style={{ borderRadius: 0 }}>
+                            {match && (
+                              <div
+                                className="px-2 py-1 text-[10px] font-bold font-mono bg-claude-surface border-b border-claude-border text-claude-text-secondary"
+                                style={{ letterSpacing: '0.05em' }}
+                              >
+                                {match[1].toUpperCase()}
+                              </div>
+                            )}
+                            <pre className="p-3 bg-claude-bg m-0 whitespace-pre-wrap break-words">
+                              <code className="text-xs font-mono text-claude-text" {...props}>
+                                {children}
+                              </code>
+                            </pre>
+                          </div>
+                        );
+                      }
+
+                      // Inline code
+                      return (
+                        <code
+                          className="px-1 py-0.5 text-xs font-mono bg-claude-surface text-claude-accent"
+                          style={{ borderRadius: 0 }}
+                          {...props}
+                        >
+                          {children}
+                        </code>
+                      );
+                    },
+                    // Style paragraphs
+                    p({ children }) {
+                      return <p className="my-1 leading-relaxed">{children}</p>;
+                    },
+                    // Style lists
+                    ul({ children }) {
+                      return <ul className="my-1 ml-4 list-disc">{children}</ul>;
+                    },
+                    ol({ children }) {
+                      return <ol className="my-1 ml-4 list-decimal">{children}</ol>;
+                    },
+                    li({ children }) {
+                      return <li className="my-0.5">{children}</li>;
+                    },
+                    // Style headings
+                    h1({ children }) {
+                      return <h1 className="text-lg font-bold mt-3 mb-1">{children}</h1>;
+                    },
+                    h2({ children }) {
+                      return <h2 className="text-base font-bold mt-2 mb-1">{children}</h2>;
+                    },
+                    h3({ children }) {
+                      return <h3 className="text-sm font-bold mt-2 mb-1">{children}</h3>;
+                    },
+                    // Style links
+                    a({ href, children }) {
+                      return (
+                        <a href={href} className="text-claude-accent underline hover:no-underline">
+                          {children}
+                        </a>
+                      );
+                    },
+                    // Style blockquotes
+                    blockquote({ children }) {
+                      return (
+                        <blockquote className="border-l-2 border-claude-accent pl-3 my-2 text-claude-text-secondary">
+                          {children}
+                        </blockquote>
+                      );
+                    },
+                    // Style strong/bold
+                    strong({ children }) {
+                      return <strong className="font-bold text-claude-text">{children}</strong>;
+                    },
+                    // Style emphasis/italic
+                    em({ children }) {
+                      return <em className="italic">{children}</em>;
+                    },
+                  }}
+                >
+                  {message.content}
+                </ReactMarkdown>
+              </div>
+            )}
 
             {/* Render tool calls from the structured array */}
             {toolCalls.map((toolCall) => (
@@ -63,77 +146,21 @@ export default function MessageBubble({ message, isStreaming, streamingToolCalls
 
         {/* Timestamp */}
         <div
-          className={`text-xs text-claude-text-secondary mt-1 ${isUser ? 'text-right' : ''}`}
+          className={`text-[10px] mt-1 font-mono text-claude-text-secondary ${isUser ? 'text-right' : ''}`}
         >
           {isStreaming ? (
             <span className="flex items-center gap-1">
-              <span className="inline-block w-1.5 h-1.5 rounded-full bg-claude-accent animate-pulse" />
-              Typing...
+              <span
+                className="inline-block w-1.5 h-1.5 animate-pulse bg-claude-accent"
+                style={{ borderRadius: 0 }}
+              />
+              <span style={{ letterSpacing: '0.05em' }}>TYPING...</span>
             </span>
           ) : (
-            formatTime(message.timestamp)
+            <span style={{ letterSpacing: '0.02em' }}>{formatTime(message.timestamp)}</span>
           )}
         </div>
       </div>
-    </div>
-  );
-}
-
-function MessagePartRenderer({ part }: { part: MessagePart }) {
-  switch (part.type) {
-    case 'text':
-      return <TextContent content={part.content} />;
-    case 'code_block':
-      return <CodeBlock language={part.language} code={part.code} />;
-    default:
-      return null;
-  }
-}
-
-function TextContent({ content }: { content: string }) {
-  // Parse inline code and basic formatting
-  const parts = content.split(/(`[^`]+`)/g);
-
-  return (
-    <div className="text-claude-text leading-relaxed">
-      {parts.map((part, index) => {
-        if (part.startsWith('`') && part.endsWith('`')) {
-          return (
-            <code
-              key={index}
-              className="bg-claude-surface px-1.5 py-0.5 rounded text-sm font-mono text-claude-accent"
-            >
-              {part.slice(1, -1)}
-            </code>
-          );
-        }
-        // Handle line breaks
-        return (
-          <span key={index}>
-            {part.split('\n').map((line, lineIndex, arr) => (
-              <React.Fragment key={lineIndex}>
-                {line}
-                {lineIndex < arr.length - 1 && <br />}
-              </React.Fragment>
-            ))}
-          </span>
-        );
-      })}
-    </div>
-  );
-}
-
-function CodeBlock({ language, code }: { language: string; code: string }) {
-  return (
-    <div className="rounded-lg overflow-hidden border border-claude-border">
-      {language && (
-        <div className="bg-claude-surface px-3 py-1.5 text-xs text-claude-text-secondary border-b border-claude-border">
-          {language}
-        </div>
-      )}
-      <pre className="bg-claude-bg p-3 overflow-x-auto">
-        <code className="text-sm font-mono text-claude-text">{code}</code>
-      </pre>
     </div>
   );
 }

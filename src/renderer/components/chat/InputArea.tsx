@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { Send, Paperclip, X, Image, FileCode, Target, File, Folder, AtSign } from 'lucide-react';
+import { Paperclip, X, Image, FileCode, Target, File, Folder, AtSign } from 'lucide-react';
 import { useSessionStore } from '../../stores/session.store';
 import { useUIStore } from '../../stores/ui.store';
 import MentionAutocomplete, { type Mention } from './MentionAutocomplete';
@@ -70,7 +70,6 @@ export default function InputArea({ sessionId, disabled }: InputAreaProps) {
 
         // Calculate position for autocomplete
         if (textareaRef.current && containerRef.current) {
-          const containerRect = containerRef.current.getBoundingClientRect();
           // Position above the input
           setMentionPosition({
             top: -310, // Position above
@@ -206,22 +205,25 @@ export default function InputArea({ sessionId, disabled }: InputAreaProps) {
   const getAttachmentIcon = (attachment: Attachment) => {
     switch (attachment.type) {
       case 'dom_element':
-        return <Target size={14} className="text-blue-400" />;
+        return <Target size={12} className="text-blue-400" />;
       case 'image':
-        return <Image size={14} className="text-green-400" />;
+        return <Image size={12} className="text-green-400" />;
       case 'mention':
         return attachment.name.includes('/') || attachment.name.includes('.') ? (
-          <File size={14} className="text-cyan-400" />
+          <File size={12} className="text-cyan-400" />
         ) : (
-          <Folder size={14} className="text-amber-400" />
+          <Folder size={12} className="text-amber-400" />
         );
       default:
-        return <FileCode size={14} className="text-purple-400" />;
+        return <FileCode size={12} className="text-purple-400" />;
     }
   };
 
   return (
-    <div ref={containerRef} className="border-t border-claude-border bg-claude-surface p-4 relative">
+    <div
+      ref={containerRef}
+      className="px-4 py-2 relative font-mono border-t border-claude-border/30"
+    >
       {/* Mention Autocomplete */}
       {showMentions && (
         <MentionAutocomplete
@@ -233,95 +235,90 @@ export default function InputArea({ sessionId, disabled }: InputAreaProps) {
         />
       )}
 
-      {/* Attachments */}
+      {/* Attachments - brutalist badges */}
       {attachments.length > 0 && (
-        <div className="flex flex-wrap gap-2 mb-3">
+        <div className="flex flex-wrap gap-1.5 mb-2">
           {attachments.map((attachment, index) => (
             <div
               key={index}
-              className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm ${
+              className={`flex items-center gap-1.5 px-2 py-1 text-xs ${
                 attachment.type === 'mention'
                   ? 'bg-claude-accent/20 border border-claude-accent/30'
-                  : 'bg-claude-bg'
+                  : 'bg-claude-bg border border-claude-border'
               }`}
+              style={{ borderRadius: 0 }}
             >
               {getAttachmentIcon(attachment)}
-              <span className="truncate max-w-[200px] font-mono text-xs">{attachment.name}</span>
+              <span className="truncate max-w-[180px] font-mono text-[10px] text-claude-text">
+                {attachment.name}
+              </span>
               <button
                 onClick={() => removeAttachment(index)}
-                className="text-claude-text-secondary hover:text-claude-text"
+                className="hover:bg-claude-bg p-0.5 text-claude-text-secondary"
+                style={{ borderRadius: 0 }}
               >
-                <X size={14} />
+                <X size={10} />
               </button>
             </div>
           ))}
         </div>
       )}
 
-      {/* Input row */}
-      <div className="flex items-end gap-2">
-        {/* Attachment buttons */}
-        <div className="flex items-center gap-1 pb-2">
-          <button
-            onClick={handleAtButtonClick}
-            disabled={disabled}
-            className="p-2 rounded-lg hover:bg-claude-bg transition-colors text-claude-text-secondary hover:text-claude-accent disabled:opacity-50 disabled:cursor-not-allowed"
-            title="Mention file or folder (@)"
-          >
-            <AtSign size={18} />
-          </button>
-          <button
-            onClick={handleInspectElement}
-            disabled={disabled}
-            className="p-2 rounded-lg hover:bg-claude-bg transition-colors text-claude-text-secondary hover:text-claude-text disabled:opacity-50 disabled:cursor-not-allowed"
-            title="Select element from browser"
-          >
-            <Target size={18} />
-          </button>
-          <button
-            disabled={disabled}
-            className="p-2 rounded-lg hover:bg-claude-bg transition-colors text-claude-text-secondary hover:text-claude-text disabled:opacity-50 disabled:cursor-not-allowed"
-            title="Attach file"
-          >
-            <Paperclip size={18} />
-          </button>
-        </div>
+      {/* Input row - CLI style */}
+      <div className="flex items-center gap-2">
+        {/* CLI prompt indicator */}
+        <span className="text-claude-accent font-bold text-sm select-none -mt-0.5">&gt;</span>
 
-        {/* Textarea */}
-        <div className="flex-1 relative">
+        {/* Textarea - clean CLI look */}
+        <div className="flex-1">
           <textarea
             ref={textareaRef}
             value={message}
             onChange={handleInputChange}
             onKeyDown={handleKeyDown}
-            placeholder={disabled ? 'Start the session to chat...' : 'Ask Claude anything... (@ to mention files)'}
+            placeholder={disabled ? 'session inactive...' : 'type here... (@ to mention files)'}
             disabled={disabled || isSending}
-            className="w-full px-4 py-3 bg-claude-bg border border-claude-border rounded-xl resize-none focus:outline-none focus:border-claude-accent disabled:opacity-50 disabled:cursor-not-allowed min-h-[48px] max-h-[200px]"
+            className="w-full py-0 resize-none focus:outline-none disabled:opacity-40 disabled:cursor-not-allowed min-h-[24px] max-h-[200px] font-mono text-sm bg-transparent text-claude-text placeholder:text-claude-text-secondary leading-6 caret-claude-accent"
             rows={1}
           />
         </div>
 
-        {/* Send button */}
-        <button
-          onClick={handleSubmit}
-          disabled={(!message.trim() && attachments.length === 0) || disabled || isSending}
-          className="p-3 bg-claude-accent rounded-xl hover:bg-claude-accent-hover transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0"
-        >
-          <Send size={18} className="text-white" />
-        </button>
+        {/* Compact attachment buttons */}
+        <div className="flex items-center gap-0.5">
+          <button
+            onClick={handleAtButtonClick}
+            disabled={disabled}
+            className="p-1 transition-colors hover:bg-claude-bg disabled:opacity-40 disabled:cursor-not-allowed text-claude-text-secondary hover:text-claude-accent"
+            style={{ borderRadius: 0 }}
+            title="@ mention file"
+          >
+            <AtSign size={14} />
+          </button>
+          <button
+            onClick={handleInspectElement}
+            disabled={disabled}
+            className="p-1 transition-colors hover:bg-claude-bg disabled:opacity-40 disabled:cursor-not-allowed text-claude-text-secondary"
+            style={{ borderRadius: 0 }}
+            title="Inspect element"
+          >
+            <Target size={14} />
+          </button>
+          <button
+            disabled={disabled}
+            className="p-1 transition-colors hover:bg-claude-bg disabled:opacity-40 disabled:cursor-not-allowed text-claude-text-secondary"
+            style={{ borderRadius: 0 }}
+            title="Attach"
+          >
+            <Paperclip size={14} />
+          </button>
+        </div>
       </div>
 
-      {/* Hints */}
-      <div className="flex items-center gap-4 mt-2 text-xs text-claude-text-secondary">
-        <span>
-          <kbd className="px-1.5 py-0.5 bg-claude-bg rounded">@</kbd> mention file
-        </span>
-        <span>
-          <kbd className="px-1.5 py-0.5 bg-claude-bg rounded">Enter</kbd> to send
-        </span>
-        <span>
-          <kbd className="px-1.5 py-0.5 bg-claude-bg rounded">Shift + Enter</kbd> new line
-        </span>
+      {/* Minimal hints */}
+      <div className="flex items-center gap-4 mt-1 text-[9px] text-claude-text-secondary font-mono" style={{ letterSpacing: '0.05em' }}>
+        <span>@ FILE</span>
+        <span>ENTER SEND</span>
+        <span>SHIFT+↵ NEWLINE</span>
       </div>
     </div>
   );

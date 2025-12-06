@@ -100,6 +100,8 @@ const electronAPI = {
   claude: {
     sendMessage: (sessionId: string, message: string, attachments?: unknown[]): Promise<void> =>
       ipcRenderer.invoke(IPC_CHANNELS.CLAUDE_SEND_MESSAGE, sessionId, message, attachments),
+    getMessages: (sessionId: string): Promise<ChatMessage[]> =>
+      ipcRenderer.invoke(IPC_CHANNELS.CLAUDE_GET_MESSAGES, sessionId),
     cancel: (sessionId: string): void =>
       ipcRenderer.send(IPC_CHANNELS.CLAUDE_CANCEL, sessionId),
     onStreamChunk: (callback: (chunk: { sessionId: string; content: string }) => void) => {

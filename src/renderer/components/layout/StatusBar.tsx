@@ -1,6 +1,5 @@
 import React, { useEffect, useState } from 'react';
 import { useSessionStore } from '../../stores/session.store';
-import { Circle, Cpu, HardDrive, Wifi } from 'lucide-react';
 
 export default function StatusBar() {
   const { activeSessionId, sessions } = useSessionStore();
@@ -15,31 +14,33 @@ export default function StatusBar() {
   const getStatusColor = (status: string) => {
     switch (status) {
       case 'running':
-        return 'text-green-500';
+        return 'bg-green-500';
       case 'stopped':
-        return 'text-gray-500';
+        return 'bg-gray-500';
       case 'error':
-        return 'text-red-500';
+        return 'bg-red-500';
       case 'starting':
       case 'stopping':
       case 'creating':
-        return 'text-yellow-500';
+        return 'bg-yellow-500';
       default:
-        return 'text-gray-500';
+        return 'bg-gray-500';
     }
   };
 
   return (
-    <div className="h-6 bg-claude-surface border-t border-claude-border flex items-center px-3 text-xs text-claude-text-secondary">
+    <div className="h-6 flex items-center px-3 text-[10px] font-mono bg-claude-surface border-t border-claude-border text-claude-text-secondary">
       {/* Left section */}
-      <div className="flex items-center gap-4">
+      <div className="flex items-center gap-3">
         {/* Docker status */}
         <div className="flex items-center gap-1.5">
-          <Circle
-            size={8}
-            className={dockerStatus?.available ? 'fill-green-500 text-green-500' : 'fill-red-500 text-red-500'}
+          <div
+            className={`w-1.5 h-1.5 ${dockerStatus?.available ? 'bg-green-500' : 'bg-red-500'}`}
+            style={{ borderRadius: 0 }}
           />
-          <span>Docker {dockerStatus?.version || 'unavailable'}</span>
+          <span style={{ letterSpacing: '0.05em' }}>
+            DOCKER {dockerStatus?.version || 'N/A'}
+          </span>
         </div>
 
         {/* Session status */}
@@ -47,35 +48,43 @@ export default function StatusBar() {
           <>
             <div className="w-px h-3 bg-claude-border" />
             <div className="flex items-center gap-1.5">
-              <Circle
-                size={8}
-                className={`fill-current ${getStatusColor(activeSession.status)}`}
+              <div
+                className={`w-1.5 h-1.5 ${getStatusColor(activeSession.status)} ${
+                  activeSession.status === 'starting' ||
+                  activeSession.status === 'stopping' ||
+                  activeSession.status === 'creating'
+                    ? 'animate-pulse'
+                    : ''
+                }`}
+                style={{ borderRadius: 0 }}
               />
-              <span className="capitalize">{activeSession.status}</span>
+              <span style={{ letterSpacing: '0.05em' }}>
+                {activeSession.status.toUpperCase()}
+              </span>
             </div>
 
             <div className="w-px h-3 bg-claude-border" />
             <div className="flex items-center gap-1.5">
-              <span className="text-claude-text">Branch:</span>
-              <span className="font-mono">{activeSession.branch}</span>
+              <span style={{ letterSpacing: '0.05em' }}>BRANCH:</span>
+              <span className="font-bold text-claude-text">{activeSession.branch}</span>
             </div>
           </>
         )}
       </div>
 
       {/* Right section */}
-      <div className="ml-auto flex items-center gap-4">
+      <div className="ml-auto flex items-center gap-3">
         {activeSession?.status === 'running' && (
           <>
             <div className="flex items-center gap-1.5">
-              <Wifi size={12} />
-              <span>Port: {activeSession.ports.web}</span>
+              <span style={{ letterSpacing: '0.05em' }}>PORT:</span>
+              <span className="font-bold text-claude-text">{activeSession.ports.web}</span>
             </div>
           </>
         )}
 
         <div className="flex items-center gap-1.5">
-          <span>Claudette v1.0.0</span>
+          <span style={{ letterSpacing: '0.05em' }}>CLAUDETTE v1.0.0</span>
         </div>
       </div>
     </div>

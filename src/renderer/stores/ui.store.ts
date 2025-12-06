@@ -29,7 +29,7 @@ interface UIState {
 export const useUIStore = create<UIState>((set) => ({
   activePanel: 'chat',
   sidebarWidth: 280,
-  terminalHeight: 300,
+  terminalHeight: 0,
   isBrowserPanelOpen: false,
   isGitPanelOpen: false,
   isInspectorActive: false,

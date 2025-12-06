@@ -109,62 +109,81 @@ export default function LoginScreen() {
     setDevMode(true);
   };
 
-  // Show git init confirmation dialog
+  // Show git init confirmation dialog - brutalist
   if (pendingFolder) {
     return (
-      <div className="h-screen w-screen flex items-center justify-center bg-claude-bg">
-        <div className="w-full max-w-md p-8">
-          <div className="bg-claude-surface rounded-xl border border-claude-border p-6">
+      <div className="h-screen w-screen flex items-center justify-center font-mono bg-claude-bg">
+        <div className="w-full max-w-md p-6">
+          <div
+            className="p-5 bg-claude-surface border border-claude-border"
+            style={{ borderRadius: 0 }}
+          >
             <div className="flex items-center gap-3 mb-4">
-              <div className="w-10 h-10 rounded-lg bg-amber-500/20 flex items-center justify-center">
-                <AlertCircle className="text-amber-500" size={20} />
+              <div
+                className="w-10 h-10 flex items-center justify-center bg-yellow-500/20"
+                style={{ borderRadius: 0 }}
+              >
+                <AlertCircle size={20} className="text-yellow-500" />
               </div>
               <div>
-                <h2 className="text-lg font-semibold">Not a Git Repository</h2>
-                <p className="text-sm text-claude-text-secondary">{pendingFolder.name}</p>
+                <h2
+                  className="text-sm font-bold text-claude-text"
+                  style={{ letterSpacing: '0.05em' }}
+                >
+                  NOT A GIT REPOSITORY
+                </h2>
+                <p className="text-[10px] text-claude-text-secondary">
+                  {pendingFolder.name}
+                </p>
               </div>
             </div>
 
-            <p className="text-claude-text-secondary text-sm mb-6">
+            <p className="text-xs mb-5 text-claude-text-secondary">
               This folder is not a git repository. Would you like to initialize one?
               Git enables version control and allows Claude to better understand your project history.
             </p>
 
             {devError && (
-              <div className="mb-4 p-3 bg-red-500/10 border border-red-500/30 rounded-lg text-red-400 text-sm">
+              <div
+                className="mb-4 p-2.5 text-xs bg-red-500/10 border border-red-500 text-red-500"
+                style={{ borderRadius: 0 }}
+              >
                 {devError}
               </div>
             )}
 
-            <div className="space-y-3">
+            <div className="space-y-2">
               <button
                 onClick={handleInitGit}
                 disabled={isInitializingGit}
-                className="w-full py-3 px-4 bg-claude-accent text-white rounded-lg font-medium flex items-center justify-center gap-2 hover:bg-claude-accent-hover transition-colors disabled:opacity-50"
+                className="w-full py-2.5 px-4 text-white text-[10px] font-bold flex items-center justify-center gap-2 disabled:opacity-50 bg-claude-accent hover:bg-claude-accent-hover"
+                style={{ letterSpacing: '0.1em', borderRadius: 0 }}
               >
                 {isInitializingGit ? (
-                  <Loader2 size={18} className="animate-spin" />
+                  <Loader2 size={14} className="animate-spin" />
                 ) : (
-                  <GitBranch size={18} />
+                  <GitBranch size={14} />
                 )}
-                {isInitializingGit ? 'Initializing...' : 'Initialize Git Repository'}
+                {isInitializingGit ? 'INITIALIZING...' : 'INITIALIZE GIT'}
               </button>
 
               <button
                 onClick={handleSkipGit}
                 disabled={isInitializingGit}
-                className="w-full py-3 px-4 bg-claude-surface-hover border border-claude-border rounded-lg font-medium flex items-center justify-center gap-2 hover:bg-claude-border transition-colors disabled:opacity-50"
+                className="w-full py-2.5 px-4 text-[10px] font-bold flex items-center justify-center gap-2 disabled:opacity-50 bg-claude-bg border border-claude-border text-claude-text hover:bg-claude-surface"
+                style={{ letterSpacing: '0.1em', borderRadius: 0 }}
               >
-                <FolderOpen size={18} />
-                Open Without Git
+                <FolderOpen size={14} />
+                OPEN WITHOUT GIT
               </button>
 
               <button
                 onClick={() => setPendingFolder(null)}
                 disabled={isInitializingGit}
-                className="w-full py-2 px-4 text-claude-text-secondary hover:text-claude-text transition-colors text-sm"
+                className="w-full py-2 px-4 text-[10px] hover:underline text-claude-text-secondary"
+                style={{ letterSpacing: '0.05em' }}
               >
-                Cancel
+                CANCEL
               </button>
             </div>
           </div>
@@ -174,27 +193,44 @@ export default function LoginScreen() {
   }
 
   return (
-    <div className="h-screen w-screen flex items-center justify-center bg-claude-bg">
-      <div className="w-full max-w-md p-8">
-        {/* Logo */}
-        <div className="text-center mb-8">
-          <div className="w-20 h-20 rounded-2xl bg-gradient-to-br from-claude-accent to-amber-600 flex items-center justify-center mx-auto mb-4">
-            <span className="text-4xl font-bold text-white">C</span>
+    <div className="h-screen w-screen flex items-center justify-center font-mono bg-claude-bg">
+      <div className="w-full max-w-md p-6">
+        {/* Logo - brutalist */}
+        <div className="text-center mb-6">
+          <div
+            className="w-16 h-16 flex items-center justify-center mx-auto mb-3 bg-claude-accent"
+            style={{ borderRadius: 0 }}
+          >
+            <span className="text-3xl font-black text-white">C</span>
           </div>
-          <h1 className="text-3xl font-bold mb-2">Claudette</h1>
-          <p className="text-claude-text-secondary">
-            Your AI-powered development environment
+          <h1
+            className="text-xl font-black mb-1 text-claude-text"
+            style={{ letterSpacing: '0.1em' }}
+          >
+            CLAUDETTE
+          </h1>
+          <p className="text-[10px] text-claude-text-secondary" style={{ letterSpacing: '0.05em' }}>
+            AI-POWERED DEVELOPMENT ENVIRONMENT
           </p>
         </div>
 
-        {/* Login card */}
-        <div className="bg-claude-surface rounded-xl border border-claude-border p-6">
-          <h2 className="text-lg font-semibold mb-4 text-center">
-            Sign in to continue
+        {/* Login card - brutalist */}
+        <div
+          className="p-5 bg-claude-surface border border-claude-border"
+          style={{ borderRadius: 0 }}
+        >
+          <h2
+            className="text-[10px] font-bold mb-4 text-center text-claude-text-secondary"
+            style={{ letterSpacing: '0.1em' }}
+          >
+            SIGN IN TO CONTINUE
           </h2>
 
           {(error || devError) && (
-            <div className="mb-4 p-3 bg-red-500/10 border border-red-500/30 rounded-lg text-red-400 text-sm">
+            <div
+              className="mb-4 p-2.5 text-xs bg-red-500/10 border border-red-500 text-red-500"
+              style={{ borderRadius: 0 }}
+            >
               {error || devError}
             </div>
           )}
@@ -202,63 +238,53 @@ export default function LoginScreen() {
           <button
             onClick={login}
             disabled={isLoading || isOpeningRepo}
-            className="w-full py-3 px-4 bg-white text-gray-900 rounded-lg font-medium flex items-center justify-center gap-2 hover:bg-gray-100 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            className="w-full py-2.5 px-4 text-[10px] font-bold flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed bg-gray-900 text-white hover:bg-gray-800"
+            style={{ letterSpacing: '0.1em', borderRadius: 0 }}
           >
             {isLoading ? (
-              <Loader2 size={20} className="animate-spin" />
+              <Loader2 size={14} className="animate-spin" />
             ) : (
-              <Github size={20} />
+              <Github size={14} />
             )}
-            {isLoading ? 'Connecting...' : 'Continue with GitHub'}
+            {isLoading ? 'CONNECTING...' : 'GITHUB LOGIN'}
           </button>
 
           <div className="relative my-4">
             <div className="absolute inset-0 flex items-center">
-              <div className="w-full border-t border-claude-border"></div>
+              <div className="w-full border-t border-claude-border" />
             </div>
-            <div className="relative flex justify-center text-xs">
-              <span className="px-2 bg-claude-surface text-claude-text-secondary">or</span>
+            <div className="relative flex justify-center text-[10px]">
+              <span className="px-2 bg-claude-surface text-claude-text-secondary">OR</span>
             </div>
           </div>
 
           <button
             onClick={handleOpenLocalRepo}
             disabled={isLoading || isOpeningRepo}
-            className="w-full py-3 px-4 bg-claude-surface-hover border border-claude-border rounded-lg font-medium flex items-center justify-center gap-2 hover:bg-claude-border transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            className="w-full py-2.5 px-4 text-[10px] font-bold flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed bg-claude-bg border border-claude-border text-claude-text hover:bg-claude-surface"
+            style={{ letterSpacing: '0.1em', borderRadius: 0 }}
           >
             {isOpeningRepo ? (
-              <Loader2 size={20} className="animate-spin" />
+              <Loader2 size={14} className="animate-spin" />
             ) : (
-              <FolderOpen size={20} />
+              <FolderOpen size={14} />
             )}
-            {isOpeningRepo ? 'Opening...' : 'Open Local Folder'}
+            {isOpeningRepo ? 'OPENING...' : 'LOCAL FOLDER'}
           </button>
 
-          <p className="mt-4 text-xs text-claude-text-secondary text-center">
+          <p className="mt-4 text-[10px] text-center text-claude-text-secondary">
             Dev Mode: Open any local folder to get started.
             <br />
-            Git repository optional - we can initialize one for you.
+            Git repository optional.
           </p>
         </div>
 
-        {/* Features */}
-        <div className="mt-8 grid grid-cols-2 gap-4">
-          <Feature
-            title="Multi-Session"
-            description="Run multiple development environments in parallel"
-          />
-          <Feature
-            title="AI Assistant"
-            description="Claude helps you code, debug, and refactor"
-          />
-          <Feature
-            title="Live Preview"
-            description="See your changes instantly in the browser"
-          />
-          <Feature
-            title="Git Integration"
-            description="Visual commit history and branch management"
-          />
+        {/* Features - brutalist */}
+        <div className="mt-5 grid grid-cols-2 gap-2">
+          <Feature title="MULTI-SESSION" description="Parallel dev environments" />
+          <Feature title="AI ASSISTANT" description="Code, debug, refactor" />
+          <Feature title="LIVE PREVIEW" description="Instant browser updates" />
+          <Feature title="GIT INTEGRATION" description="Visual history & branches" />
         </div>
       </div>
     </div>
@@ -267,9 +293,19 @@ export default function LoginScreen() {
 
 function Feature({ title, description }: { title: string; description: string }) {
   return (
-    <div className="p-3 rounded-lg bg-claude-surface/50">
-      <h3 className="text-sm font-medium mb-1">{title}</h3>
-      <p className="text-xs text-claude-text-secondary">{description}</p>
+    <div
+      className="p-2.5 bg-claude-surface border border-claude-border"
+      style={{ borderRadius: 0 }}
+    >
+      <h3
+        className="text-[9px] font-bold mb-0.5 text-claude-text"
+        style={{ letterSpacing: '0.1em' }}
+      >
+        {title}
+      </h3>
+      <p className="text-[10px] text-claude-text-secondary">
+        {description}
+      </p>
     </div>
   );
 }
