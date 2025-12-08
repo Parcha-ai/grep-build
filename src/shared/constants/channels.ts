@@ -45,10 +45,12 @@ export const IPC_CHANNELS = {
   CLAUDE_SEND_MESSAGE: 'claude:send-message',
   CLAUDE_GET_MESSAGES: 'claude:get-messages',
   CLAUDE_STREAM_CHUNK: 'claude:stream-chunk',
+  CLAUDE_THINKING_CHUNK: 'claude:thinking-chunk',
   CLAUDE_STREAM_END: 'claude:stream-end',
   CLAUDE_STREAM_ERROR: 'claude:stream-error',
   CLAUDE_TOOL_CALL: 'claude:tool-call',
   CLAUDE_TOOL_RESULT: 'claude:tool-result',
+  CLAUDE_SYSTEM_INFO: 'claude:system-info',
   CLAUDE_CANCEL: 'claude:cancel',
 
   // Browser preview channels
@@ -60,6 +62,8 @@ export const IPC_CHANNELS = {
   SETTINGS_GET: 'settings:get',
   SETTINGS_SET: 'settings:set',
   SETTINGS_RESET: 'settings:reset',
+  SETTINGS_GET_API_KEY: 'settings:get-api-key',
+  SETTINGS_SET_API_KEY: 'settings:set-api-key',
 
   // App channels
   APP_GET_VERSION: 'app:get-version',
@@ -74,7 +78,38 @@ export const IPC_CHANNELS = {
   // File system channels
   FS_LIST_FILES: 'fs:list-files',
   FS_READ_FILE: 'fs:read-file',
+  FS_WRITE_FILE: 'fs:write-file',
   FS_SEARCH_FILES: 'fs:search-files',
+  FS_SEARCH_SYMBOLS: 'fs:search-symbols',
+
+  // Audio channels
+  AUDIO_TRANSCRIBE: 'audio:transcribe',
+  AUDIO_TTS_STREAM: 'audio:tts-stream',
+  AUDIO_TTS_CANCEL: 'audio:tts-cancel',
+  AUDIO_TTS_CHUNK: 'audio:tts-chunk',
+  AUDIO_TTS_COMPLETE: 'audio:tts-complete',
+  AUDIO_TTS_ERROR: 'audio:tts-error',
+  AUDIO_GET_VOICES: 'audio:get-voices',
+  AUDIO_SETTINGS_GET: 'audio:settings-get',
+  AUDIO_SETTINGS_SET: 'audio:settings-set',
+  AUDIO_GET_ELEVENLABS_KEY: 'audio:get-elevenlabs-key',
+  AUDIO_SET_ELEVENLABS_KEY: 'audio:set-elevenlabs-key',
+  AUDIO_GET_OPENAI_KEY: 'audio:get-openai-key',
+  AUDIO_SET_OPENAI_KEY: 'audio:set-openai-key',
+
+  // Realtime transcription channels
+  REALTIME_CONNECT: 'realtime:connect',
+  REALTIME_DISCONNECT: 'realtime:disconnect',
+  REALTIME_SEND_AUDIO: 'realtime:send-audio',
+  REALTIME_COMMIT_AUDIO: 'realtime:commit-audio',
+  REALTIME_CLEAR_AUDIO: 'realtime:clear-audio',
+  REALTIME_TRANSCRIPTION_DELTA: 'realtime:transcription-delta',
+  REALTIME_TRANSCRIPTION_COMPLETED: 'realtime:transcription-completed',
+  REALTIME_SPEECH_STARTED: 'realtime:speech-started',
+  REALTIME_SPEECH_STOPPED: 'realtime:speech-stopped',
+  REALTIME_ERROR: 'realtime:error',
+  REALTIME_CONNECTED: 'realtime:connected',
+  REALTIME_DISCONNECTED: 'realtime:disconnected',
 } as const;
 
 export type IPCChannel = typeof IPC_CHANNELS[keyof typeof IPC_CHANNELS];

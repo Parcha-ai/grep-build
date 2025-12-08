@@ -8,7 +8,10 @@ import type {
   Branch,
   ChatMessage,
   AppSettings,
-  DOMElementContext
+  DOMElementContext,
+  TranscriptionResult,
+  TTSRequest,
+  AudioSettings
 } from '../shared/types';
 
 // Type-safe API for renderer process
@@ -98,8 +101,8 @@ const electronAPI = {
 
   // Claude
   claude: {
-    sendMessage: (sessionId: string, message: string, attachments?: unknown[]): Promise<void> =>
-      ipcRenderer.invoke(IPC_CHANNELS.CLAUDE_SEND_MESSAGE, sessionId, message, attachments),
+    sendMessage: (sessionId: string, message: string, attachments?: unknown[], permissionMode?: string, thinkingMode?: string): Promise<void> =>
+      ipcRenderer.invoke(IPC_CHANNELS.CLAUDE_SEND_MESSAGE, sessionId, message, attachments, permissionMode, thinkingMode),
     getMessages: (sessionId: string): Promise<ChatMessage[]> =>
       ipcRenderer.invoke(IPC_CHANNELS.CLAUDE_GET_MESSAGES, sessionId),
     cancel: (sessionId: string): void =>
@@ -108,6 +111,11 @@ const electronAPI = {
       const handler = (_: IpcRendererEvent, chunk: { sessionId: string; content: string }) => callback(chunk);
       ipcRenderer.on(IPC_CHANNELS.CLAUDE_STREAM_CHUNK, handler);
       return () => ipcRenderer.removeListener(IPC_CHANNELS.CLAUDE_STREAM_CHUNK, handler);
+    },
+    onThinkingChunk: (callback: (chunk: { sessionId: string; content: string }) => void) => {
+      const handler = (_: IpcRendererEvent, chunk: { sessionId: string; content: string }) => callback(chunk);
+      ipcRenderer.on(IPC_CHANNELS.CLAUDE_THINKING_CHUNK, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.CLAUDE_THINKING_CHUNK, handler);
     },
     onStreamEnd: (callback: (data: { sessionId: string; message: ChatMessage }) => void) => {
       const handler = (_: IpcRendererEvent, data: { sessionId: string; message: ChatMessage }) => callback(data);
@@ -128,6 +136,11 @@ const electronAPI = {
       const handler = (_: IpcRendererEvent, data: { sessionId: string; toolCall: unknown }) => callback(data);
       ipcRenderer.on(IPC_CHANNELS.CLAUDE_TOOL_RESULT, handler);
       return () => ipcRenderer.removeListener(IPC_CHANNELS.CLAUDE_TOOL_RESULT, handler);
+    },
+    onSystemInfo: (callback: (data: { sessionId: string; systemInfo: { tools: string[]; model: string } }) => void) => {
+      const handler = (_: IpcRendererEvent, data: { sessionId: string; systemInfo: { tools: string[]; model: string } }) => callback(data);
+      ipcRenderer.on(IPC_CHANNELS.CLAUDE_SYSTEM_INFO, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.CLAUDE_SYSTEM_INFO, handler);
     },
   },
 
@@ -150,6 +163,10 @@ const electronAPI = {
       ipcRenderer.invoke(IPC_CHANNELS.SETTINGS_SET, settings),
     reset: (): Promise<void> =>
       ipcRenderer.invoke(IPC_CHANNELS.SETTINGS_RESET),
+    getApiKey: (): Promise<string> =>
+      ipcRenderer.invoke(IPC_CHANNELS.SETTINGS_GET_API_KEY),
+    setApiKey: (key: string): Promise<void> =>
+      ipcRenderer.invoke(IPC_CHANNELS.SETTINGS_SET_API_KEY, key),
   },
 
   // App
@@ -214,10 +231,109 @@ const electronAPI = {
     }>> => ipcRenderer.invoke(IPC_CHANNELS.FS_LIST_FILES, sessionId, query),
     readFile: (filePath: string): Promise<{ success: boolean; content?: string; error?: string }> =>
       ipcRenderer.invoke(IPC_CHANNELS.FS_READ_FILE, filePath),
+    writeFile: (filePath: string, content: string): Promise<{ success: boolean; error?: string }> =>
+      ipcRenderer.invoke(IPC_CHANNELS.FS_WRITE_FILE, filePath, content),
     searchFiles: (sessionId: string, searchTerm: string): Promise<Array<{
       file: { name: string; path: string; relativePath: string };
       matches: string[];
     }>> => ipcRenderer.invoke(IPC_CHANNELS.FS_SEARCH_FILES, sessionId, searchTerm),
+    searchSymbols: (sessionId: string, query: string): Promise<Array<{
+      name: string;
+      kind: string;
+      path: string;
+      relativePath: string;
+      lineNumber: number;
+      detail: string;
+    }>> => ipcRenderer.invoke(IPC_CHANNELS.FS_SEARCH_SYMBOLS, sessionId, query),
+  },
+
+  // Audio
+  audio: {
+    transcribe: (audioData: ArrayBuffer, language?: string): Promise<{ success: boolean; result?: TranscriptionResult; error?: string }> =>
+      ipcRenderer.invoke(IPC_CHANNELS.AUDIO_TRANSCRIBE, audioData, language),
+    streamTTS: (request: TTSRequest): Promise<{ success: boolean; error?: string }> =>
+      ipcRenderer.invoke(IPC_CHANNELS.AUDIO_TTS_STREAM, request),
+    cancelTTS: (messageId: string): Promise<{ success: boolean }> =>
+      ipcRenderer.invoke(IPC_CHANNELS.AUDIO_TTS_CANCEL, messageId),
+    getVoices: (): Promise<{ success: boolean; voices?: Array<{ voice_id: string; name: string }>; error?: string }> =>
+      ipcRenderer.invoke(IPC_CHANNELS.AUDIO_GET_VOICES),
+    getSettings: (): Promise<AudioSettings> =>
+      ipcRenderer.invoke(IPC_CHANNELS.AUDIO_SETTINGS_GET),
+    setSettings: (settings: Partial<AudioSettings>): Promise<{ success: boolean }> =>
+      ipcRenderer.invoke(IPC_CHANNELS.AUDIO_SETTINGS_SET, settings),
+    onTTSChunk: (callback: (data: { messageId: string; chunk: number[] }) => void) => {
+      const handler = (_: IpcRendererEvent, data: { messageId: string; chunk: number[] }) => callback(data);
+      ipcRenderer.on(IPC_CHANNELS.AUDIO_TTS_CHUNK, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.AUDIO_TTS_CHUNK, handler);
+    },
+    onTTSComplete: (callback: (data: { messageId: string }) => void) => {
+      const handler = (_: IpcRendererEvent, data: { messageId: string }) => callback(data);
+      ipcRenderer.on(IPC_CHANNELS.AUDIO_TTS_COMPLETE, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.AUDIO_TTS_COMPLETE, handler);
+    },
+    onTTSError: (callback: (data: { messageId: string; error: string }) => void) => {
+      const handler = (_: IpcRendererEvent, data: { messageId: string; error: string }) => callback(data);
+      ipcRenderer.on(IPC_CHANNELS.AUDIO_TTS_ERROR, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.AUDIO_TTS_ERROR, handler);
+    },
+    // API Key management
+    getElevenLabsKey: (): Promise<string> =>
+      ipcRenderer.invoke(IPC_CHANNELS.AUDIO_GET_ELEVENLABS_KEY),
+    setElevenLabsKey: (key: string): Promise<{ success: boolean }> =>
+      ipcRenderer.invoke(IPC_CHANNELS.AUDIO_SET_ELEVENLABS_KEY, key),
+    getOpenAiKey: (): Promise<string> =>
+      ipcRenderer.invoke(IPC_CHANNELS.AUDIO_GET_OPENAI_KEY),
+    setOpenAiKey: (key: string): Promise<{ success: boolean }> =>
+      ipcRenderer.invoke(IPC_CHANNELS.AUDIO_SET_OPENAI_KEY, key),
+  },
+
+  // Realtime API for streaming transcription
+  realtime: {
+    connect: (): Promise<{ success: boolean; error?: string }> =>
+      ipcRenderer.invoke(IPC_CHANNELS.REALTIME_CONNECT),
+    disconnect: (): Promise<{ success: boolean; error?: string }> =>
+      ipcRenderer.invoke(IPC_CHANNELS.REALTIME_DISCONNECT),
+    sendAudio: (audioData: number[]): Promise<{ success: boolean; error?: string }> =>
+      ipcRenderer.invoke(IPC_CHANNELS.REALTIME_SEND_AUDIO, audioData),
+    commitAudio: (): Promise<{ success: boolean; error?: string }> =>
+      ipcRenderer.invoke(IPC_CHANNELS.REALTIME_COMMIT_AUDIO),
+    clearAudio: (): Promise<{ success: boolean; error?: string }> =>
+      ipcRenderer.invoke(IPC_CHANNELS.REALTIME_CLEAR_AUDIO),
+    onConnected: (callback: () => void) => {
+      const handler = () => callback();
+      ipcRenderer.on(IPC_CHANNELS.REALTIME_CONNECTED, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.REALTIME_CONNECTED, handler);
+    },
+    onDisconnected: (callback: () => void) => {
+      const handler = () => callback();
+      ipcRenderer.on(IPC_CHANNELS.REALTIME_DISCONNECTED, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.REALTIME_DISCONNECTED, handler);
+    },
+    onTranscriptionDelta: (callback: (delta: string) => void) => {
+      const handler = (_: IpcRendererEvent, delta: string) => callback(delta);
+      ipcRenderer.on(IPC_CHANNELS.REALTIME_TRANSCRIPTION_DELTA, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.REALTIME_TRANSCRIPTION_DELTA, handler);
+    },
+    onTranscriptionCompleted: (callback: (transcript: string) => void) => {
+      const handler = (_: IpcRendererEvent, transcript: string) => callback(transcript);
+      ipcRenderer.on(IPC_CHANNELS.REALTIME_TRANSCRIPTION_COMPLETED, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.REALTIME_TRANSCRIPTION_COMPLETED, handler);
+    },
+    onSpeechStarted: (callback: () => void) => {
+      const handler = () => callback();
+      ipcRenderer.on(IPC_CHANNELS.REALTIME_SPEECH_STARTED, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.REALTIME_SPEECH_STARTED, handler);
+    },
+    onSpeechStopped: (callback: () => void) => {
+      const handler = () => callback();
+      ipcRenderer.on(IPC_CHANNELS.REALTIME_SPEECH_STOPPED, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.REALTIME_SPEECH_STOPPED, handler);
+    },
+    onError: (callback: (error: string) => void) => {
+      const handler = (_: IpcRendererEvent, error: string) => callback(error);
+      ipcRenderer.on(IPC_CHANNELS.REALTIME_ERROR, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.REALTIME_ERROR, handler);
+    },
   },
 };
 

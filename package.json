@@ -1,8 +1,8 @@
 {
-  "name": "claudette",
-  "productName": "claudette",
+  "name": "grep",
+  "productName": "Grep",
   "version": "1.0.0",
-  "description": "AI-powered development environment with Claude integration, multi-session support, and live browser preview",
+  "description": "AI-powered development environment with intelligent code search, multi-session support, and live browser preview",
   "main": ".webpack/main",
   "scripts": {
     "start": "electron-forge start",
@@ -70,8 +70,11 @@
     "dockerode": "^4.0.9",
     "electron-squirrel-startup": "^1.0.1",
     "electron-store": "^10.1.0",
+    "elevenlabs": "^0.8.2",
     "lucide-react": "^0.460.0",
+    "monaco-editor": "^0.55.1",
     "node-pty": "^1.0.0",
+    "openai": "^4.104.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-markdown": "^10.1.0",

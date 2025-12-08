@@ -1,44 +1,50 @@
 import { create } from 'zustand';
 
-type Panel = 'chat' | 'terminal';
-
 // Split ratio: 'equal' = 50/50, 'main-focus' = 2/3 main, 'side-focus' = 2/3 side panel
 type SplitRatio = 'equal' | 'main-focus' | 'side-focus';
 
 interface UIState {
-  activePanel: Panel;
+  isSidebarOpen: boolean;
   sidebarWidth: number;
   terminalHeight: number;
+  isTerminalPanelOpen: boolean;
   isBrowserPanelOpen: boolean;
   isGitPanelOpen: boolean;
   isInspectorActive: boolean;
+  isSettingsOpen: boolean;
   selectedElement: unknown | null;
   splitRatio: SplitRatio;
 
-  setActivePanel: (panel: Panel) => void;
+  toggleSidebar: () => void;
   setSidebarWidth: (width: number) => void;
   setTerminalHeight: (height: number) => void;
+  toggleTerminalPanel: () => void;
   toggleBrowserPanel: () => void;
   toggleGitPanel: () => void;
   setInspectorActive: (active: boolean) => void;
   setSelectedElement: (element: unknown | null) => void;
   cycleSplitRatio: () => void;
   setSplitRatio: (ratio: SplitRatio) => void;
+  openSettings: () => void;
+  closeSettings: () => void;
 }
 
 export const useUIStore = create<UIState>((set) => ({
-  activePanel: 'chat',
+  isSidebarOpen: true,
   sidebarWidth: 280,
   terminalHeight: 0,
+  isTerminalPanelOpen: false,
   isBrowserPanelOpen: false,
   isGitPanelOpen: false,
   isInspectorActive: false,
+  isSettingsOpen: false,
   selectedElement: null,
   splitRatio: 'equal',
 
-  setActivePanel: (panel) => set({ activePanel: panel }),
+  toggleSidebar: () => set((state) => ({ isSidebarOpen: !state.isSidebarOpen })),
   setSidebarWidth: (width) => set({ sidebarWidth: width }),
   setTerminalHeight: (height) => set({ terminalHeight: height }),
+  toggleTerminalPanel: () => set((state) => ({ isTerminalPanelOpen: !state.isTerminalPanelOpen })),
   toggleBrowserPanel: () => set((state) => ({ isBrowserPanelOpen: !state.isBrowserPanelOpen })),
   toggleGitPanel: () => set((state) => ({ isGitPanelOpen: !state.isGitPanelOpen })),
   setInspectorActive: (active) => set({ isInspectorActive: active }),
@@ -50,4 +56,6 @@ export const useUIStore = create<UIState>((set) => ({
     return { splitRatio: order[nextIndex] };
   }),
   setSplitRatio: (ratio) => set({ splitRatio: ratio }),
+  openSettings: () => set({ isSettingsOpen: true }),
+  closeSettings: () => set({ isSettingsOpen: false }),
 }));

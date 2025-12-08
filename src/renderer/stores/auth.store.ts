@@ -1,6 +1,9 @@
 import { create } from 'zustand';
 import type { GitHubUser, GitHubRepo } from '../../shared/types';
 
+// Check if running in Electron environment
+const hasElectronAPI = typeof window !== 'undefined' && !!window.electronAPI;
+
 interface AuthState {
   user: GitHubUser | null;
   repos: GitHubRepo[];
@@ -23,6 +26,10 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   isDevMode: false,
 
   checkAuth: async () => {
+    if (!hasElectronAPI) {
+      set({ isLoading: false });
+      return;
+    }
     set({ isLoading: true, error: null });
     try {
       const [user, isDevMode] = await Promise.all([
@@ -43,6 +50,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   },
 
   login: async () => {
+    if (!hasElectronAPI) return;
     set({ isLoading: true, error: null });
     try {
       await window.electronAPI.auth.login();
@@ -56,6 +64,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   },
 
   logout: async () => {
+    if (!hasElectronAPI) return;
     set({ isLoading: true, error: null });
     try {
       await window.electronAPI.auth.logout();
@@ -69,6 +78,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   },
 
   loadRepos: async () => {
+    if (!hasElectronAPI) return;
     try {
       const repos = await window.electronAPI.auth.getRepos();
       set({ repos });
@@ -79,7 +89,9 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
   setDevMode: (enabled: boolean) => {
     set({ isDevMode: enabled, isLoading: false });
-    // Persist to electron-store
-    window.electronAPI.dev.setDevMode(enabled);
+    // Persist to electron-store (only if running in Electron)
+    if (hasElectronAPI) {
+      window.electronAPI.dev.setDevMode(enabled);
+    }
   },
 }));

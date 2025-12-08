@@ -56,7 +56,7 @@ export class DockerService {
             context: session.repoPath,
             dockerfile: 'Dockerfile',
           },
-          container_name: `claudette-${session.id}`,
+          container_name: `grep-${session.id}`,
           volumes: [
             `${session.worktreePath}:/workspace:delegated`,
           ],
@@ -70,19 +70,19 @@ export class DockerService {
             `${session.ports.api}:8000`,
             `${session.ports.debug}:9229`,
           ],
-          networks: ['claudette'],
+          networks: ['grep'],
           stdin_open: true,
           tty: true,
         },
       },
       networks: {
-        claudette: {
+        grep: {
           driver: 'bridge',
         },
       },
     };
 
-    const composePath = path.join(session.worktreePath, '.claudette', 'docker-compose.yml');
+    const composePath = path.join(session.worktreePath, '.grep', 'docker-compose.yml');
     await fs.mkdir(path.dirname(composePath), { recursive: true });
     await fs.writeFile(composePath, yaml.stringify(composeConfig));
 
@@ -90,7 +90,7 @@ export class DockerService {
   }
 
   async createDefaultDockerfile(repoPath: string): Promise<void> {
-    const dockerfilePath = path.join(repoPath, 'Dockerfile.claudette');
+    const dockerfilePath = path.join(repoPath, 'Dockerfile.grep');
 
     try {
       await fs.access(dockerfilePath);
@@ -118,7 +118,7 @@ USER claude
 WORKDIR /workspace
 
 # Set up nice prompt
-ENV PS1='\\[\\033[01;32m\\]claudette\\[\\033[00m\\]:\\[\\033[01;34m\\]\\w\\[\\033[00m\\]\\$ '
+ENV PS1='\\[\\033[01;32m\\]grep\\[\\033[00m\\]:\\[\\033[01;34m\\]\\w\\[\\033[00m\\]\\$ '
 
 # Default command - keep container running
 CMD ["sleep", "infinity"]
@@ -128,7 +128,7 @@ CMD ["sleep", "infinity"]
   }
 
   async startContainer(session: Session): Promise<string> {
-    const containerName = `claudette-${session.id}`;
+    const containerName = `grep-${session.id}`;
 
     // Check if container already exists
     try {
@@ -145,17 +145,17 @@ CMD ["sleep", "infinity"]
     }
 
     // Determine Dockerfile to use
-    let dockerfile = 'Dockerfile.claudette';
+    let dockerfile = 'Dockerfile.grep';
     try {
       await fs.access(path.join(session.repoPath, 'Dockerfile'));
       dockerfile = 'Dockerfile';
     } catch {
-      // Use default claudette dockerfile
+      // Use default grep dockerfile
       await this.createDefaultDockerfile(session.repoPath);
     }
 
     // Build image
-    const imageName = `claudette-session-${session.id}`;
+    const imageName = `grep-session-${session.id}`;
     const buildStream = await this.docker.buildImage(
       {
         context: session.repoPath,

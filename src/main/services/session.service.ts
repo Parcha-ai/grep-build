@@ -16,7 +16,7 @@ interface SessionCreateConfig {
 }
 
 const DEFAULT_SETUP_SCRIPT = `#!/bin/bash
-# Claudette Session Setup Script
+# Grep Session Setup Script
 # This script runs when the Docker container starts
 
 # Install dependencies
@@ -41,7 +41,7 @@ export class SessionService extends EventEmitter {
 
   constructor() {
     super();
-    this.store = new Store({ name: 'claudette-sessions' });
+    this.store = new Store({ name: 'grep-sessions' });
     this.dockerService = new DockerService();
     this.gitService = new GitService();
     this.sessionsPath = path.join(app.getPath('userData'), 'sessions');
@@ -98,11 +98,11 @@ export class SessionService extends EventEmitter {
       await fs.mkdir(path.dirname(worktreePath), { recursive: true });
       await this.gitService.createWorktree(repoPath, worktreePath, config.branch);
 
-      // Create .claudette directory with setup script
-      const claudetteDir = path.join(worktreePath, '.claudette');
-      await fs.mkdir(claudetteDir, { recursive: true });
+      // Create .grep directory with setup script
+      const grepDir = path.join(worktreePath, '.grep');
+      await fs.mkdir(grepDir, { recursive: true });
       await fs.writeFile(
-        path.join(claudetteDir, 'setup.sh'),
+        path.join(grepDir, 'setup.sh'),
         session.setupScript,
         { mode: 0o755 }
       );
@@ -197,7 +197,7 @@ export class SessionService extends EventEmitter {
 
     // If setup script changed, update the file
     if (updates.setupScript) {
-      const setupPath = path.join(session.worktreePath, '.claudette', 'setup.sh');
+      const setupPath = path.join(session.worktreePath, '.grep', 'setup.sh');
       await fs.writeFile(setupPath, updates.setupScript, { mode: 0o755 });
     }
 

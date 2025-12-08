@@ -13,8 +13,8 @@ module.exports = {
         'claude-border': '#333333',
         'claude-text': '#e4e4e4',
         'claude-text-secondary': '#a0a0a0',
-        'claude-accent': '#d97706',
-        'claude-accent-hover': '#f59e0b',
+        'claude-accent': '#8B8DFF',
+        'claude-accent-hover': '#A5A7FF',
         'claude-success': '#22c55e',
         'claude-error': '#ef4444',
         'claude-warning': '#f59e0b',
@@ -22,6 +22,20 @@ module.exports = {
       fontFamily: {
         mono: ['JetBrains Mono', 'Menlo', 'Monaco', 'monospace'],
         sans: ['Inter', 'system-ui', 'sans-serif'],
+      },
+      keyframes: {
+        'sound-bar': {
+          '0%, 100%': { transform: 'scaleY(0.3)' },
+          '50%': { transform: 'scaleY(1)' },
+        },
+        'wave': {
+          '0%': { transform: 'translateX(-10px)' },
+          '100%': { transform: 'translateX(10px)' },
+        },
+      },
+      animation: {
+        'sound-bar': 'sound-bar 0.8s ease-in-out infinite',
+        'wave': 'wave 1s ease-in-out infinite alternate',
       },
     },
   },

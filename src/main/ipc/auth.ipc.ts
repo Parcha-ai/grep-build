@@ -23,7 +23,7 @@ export function registerAuthHandlers(ipcMain: IpcMain): void {
 
       return new Promise((resolve, reject) => {
         authWindow.webContents.on('will-redirect', async (event, url) => {
-          if (url.startsWith('claudette://oauth/callback')) {
+          if (url.startsWith('grep://oauth/callback')) {
             event.preventDefault();
             const urlObj = new URL(url);
             const code = urlObj.searchParams.get('code');

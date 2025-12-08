@@ -6,7 +6,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   fontSize: 14,
   fontFamily: 'JetBrains Mono, Menlo, Monaco, monospace',
   defaultSetupScript: `#!/bin/bash
-# Claudette Session Setup Script
+# Grep Session Setup Script
 # This script runs when the Docker container starts
 
 # Install dependencies
@@ -30,7 +30,7 @@ export class SettingsService {
 
   constructor() {
     this.store = new Store({
-      name: 'claudette-settings',
+      name: 'grep-settings',
       defaults: { settings: DEFAULT_SETTINGS },
     });
   }

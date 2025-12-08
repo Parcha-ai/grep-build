@@ -69,18 +69,18 @@ export default function BrowserPreview({ session }: BrowserPreviewProps) {
     await webview.executeJavaScript(`
       (function() {
         // Remove existing inspector
-        const existing = document.getElementById('claudette-inspector');
+        const existing = document.getElementById('grep-inspector');
         if (existing) existing.remove();
 
         // Create overlay
         const overlay = document.createElement('div');
-        overlay.id = 'claudette-inspector';
+        overlay.id = 'grep-inspector';
         overlay.style.cssText = 'position:fixed;pointer-events:none;background:rgba(59,130,246,0.3);border:2px solid #3b82f6;z-index:999999;transition:all 0.1s ease;';
         document.body.appendChild(overlay);
 
         // Create info tooltip
         const tooltip = document.createElement('div');
-        tooltip.id = 'claudette-inspector-tooltip';
+        tooltip.id = 'grep-inspector-tooltip';
         tooltip.style.cssText = 'position:fixed;background:#1a1a1a;color:#fff;padding:4px 8px;font-size:12px;font-family:monospace;border-radius:4px;z-index:1000000;pointer-events:none;max-width:300px;word-break:break-all;';
         document.body.appendChild(tooltip);
 
@@ -130,7 +130,7 @@ export default function BrowserPreview({ session }: BrowserPreviewProps) {
             attributes: Array.from(el.attributes).map(a => ({ name: a.name, value: a.value })),
           };
 
-          window.postMessage({ type: 'claudette-element-selected', context }, '*');
+          window.postMessage({ type: 'grep-element-selected', context }, '*');
 
           // Cleanup
           document.body.style.cursor = '';
@@ -147,7 +147,7 @@ export default function BrowserPreview({ session }: BrowserPreviewProps) {
 
     // Listen for selection
     const handleMessage = (event: MessageEvent) => {
-      if (event.data?.type === 'claudette-element-selected') {
+      if (event.data?.type === 'grep-element-selected') {
         setSelectedElement(event.data.context);
         setInspectorActive(false);
       }
@@ -166,8 +166,8 @@ export default function BrowserPreview({ session }: BrowserPreviewProps) {
     if (webviewRef.current) {
       await webviewRef.current.executeJavaScript(`
         document.body.style.cursor = '';
-        document.getElementById('claudette-inspector')?.remove();
-        document.getElementById('claudette-inspector-tooltip')?.remove();
+        document.getElementById('grep-inspector')?.remove();
+        document.getElementById('grep-inspector-tooltip')?.remove();
       `);
     }
   };

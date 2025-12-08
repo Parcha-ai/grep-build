@@ -1,4 +1,4 @@
-// Core Types for Claudette
+// Core Types for Grep
 
 export interface Session {
   id: string;
@@ -123,3 +123,6 @@ export interface AppSettings {
   defaultSetupScript: string;
   autoStartContainer: boolean;
 }
+
+// Export audio types
+export * from './audio';

@@ -1,17 +1,19 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import { useSessionStore } from '../../stores/session.store';
 import { useUIStore } from '../../stores/ui.store';
+import { useEditorStore } from '../../stores/editor.store';
 import ChatContainer from '../chat/ChatContainer';
 import TerminalContainer from '../terminal/TerminalContainer';
 import BrowserPreview from '../preview/BrowserPreview';
 import GitExplorer from '../git/GitExplorer';
+import EditorPanel from '../editor/EditorPanel';
 import EmptyState from './EmptyState';
 import { X, GripVertical, PanelLeftClose, PanelRightClose, Columns2 } from 'lucide-react';
 
 export default function MainContent() {
   const { activeSessionId, sessions } = useSessionStore();
   const {
-    activePanel,
+    isTerminalPanelOpen,
     isBrowserPanelOpen,
     isGitPanelOpen,
     terminalHeight,
@@ -21,7 +23,15 @@ export default function MainContent() {
     splitRatio,
     cycleSplitRatio,
   } = useUIStore();
+  const { isEditorOpen, closeEditor } = useEditorStore();
   const [isTerminalResizing, setIsTerminalResizing] = useState(false);
+
+  // Set default terminal height when panel opens
+  useEffect(() => {
+    if (isTerminalPanelOpen && terminalHeight === 0) {
+      setTerminalHeight(250);
+    }
+  }, [isTerminalPanelOpen, terminalHeight, setTerminalHeight]);
 
   const activeSession = sessions.find((s) => s.id === activeSessionId);
 
@@ -94,19 +104,18 @@ export default function MainContent() {
     return <EmptyState />;
   }
 
-  const hasSidePanel = isBrowserPanelOpen || isGitPanelOpen;
+  const hasSidePanel = isBrowserPanelOpen || isGitPanelOpen || isEditorOpen;
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
       {/* Main panel area */}
       <div className="flex-1 flex overflow-hidden">
-        {/* Primary content */}
+        {/* Primary content - always chat */}
         <div
           className="flex flex-col overflow-hidden min-w-0 transition-all duration-200"
           style={{ flexBasis: hasSidePanel ? flexBasis.main : '100%', flexShrink: 0, flexGrow: 0 }}
         >
-          {activePanel === 'chat' && <ChatContainer session={activeSession} />}
-          {activePanel === 'terminal' && <TerminalContainer session={activeSession} />}
+          <ChatContainer session={activeSession} />
         </div>
 
         {/* Resizable side panel */}
@@ -159,7 +168,7 @@ export default function MainContent() {
 
               {/* Git panel */}
               {isGitPanelOpen && (
-                <div className={`flex flex-col overflow-hidden ${isBrowserPanelOpen ? 'h-[300px]' : 'h-full'}`}>
+                <div className={`flex flex-col overflow-hidden ${isBrowserPanelOpen ? 'h-[300px]' : isEditorOpen ? 'h-[200px]' : 'h-full'}`}>
                   <div className="h-10 flex items-center justify-between px-3 border-b border-claude-border bg-claude-surface">
                     <span className="text-sm font-medium">Git Explorer</span>
                     <button
@@ -174,35 +183,43 @@ export default function MainContent() {
                   </div>
                 </div>
               )}
+
+              {/* Horizontal divider when editor is with other panels */}
+              {isEditorOpen && (isBrowserPanelOpen || isGitPanelOpen) && (
+                <div className="h-px bg-claude-border" />
+              )}
+
+              {/* Editor panel */}
+              {isEditorOpen && (
+                <div className={`flex flex-col overflow-hidden ${(isBrowserPanelOpen || isGitPanelOpen) ? 'flex-1' : 'h-full'}`}>
+                  <EditorPanel onClose={closeEditor} />
+                </div>
+              )}
             </div>
           </>
         )}
       </div>
 
-      {/* Terminal panel (visible at bottom when in chat mode and height > 0) */}
-      {activePanel === 'chat' && (
+      {/* Terminal panel (visible at bottom when toggled on) */}
+      {isTerminalPanelOpen && (
         <>
-          {/* Terminal resize handle - always visible for expanding */}
+          {/* Terminal resize handle */}
           <div
             className={`h-1 hover:h-1.5 bg-claude-border hover:bg-claude-accent cursor-row-resize flex items-center justify-center transition-all ${
               isTerminalResizing ? 'h-1.5 bg-claude-accent' : ''
             }`}
             onMouseDown={handleTerminalResizeMouseDown}
-            onDoubleClick={() => setTerminalHeight(terminalHeight === 0 ? 300 : 0)}
-            title={terminalHeight === 0 ? 'Double-click to open terminal' : 'Double-click to close terminal'}
           >
             <GripVertical size={12} className="text-claude-text-secondary opacity-0 hover:opacity-100 rotate-90" />
           </div>
 
-          {/* Terminal container with dynamic height - hidden when height is 0 */}
-          {terminalHeight > 0 && (
-            <div
-              className="border-t border-claude-border"
-              style={{ height: terminalHeight }}
-            >
-              <TerminalContainer session={activeSession} compact />
-            </div>
-          )}
+          {/* Terminal container with dynamic height */}
+          <div
+            className="border-t border-claude-border"
+            style={{ height: terminalHeight || 250 }}
+          >
+            <TerminalContainer session={activeSession} compact />
+          </div>
         </>
       )}
     </div>

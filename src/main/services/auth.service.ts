@@ -21,12 +21,12 @@ export class AuthService {
   // These should come from environment variables in production
   private readonly CLIENT_ID = process.env.GITHUB_CLIENT_ID || '';
   private readonly CLIENT_SECRET = process.env.GITHUB_CLIENT_SECRET || '';
-  private readonly REDIRECT_URI = 'claudette://oauth/callback';
+  private readonly REDIRECT_URI = 'grep://oauth/callback';
 
   constructor() {
     this.store = new Store({
-      name: 'claudette-auth',
-      encryptionKey: 'claudette-secure-v1',
+      name: 'grep-auth',
+      encryptionKey: 'grep-secure-v1',
     });
   }
 

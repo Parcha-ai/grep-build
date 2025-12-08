@@ -6,6 +6,7 @@ interface MessageListProps {
   messages: ChatMessage[];
   isStreaming: boolean;
   streamContent: string;
+  thinkingContent?: string;
   streamingToolCalls?: ToolCall[];
 }
 
@@ -13,10 +14,11 @@ export default function MessageList({
   messages,
   isStreaming,
   streamContent,
+  thinkingContent,
   streamingToolCalls,
 }: MessageListProps) {
-  // Check if we have any content to show (either messages, streaming content, or streaming tool calls)
-  const hasStreamingContent = isStreaming && (streamContent || (streamingToolCalls && streamingToolCalls.length > 0));
+  // Check if we have any content to show (either messages, streaming content, thinking, or streaming tool calls)
+  const hasStreamingContent = isStreaming && (streamContent || thinkingContent || (streamingToolCalls && streamingToolCalls.length > 0));
 
   if (messages.length === 0 && !hasStreamingContent) {
     return (
@@ -31,11 +33,15 @@ export default function MessageList({
 
   return (
     <div className="p-4 space-y-4">
-      {messages.map((message) => (
-        <MessageBubble key={message.id} message={message} />
+      {messages.map((message, index) => (
+        <MessageBubble
+          key={message.id}
+          message={message}
+          isLatestMessage={!hasStreamingContent && index === messages.length - 1}
+        />
       ))}
 
-      {/* Streaming message with tool calls */}
+      {/* Streaming message with tool calls and thinking */}
       {hasStreamingContent && (
         <MessageBubble
           message={{
@@ -46,6 +52,8 @@ export default function MessageList({
           }}
           isStreaming
           streamingToolCalls={streamingToolCalls}
+          thinkingContent={thinkingContent}
+          isLatestMessage={true}
         />
       )}
 

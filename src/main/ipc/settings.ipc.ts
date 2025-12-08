@@ -17,6 +17,14 @@ export function registerSettingsHandlers(ipcMain: IpcMain): void {
     return settingsService.resetSettings();
   });
 
+  ipcMain.handle(IPC_CHANNELS.SETTINGS_GET_API_KEY, async () => {
+    return settingsService.getApiKey() || '';
+  });
+
+  ipcMain.handle(IPC_CHANNELS.SETTINGS_SET_API_KEY, async (_, key: string) => {
+    settingsService.setApiKey(key);
+  });
+
   // App utilities
   ipcMain.handle(IPC_CHANNELS.APP_GET_VERSION, async () => {
     return app.getVersion();

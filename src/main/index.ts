@@ -8,6 +8,8 @@ import { registerClaudeHandlers } from './ipc/claude.ipc';
 import { registerSettingsHandlers } from './ipc/settings.ipc';
 import { registerDevHandlers } from './ipc/dev.ipc';
 import { registerFsHandlers } from './ipc/fs.ipc';
+import { registerAudioHandlers } from './ipc/audio.ipc';
+import { registerRealtimeHandlers } from './ipc/realtime.ipc';
 
 // Handle creating/removing shortcuts on Windows when installing/uninstalling.
 if (require('electron-squirrel-startup')) {
@@ -27,7 +29,7 @@ const createWindow = (): void => {
     minWidth: 1000,
     minHeight: 700,
     titleBarStyle: 'hiddenInset',
-    trafficLightPosition: { x: 15, y: 15 },
+    trafficLightPosition: { x: 15, y: 10 },
     backgroundColor: '#1a1a1a',
     webPreferences: {
       preload: MAIN_WINDOW_PRELOAD_WEBPACK_ENTRY,
@@ -50,7 +52,7 @@ const createWindow = (): void => {
           "default-src 'self' 'unsafe-inline' 'unsafe-eval' data: blob:",
           "script-src 'self' 'unsafe-inline' 'unsafe-eval'",
           "style-src 'self' 'unsafe-inline'",
-          "connect-src 'self' https://api.anthropic.com https://api.github.com ws://localhost:* http://localhost:*",
+          "connect-src 'self' https://api.anthropic.com https://api.github.com https://api.elevenlabs.io https://api.openai.com ws://localhost:* http://localhost:*",
           "img-src 'self' data: https: blob:",
           "font-src 'self' data:",
         ].join('; ')
@@ -70,7 +72,7 @@ const createWindow = (): void => {
 
 // Register custom protocol for OAuth callback
 app.whenReady().then(() => {
-  protocol.registerHttpProtocol('claudette', (request) => {
+  protocol.registerHttpProtocol('grep', (request) => {
     // Handle OAuth callback
     const url = new URL(request.url);
     if (url.pathname === '/oauth/callback') {
@@ -92,6 +94,8 @@ function registerIPCHandlers(): void {
   registerSettingsHandlers(ipcMain);
   registerDevHandlers(ipcMain);
   registerFsHandlers(ipcMain);
+  registerAudioHandlers(ipcMain);
+  registerRealtimeHandlers(ipcMain);
 }
 
 // This method will be called when Electron has finished initialization

@@ -5,7 +5,7 @@ import * as fs from 'fs/promises';
 import * as path from 'path';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-const sessionStore: any = new Store({ name: 'claudette-sessions' });
+const sessionStore: any = new Store({ name: 'grep-sessions' });
 
 export interface FileEntry {
   name: string;
@@ -128,6 +128,16 @@ export function registerFsHandlers(ipcMain: IpcMain): void {
     }
   });
 
+  // Write file content
+  ipcMain.handle(IPC_CHANNELS.FS_WRITE_FILE, async (_event, filePath: string, content: string) => {
+    try {
+      await fs.writeFile(filePath, content, 'utf-8');
+      return { success: true };
+    } catch (error) {
+      return { success: false, error: (error as Error).message };
+    }
+  });
+
   // Search files by content (basic grep-like)
   ipcMain.handle(IPC_CHANNELS.FS_SEARCH_FILES, async (_event, sessionId: string, searchTerm: string) => {
     const session = sessionStore.get(`sessions.${sessionId}`) as { worktreePath?: string } | undefined;
@@ -155,5 +165,108 @@ export function registerFsHandlers(ipcMain: IpcMain): void {
     }
 
     return results.slice(0, 10);
+  });
+
+  // Search for symbols (functions, classes, methods, etc.)
+  ipcMain.handle(IPC_CHANNELS.FS_SEARCH_SYMBOLS, async (_event, sessionId: string, query: string) => {
+    const session = sessionStore.get(`sessions.${sessionId}`) as { worktreePath?: string } | undefined;
+    if (!session?.worktreePath || !query?.trim()) {
+      return [];
+    }
+
+    const files = await listFilesRecursive(session.worktreePath, session.worktreePath);
+    const symbolResults: Array<{
+      name: string;
+      kind: string;
+      path: string;
+      relativePath: string;
+      lineNumber: number;
+      detail: string;
+    }> = [];
+
+    const lowerQuery = query.toLowerCase();
+
+    // Symbol patterns for common languages
+    const symbolPatterns = [
+      // TypeScript/JavaScript function/const declarations
+      /^(?:export\s+)?(?:async\s+)?(?:function|const|let|var)\s+(\w+)/,
+      // TypeScript/JavaScript class declarations
+      /^(?:export\s+)?(?:abstract\s+)?class\s+(\w+)/,
+      // TypeScript interface/type declarations
+      /^(?:export\s+)?(?:interface|type)\s+(\w+)/,
+      // TypeScript/JavaScript method declarations (class methods)
+      /^\s*(?:public|private|protected|static|async|readonly|\s)*(\w+)\s*(?:<[^>]*>)?\s*\(/,
+      // Python function/class
+      /^(?:async\s+)?def\s+(\w+)/,
+      /^class\s+(\w+)/,
+      // Go function/type
+      /^func\s+(?:\([^)]+\)\s+)?(\w+)/,
+      /^type\s+(\w+)/,
+      // Rust function/struct/impl
+      /^(?:pub\s+)?(?:async\s+)?fn\s+(\w+)/,
+      /^(?:pub\s+)?struct\s+(\w+)/,
+      /^impl(?:<[^>]*>)?\s+(\w+)/,
+    ];
+
+    for (const file of files.filter((f) => f.type === 'file').slice(0, 100)) {
+      try {
+        const content = await fs.readFile(file.path, 'utf-8');
+        const lines = content.split('\n');
+
+        for (let i = 0; i < lines.length; i++) {
+          const line = lines[i];
+
+          for (const pattern of symbolPatterns) {
+            const match = line.match(pattern);
+            if (match && match[1]) {
+              const symbolName = match[1];
+
+              // Filter by query
+              if (symbolName.toLowerCase().includes(lowerQuery)) {
+                // Determine symbol kind
+                let kind = 'symbol';
+                if (/class\s/.test(line)) kind = 'class';
+                else if (/interface\s/.test(line)) kind = 'interface';
+                else if (/type\s/.test(line)) kind = 'type';
+                else if (/(?:function|def|fn)\s/.test(line) || /^\s*(?:async\s+)?(\w+)\s*\(/.test(line)) kind = 'function';
+                else if (/struct\s/.test(line)) kind = 'struct';
+                else if (/const\s/.test(line)) kind = 'const';
+
+                symbolResults.push({
+                  name: symbolName,
+                  kind,
+                  path: file.path,
+                  relativePath: file.relativePath,
+                  lineNumber: i + 1,
+                  detail: line.trim().substring(0, 80),
+                });
+
+                // Only include first match per line
+                break;
+              }
+            }
+          }
+        }
+      } catch {
+        // Skip files that can't be read
+      }
+    }
+
+    // Sort by relevance (exact match first, then starts with, then includes)
+    symbolResults.sort((a, b) => {
+      const aLower = a.name.toLowerCase();
+      const bLower = b.name.toLowerCase();
+      const aExact = aLower === lowerQuery;
+      const bExact = bLower === lowerQuery;
+      if (aExact && !bExact) return -1;
+      if (!aExact && bExact) return 1;
+      const aStarts = aLower.startsWith(lowerQuery);
+      const bStarts = bLower.startsWith(lowerQuery);
+      if (aStarts && !bStarts) return -1;
+      if (!aStarts && bStarts) return 1;
+      return a.name.length - b.name.length;
+    });
+
+    return symbolResults.slice(0, 30);
   });
 }
