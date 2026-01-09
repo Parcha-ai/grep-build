@@ -171,6 +171,22 @@ const electronAPI = {
       ipcRenderer.on(IPC_CHANNELS.BROWSER_ELEMENT_SELECTED, handler);
       return () => ipcRenderer.removeListener(IPC_CHANNELS.BROWSER_ELEMENT_SELECTED, handler);
     },
+    captureSnapshot: (sessionId: string, url: string) =>
+      ipcRenderer.invoke(IPC_CHANNELS.BROWSER_CAPTURE_SNAPSHOT, sessionId, url),
+    navigateTo: (sessionId: string, url: string) =>
+      ipcRenderer.invoke(IPC_CHANNELS.BROWSER_NAVIGATE_TO, sessionId, url),
+    getSnapshot: (sessionId: string) =>
+      ipcRenderer.invoke(IPC_CHANNELS.BROWSER_GET_SNAPSHOT, sessionId),
+    onCaptureRequest: (callback: (data: { sessionId: string; requestId?: string }) => void) => {
+      const handler = (_: IpcRendererEvent, data: { sessionId: string; requestId?: string }) => callback(data);
+      ipcRenderer.on('browser:capture-snapshot', handler);
+      return () => ipcRenderer.removeListener('browser:capture-snapshot', handler);
+    },
+    sendSnapshotData: (snapshot: any) => {
+      ipcRenderer.send('browser:snapshot-captured', snapshot);
+    },
+    clearStorage: (): Promise<{ success: boolean }> =>
+      ipcRenderer.invoke(IPC_CHANNELS.BROWSER_CLEAR_STORAGE),
   },
 
   // Settings

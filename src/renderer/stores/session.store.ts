@@ -38,6 +38,12 @@ interface SessionState {
   thinkingMode: Record<string, ThinkingMode>;
   pendingPermission: Record<string, PermissionRequest | null>;
   pendingQuestion: Record<string, QuestionRequest | null>;
+  messageQueue: Record<string, Array<{
+    id: string;
+    message: string;
+    attachments?: unknown[];
+    timestamp: number;
+  }>>;
 
   setActiveSession: (sessionId: string | null) => void;
   addSession: (session: Session) => void;
@@ -76,6 +82,12 @@ interface SessionState {
   // Question handling
   setPendingQuestion: (sessionId: string, request: QuestionRequest | null) => void;
   answerQuestion: (sessionId: string, answers: Record<string, string>) => Promise<void>;
+  // Queue management
+  removeFromQueue: (sessionId: string, messageId: string) => void;
+  editQueuedMessage: (sessionId: string, messageId: string, newMessage: string) => void;
+  moveToFront: (sessionId: string, messageId: string) => void;
+  clearQueue: (sessionId: string) => void;
+  interruptAndSend: (sessionId: string, message: string, attachments?: unknown[]) => Promise<void>;
 }
 
 export const useSessionStore = create<SessionState>((set, get) => ({
@@ -92,6 +104,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   thinkingMode: {},
   pendingPermission: {},
   pendingQuestion: {},
+  messageQueue: {},
 
   setActiveSession: async (sessionId) => {
     const { loadMessages, startSession } = get();
@@ -293,6 +306,8 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   },
 
   setStreaming: (sessionId, isStreaming) => {
+    console.log(`[SessionStore] setStreaming called for ${sessionId}: ${isStreaming}`);
+
     set((state) => ({
       isStreaming: { ...state.isStreaming, [sessionId]: isStreaming },
       streamEvents: isStreaming
@@ -311,6 +326,69 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         ? { ...state.currentSystemInfo, [sessionId]: null }
         : state.currentSystemInfo,
     }));
+
+    // Process queued messages when streaming ends
+    if (!isStreaming) {
+      // Use a microtask to ensure state has propagated
+      Promise.resolve().then(() => {
+        const state = get();
+        const queue = state.messageQueue[sessionId] || [];
+        console.log(`[SessionStore] Stream ended. Checking queue for ${sessionId}. Queue length: ${queue.length}`);
+
+        if (queue.length > 0) {
+          const nextMessage = queue[0];
+          console.log(`[SessionStore] Processing next queued message: "${nextMessage.message.slice(0, 50)}..."`);
+
+          // Atomically remove message from queue and verify we're not streaming
+          set((state) => {
+            // Double-check we're still not streaming before removing from queue
+            if (state.isStreaming[sessionId]) {
+              console.warn(`[SessionStore] Streaming started again before queue could be processed. Aborting.`);
+              return state; // Don't modify state
+            }
+
+            const currentQueue = state.messageQueue[sessionId] || [];
+            if (currentQueue.length === 0) {
+              console.warn(`[SessionStore] Queue became empty before processing. Race condition avoided.`);
+              return state;
+            }
+
+            const [, ...remainingQueue] = currentQueue;
+            console.log(`[SessionStore] Removed message from queue. Remaining: ${remainingQueue.length}`);
+
+            return {
+              messageQueue: {
+                ...state.messageQueue,
+                [sessionId]: remainingQueue,
+              },
+            };
+          });
+
+          // Send the message after a small delay to ensure state updates have propagated
+          setTimeout(() => {
+            const currentState = get();
+            const stillStreaming = currentState.isStreaming[sessionId];
+            console.log(`[SessionStore] About to send queued message. Currently streaming: ${stillStreaming}`);
+
+            if (!stillStreaming) {
+              console.log(`[SessionStore] Sending queued message now`);
+              currentState.sendMessage(sessionId, nextMessage.message, nextMessage.attachments);
+            } else {
+              console.warn(`[SessionStore] Cannot send queued message - streaming started again. Re-queueing.`);
+              // Re-add to front of queue
+              set((s) => ({
+                messageQueue: {
+                  ...s.messageQueue,
+                  [sessionId]: [nextMessage, ...(s.messageQueue[sessionId] || [])],
+                },
+              }));
+            }
+          }, 150); // Slightly longer delay for reliability
+        } else {
+          console.log(`[SessionStore] No messages in queue for ${sessionId}`);
+        }
+      });
+    }
   },
 
   setSystemInfo: (sessionId, systemInfo) => {
@@ -372,7 +450,31 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
   sendMessage: async (sessionId, message, attachments) => {
     if (!hasElectronAPI) return;
-    const { addMessage, setStreaming, permissionMode, thinkingMode } = get();
+    const state = get();
+
+    // If already streaming, queue the message
+    if (state.isStreaming[sessionId]) {
+      const queuedMsg = {
+        id: `msg-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+        message,
+        attachments,
+        timestamp: Date.now(),
+      };
+      set((state) => ({
+        messageQueue: {
+          ...state.messageQueue,
+          [sessionId]: [
+            ...(state.messageQueue[sessionId] || []),
+            queuedMsg,
+          ],
+        },
+      }));
+      console.log('[SessionStore] Message queued - will send after current response. Queue length:', (state.messageQueue[sessionId] || []).length + 1);
+      console.log('[SessionStore] Queued message preview:', message.slice(0, 50));
+      return;
+    }
+
+    const { addMessage, setStreaming, permissionMode, thinkingMode } = state;
     const mode = permissionMode[sessionId] || 'acceptEdits';
     const thinking = thinkingMode[sessionId] || 'thinking';
 
@@ -455,6 +557,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     });
 
     const unsubEnd = window.electronAPI.claude.onStreamEnd(({ sessionId, message }) => {
+      console.log(`[SessionStore] onStreamEnd received for ${sessionId}. Message length: ${message.content?.length || 0}`);
       setStreaming(sessionId, false);
       addMessage(sessionId, message);
 
@@ -584,5 +687,78 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     console.log('[Session Store] Answering question:', request.requestId, answers);
     await window.electronAPI.claude.respondToQuestion(response);
     setPendingQuestion(sessionId, null);
+  },
+
+  // Queue management methods
+  removeFromQueue: (sessionId, messageId) => {
+    set((state) => ({
+      messageQueue: {
+        ...state.messageQueue,
+        [sessionId]: (state.messageQueue[sessionId] || []).filter(m => m.id !== messageId),
+      },
+    }));
+    console.log(`Message ${messageId} removed from queue`);
+  },
+
+  editQueuedMessage: (sessionId, messageId, newMessage) => {
+    set((state) => ({
+      messageQueue: {
+        ...state.messageQueue,
+        [sessionId]: (state.messageQueue[sessionId] || []).map(m =>
+          m.id === messageId ? { ...m, message: newMessage } : m
+        ),
+      },
+    }));
+    console.log(`Message ${messageId} edited`);
+  },
+
+  moveToFront: (sessionId, messageId) => {
+    set((state) => {
+      const queue = state.messageQueue[sessionId] || [];
+      const messageIndex = queue.findIndex(m => m.id === messageId);
+      if (messageIndex === -1) return state;
+
+      const message = queue[messageIndex];
+      const newQueue = [message, ...queue.filter(m => m.id !== messageId)];
+
+      return {
+        messageQueue: {
+          ...state.messageQueue,
+          [sessionId]: newQueue,
+        },
+      };
+    });
+    console.log(`Message ${messageId} moved to front`);
+  },
+
+  clearQueue: (sessionId) => {
+    set((state) => ({
+      messageQueue: {
+        ...state.messageQueue,
+        [sessionId]: [],
+      },
+    }));
+    console.log(`Queue cleared for session ${sessionId}`);
+  },
+
+  interruptAndSend: async (sessionId, message, attachments) => {
+    const state = get();
+
+    // Cancel current streaming
+    window.electronAPI.claude.cancel(sessionId);
+
+    // Clear current streaming state
+    set((state) => ({
+      isStreaming: { ...state.isStreaming, [sessionId]: false },
+      streamEvents: { ...state.streamEvents, [sessionId]: [] },
+      currentStreamContent: { ...state.currentStreamContent, [sessionId]: '' },
+      currentThinkingContent: { ...state.currentThinkingContent, [sessionId]: '' },
+      currentToolCalls: { ...state.currentToolCalls, [sessionId]: [] },
+    }));
+
+    console.log(`Interrupted current message, sending priority message`);
+
+    // Send new message immediately (will bypass queue since isStreaming is now false)
+    state.sendMessage(sessionId, message, attachments);
   },
 }));

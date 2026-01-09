@@ -59,8 +59,12 @@ export const IPC_CHANNELS = {
 
   // Browser preview channels
   BROWSER_NAVIGATE: 'browser:navigate',
+  BROWSER_NAVIGATE_TO: 'browser:navigate-to',
   BROWSER_ELEMENT_SELECTED: 'browser:element-selected',
   BROWSER_INJECT_INSPECTOR: 'browser:inject-inspector',
+  BROWSER_CAPTURE_SNAPSHOT: 'browser:capture-snapshot',
+  BROWSER_GET_SNAPSHOT: 'browser:get-snapshot',
+  BROWSER_CLEAR_STORAGE: 'browser:clear-storage',
 
   // Settings channels
   SETTINGS_GET: 'settings:get',

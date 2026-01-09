@@ -1,5 +1,6 @@
-import { query } from '@anthropic-ai/claude-agent-sdk';
+import { query, tool, createSdkMcpServer } from '@anthropic-ai/claude-agent-sdk';
 import type { SDKMessage } from '@anthropic-ai/claude-agent-sdk';
+import { z } from 'zod';
 import Store from 'electron-store';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -7,6 +8,7 @@ import * as os from 'os';
 import type { ChatMessage, ToolCall, Session, QuestionRequest, QuestionResponse } from '../../shared/types';
 import { BrowserWindow } from 'electron';
 import { IPC_CHANNELS } from '../../shared/constants/channels';
+import { browserService } from './browser.service';
 
 interface StreamEvent {
   type: 'text_delta' | 'thinking_delta' | 'tool_use' | 'tool_result' | 'message_complete' | 'error' | 'system' | 'permission_request';
@@ -40,6 +42,7 @@ export class ClaudeService {
   private activeQueries: Map<string, AbortController> = new Map();
   private pendingQuestions: Map<string, PendingQuestion> = new Map();
   private mainWindow: BrowserWindow | null = null;
+  private browserMcpServers: Map<string, any> = new Map();
 
   constructor() {
     this.store = new Store({ name: 'claudette-settings' });
@@ -52,6 +55,97 @@ export class ClaudeService {
 
   getApiKey(): string | undefined {
     return this.store.get('anthropicApiKey') as string | undefined;
+  }
+
+  // Get or create MCP server with browser snapshot tool for session
+  private getBrowserMcpServer(sessionId: string) {
+    if (this.browserMcpServers.has(sessionId)) {
+      return this.browserMcpServers.get(sessionId);
+    }
+
+    const browserSnapshotTool = tool(
+      'BrowserSnapshot',
+      'Capture a snapshot of a webpage in the browser preview. Takes a screenshot and extracts the HTML content. Use this to inspect web pages, debug UI issues, or verify how pages render.',
+      {
+        url: z.string().describe('The URL to navigate to and capture'),
+        waitForLoad: z.boolean().optional().describe('Wait for page to fully load before capturing (default: true)'),
+        waitTime: z.number().optional().describe('Time to wait in milliseconds after navigation (default: 2000ms)'),
+      },
+      async (args) => {
+        try {
+          const { url, waitForLoad = true, waitTime = 2000 } = args;
+
+          console.log('[Claude Service] Capturing browser snapshot:', url);
+
+          // Navigate to URL first
+          await browserService.navigate(sessionId, url);
+
+          // Wait for page to load if requested (configurable timeout)
+          if (waitForLoad && waitTime > 0) {
+            await new Promise(resolve => setTimeout(resolve, Math.min(waitTime, 10000)));
+          }
+
+          // Capture snapshot
+          const snapshot = await browserService.captureSnapshot(sessionId, url);
+
+          // Clean up the screenshot data - strip any data URL prefix
+          let screenshotData = snapshot.screenshot;
+          if (screenshotData.startsWith('data:')) {
+            // Handle multiple data URL formats: data:image/png;base64, or data:image/jpeg;base64, etc.
+            const base64Index = screenshotData.indexOf('base64,');
+            if (base64Index !== -1) {
+              screenshotData = screenshotData.substring(base64Index + 7);
+            }
+          }
+
+          // Validate screenshot data
+          if (!screenshotData || screenshotData.length === 0) {
+            return {
+              content: [{
+                type: 'text',
+                text: `Captured snapshot of ${url} but screenshot failed to capture. HTML is available:\n\n${snapshot.html.slice(0, 2000)}${snapshot.html.length > 2000 ? '...(truncated)' : ''}`,
+              }],
+            };
+          }
+
+          // Return snapshot info with image
+          return {
+            content: [
+              {
+                type: 'text',
+                text: `Captured snapshot of ${url}\n\nHTML Preview:\n${snapshot.html.slice(0, 2000)}${snapshot.html.length > 2000 ? '...(truncated)' : ''}`,
+              },
+              {
+                type: 'image',
+                source: {
+                  type: 'base64',
+                  media_type: 'image/png',
+                  data: screenshotData,
+                },
+              },
+            ],
+          };
+        } catch (error) {
+          console.error('[Claude Service] Browser snapshot error:', error);
+          return {
+            content: [{
+              type: 'text',
+              text: `Failed to capture browser snapshot: ${error instanceof Error ? error.message : String(error)}`,
+            }],
+            isError: true,
+          };
+        }
+      }
+    );
+
+    const mcpServer = createSdkMcpServer({
+      name: 'claudette-browser',
+      version: '1.0.0',
+      tools: [browserSnapshotTool],
+    });
+
+    this.browserMcpServers.set(sessionId, mcpServer);
+    return mcpServer;
   }
 
   setApiKey(apiKey: string): void {
@@ -169,6 +263,10 @@ export class ClaudeService {
           },
           // Resume previous conversation if we have an SDK session ID
           ...(sdkSessionId ? { resume: sdkSessionId } : {}),
+          // Add custom browser snapshot tool via MCP server
+          mcpServers: {
+            'claudette-browser': this.getBrowserMcpServer(sessionId),
+          },
           // Handle tool permission requests
           canUseTool: async (toolName: string, input: any) => {
             // Handle AskUserQuestion tool

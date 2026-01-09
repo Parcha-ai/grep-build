@@ -32,10 +32,15 @@ module.exports = {
           '0%': { transform: 'translateX(-10px)' },
           '100%': { transform: 'translateX(10px)' },
         },
+        'pulse-slow': {
+          '0%, 100%': { opacity: '1' },
+          '50%': { opacity: '0.7' },
+        },
       },
       animation: {
         'sound-bar': 'sound-bar 0.8s ease-in-out infinite',
         'wave': 'wave 1s ease-in-out infinite alternate',
+        'pulse-slow': 'pulse-slow 2s cubic-bezier(0.4, 0, 0.6, 1) infinite',
       },
     },
   },

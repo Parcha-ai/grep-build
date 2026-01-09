@@ -13,6 +13,7 @@ export interface Session {
   updatedAt: Date;
   setupScript: string;
   isDevMode?: boolean; // True for local dev sessions (no Docker)
+  lastBrowserUrl?: string; // Last URL visited in browser preview
 }
 
 export type SessionStatus = 'creating' | 'starting' | 'running' | 'stopping' | 'stopped' | 'error';
@@ -187,6 +188,14 @@ export interface AgentDefinition {
   disallowedTools?: string[];
   model?: string;
   scope: 'user' | 'project';
+}
+
+// Browser snapshot types
+export interface BrowserSnapshot {
+  url: string;
+  screenshot: string;
+  html: string;
+  timestamp: Date;
 }
 
 // Export audio types

@@ -1,10 +1,31 @@
-import React, { useEffect, useState, useRef } from 'react';
+import React, { useEffect, useState, useRef, useMemo } from 'react';
 import { useSessionStore } from '../../stores/session.store';
 import { ChevronDown, Check } from 'lucide-react';
 import type { Branch } from '../../../shared/types';
 
+// Extract subagent type from Task tool input
+function getSubagentType(input: Record<string, unknown>): string | null {
+  const description = (input.description as string) || '';
+  const prompt = (input.prompt as string) || '';
+  const combined = `${description} ${prompt}`.toLowerCase();
+
+  // Pattern match common subagent types
+  if (combined.includes('explore') || combined.includes('search')) return 'EXPLORE';
+  if (combined.includes('plan')) return 'PLAN';
+  if (combined.includes('implement') || combined.includes('code') || combined.includes('bond')) return 'IMPLEMENT';
+  if (combined.includes('document') || combined.includes('moneypenny')) return 'DOCUMENT';
+  if (combined.includes('test') || combined.includes('verify') || combined.includes('scaramanga')) return 'TEST';
+  if (combined.includes('q') || combined.includes('briefing')) return 'BRIEF';
+
+  if (input.subagent_type) {
+    return (input.subagent_type as string).toUpperCase();
+  }
+
+  return null;
+}
+
 export default function StatusBar() {
-  const { activeSessionId, sessions, updateSession } = useSessionStore();
+  const { activeSessionId, sessions, updateSession, currentToolCalls } = useSessionStore();
   const [dockerStatus, setDockerStatus] = useState<{ available: boolean; version?: string } | null>(null);
   const [showBranchMenu, setShowBranchMenu] = useState(false);
   const [branches, setBranches] = useState<Branch[]>([]);
@@ -13,6 +34,15 @@ export default function StatusBar() {
   const menuRef = useRef<HTMLDivElement>(null);
 
   const activeSession = sessions.find((s) => s.id === activeSessionId);
+
+  // Track active Task tool calls (subagents)
+  const activeTaskTools = useMemo(() => {
+    if (!activeSessionId) return [];
+    const toolCalls = currentToolCalls[activeSessionId] || [];
+    return toolCalls.filter(tc => tc.name === 'Task' && (tc.status === 'running' || tc.status === 'pending'));
+  }, [activeSessionId, currentToolCalls]);
+
+  const hasActiveSubagents = activeTaskTools.length > 0;
 
   useEffect(() => {
     window.electronAPI.docker.getStatus().then(setDockerStatus);
@@ -170,6 +200,21 @@ export default function StatusBar() {
                 </div>
               )}
             </div>
+
+            {/* Subagent indicator */}
+            {hasActiveSubagents && (
+              <>
+                <div className="w-px h-3 bg-claude-border" />
+                <div className="flex items-center gap-1.5">
+                  <div className="w-1.5 h-1.5 bg-purple-500 animate-pulse" style={{ borderRadius: 0 }} />
+                  <span style={{ letterSpacing: '0.05em' }} className="text-purple-400">
+                    AGENT: {activeTaskTools.length > 1
+                      ? `${activeTaskTools.length} ACTIVE`
+                      : getSubagentType(activeTaskTools[0].input) || 'TASK'}
+                  </span>
+                </div>
+              </>
+            )}
           </>
         )}
       </div>

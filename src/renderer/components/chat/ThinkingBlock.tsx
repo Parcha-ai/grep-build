@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Brain, Loader2, ChevronRight, ChevronDown } from 'lucide-react';
 
 interface ThinkingBlockProps {
@@ -7,19 +7,23 @@ interface ThinkingBlockProps {
 }
 
 export default function ThinkingBlock({ content, isStreaming }: ThinkingBlockProps) {
-  // Auto-expand when actively streaming so user can see thinking in real-time
-  const [isExpanded, setIsExpanded] = useState(isStreaming ?? false);
+  // Start collapsed by default - user can expand if they want to see full thinking
+  const [isExpanded, setIsExpanded] = useState(false);
+  const expandedRef = useRef<HTMLDivElement>(null);
 
-  // Auto-expand when streaming starts, auto-collapse when streaming ends
+  // Auto-scroll expanded view to bottom when new content arrives
   useEffect(() => {
-    setIsExpanded(isStreaming ?? false);
-  }, [isStreaming]);
+    if (isExpanded && expandedRef.current) {
+      expandedRef.current.scrollTop = expandedRef.current.scrollHeight;
+    }
+  }, [content, isExpanded]);
 
-  // Generate a summary - take first meaningful line, truncated
-  const summary = (() => {
+  // Get last 2-3 lines for collapsed preview (shows latest updates)
+  const previewLines = (() => {
     if (!content) return 'Processing...';
-    const firstLine = content.split('\n').find(l => l.trim()) || '';
-    return firstLine.length > 80 ? firstLine.slice(0, 77) + '...' : firstLine;
+    const lines = content.split('\n').filter(l => l.trim());
+    const lastLines = lines.slice(-3); // Last 3 lines
+    return lastLines.join('\n');
   })();
 
   // Status dot color - same pattern as ToolCallCard
@@ -48,20 +52,27 @@ export default function ThinkingBlock({ content, isStreaming }: ThinkingBlockPro
         <Brain size={14} className="text-purple-400 flex-shrink-0" />
         <span className="font-semibold text-purple-400">Thinking</span>
 
-        {/* Summary (only when collapsed) */}
-        {!isExpanded && (
-          <span className="text-claude-text-secondary truncate flex-1">{summary}</span>
-        )}
-
         {/* Loading spinner for active thinking */}
         {isStreaming && (
           <Loader2 size={12} className="text-purple-500 animate-spin flex-shrink-0" />
         )}
       </button>
 
-      {/* Expanded content */}
-      {isExpanded && content && (
+      {/* Preview (collapsed) - shows last 2-3 lines streaming in */}
+      {!isExpanded && content && (
         <div className="ml-6 mt-1 p-2 bg-claude-surface/30 border-l-2 border-purple-500/30">
+          <pre className="whitespace-pre-wrap text-xs text-claude-text-secondary/80 leading-relaxed overflow-hidden">
+            {previewLines}
+          </pre>
+        </div>
+      )}
+
+      {/* Expanded content - fixed height with scroll, won't push input down */}
+      {isExpanded && content && (
+        <div
+          ref={expandedRef}
+          className="ml-6 mt-1 p-2 bg-claude-surface/30 border-l-2 border-purple-500/30 max-h-64 overflow-y-auto scroll-smooth"
+        >
           <pre className="whitespace-pre-wrap text-sm text-claude-text-secondary leading-relaxed overflow-x-auto">
             {content}
           </pre>

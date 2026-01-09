@@ -12,6 +12,7 @@ import { registerFsHandlers } from './ipc/fs.ipc';
 import { registerAudioHandlers } from './ipc/audio.ipc';
 import { registerRealtimeHandlers } from './ipc/realtime.ipc';
 import { registerExtensionHandlers } from './ipc/extension.ipc';
+import { registerBrowserHandlers } from './ipc/browser.ipc';
 
 // Handle creating/removing shortcuts on Windows when installing/uninstalling.
 if (require('electron-squirrel-startup')) {
@@ -76,6 +77,61 @@ const createWindow = (): void => {
     });
   });
 
+  // Configure webview partition session for browser preview
+  const webviewSession = session.fromPartition('persist:browser');
+
+  // Log storage path to verify it's persistent
+  console.log('[Main] Webview session storage path:', webviewSession.getStoragePath());
+
+  // Enable third-party cookies (critical for OAuth)
+  webviewSession.cookies.set({
+    url: 'https://api.descope.com',
+    name: 'test',
+    value: 'test',
+    expirationDate: Math.floor(Date.now() / 1000) + 3600
+  }).then(() => {
+    console.log('[Main] Webview session cookies enabled');
+  }).catch(err => {
+    console.error('[Main] Failed to set test cookie:', err);
+  });
+
+  // Disable security features that block OAuth flows
+  webviewSession.setPermissionRequestHandler((webContents, permission, callback) => {
+    console.log('[Main] Permission requested:', permission);
+    // Allow all permissions for browser preview
+    callback(true);
+  });
+
+  // Handle webview creation - configure for OAuth flows
+  mainWindow.webContents.on('will-attach-webview', (event, webPreferences, params) => {
+    console.log('[Main] Attaching webview with partition:', params.partition);
+    // Keep web security enabled but configure for OAuth
+    webPreferences.nodeIntegration = false;
+    webPreferences.contextIsolation = true;
+    webPreferences.sandbox = true;
+    // CRITICAL: Enable persistent storage for localStorage/cookies
+    webPreferences.partition = params.partition || 'persist:browser';
+    webPreferences.enableWebSQL = false;
+    webPreferences.experimentalFeatures = true;
+  });
+
+  // Handle new windows from webview (OAuth popups)
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    console.log('[Main] Window open requested:', url);
+    // Allow OAuth popups
+    if (url.includes('google.com') || url.includes('descope.com') || url.includes('auth.app.parcha.ai')) {
+      return {
+        action: 'allow',
+        overrideBrowserWindowOptions: {
+          webPreferences: {
+            partition: 'persist:browser'
+          }
+        }
+      };
+    }
+    return { action: 'deny' };
+  });
+
   // Open DevTools in development
   if (process.env.NODE_ENV === 'development') {
     mainWindow.webContents.openDevTools();
@@ -135,6 +191,7 @@ function registerIPCHandlers(): void {
   registerAudioHandlers(ipcMain);
   registerRealtimeHandlers(ipcMain);
   registerExtensionHandlers(ipcMain);
+  registerBrowserHandlers(ipcMain);
 }
 
 // This method will be called when Electron has finished initialization

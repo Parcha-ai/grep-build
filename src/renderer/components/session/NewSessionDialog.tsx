@@ -1,21 +1,23 @@
 import React, { useState, useMemo } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
-import { X, Search, Loader2, GitBranch, Lock, Globe } from 'lucide-react';
+import { X, Search, Loader2, GitBranch, Lock, Globe, Folder, Github } from 'lucide-react';
 import { useAuthStore } from '../../stores/auth.store';
 import { useSessionStore } from '../../stores/session.store';
 
 interface NewSessionDialogProps {
   isOpen: boolean;
   onClose: () => void;
+  initialPath?: string; // Optional: for creating a new session in an existing folder
 }
 
-export default function NewSessionDialog({ isOpen, onClose }: NewSessionDialogProps) {
+export default function NewSessionDialog({ isOpen, onClose, initialPath }: NewSessionDialogProps) {
   const { repos } = useAuthStore();
   const { createSession, setActiveSession } = useSessionStore();
 
-  const [step, setStep] = useState<'repo' | 'config'>('repo');
+  const [step, setStep] = useState<'source' | 'repo' | 'folder' | 'config'>('source');
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedRepo, setSelectedRepo] = useState<typeof repos[0] | null>(null);
+  const [selectedFolder, setSelectedFolder] = useState<string>('');
   const [sessionName, setSessionName] = useState('');
   const [branch, setBranch] = useState('');
   const [isCreating, setIsCreating] = useState(false);
@@ -30,6 +32,28 @@ export default function NewSessionDialog({ isOpen, onClose }: NewSessionDialogPr
     );
   }, [repos, searchQuery]);
 
+  const handleSelectSource = (source: 'github' | 'local') => {
+    if (source === 'github') {
+      setStep('repo');
+    } else {
+      // Open folder dialog
+      handleSelectFolder();
+    }
+  };
+
+  const handleSelectFolder = async () => {
+    const result = await window.electronAPI.dev.openLocalRepo();
+    if (result.success && result.repoPath) {
+      setSelectedFolder(result.repoPath);
+      setSessionName(result.name || result.repoPath.split('/').pop() || 'Folder');
+      setBranch(result.branch || 'main');
+      setStep('config');
+    } else if (result.canceled) {
+      // User canceled - go back to source selection
+      setStep('source');
+    }
+  };
+
   const handleSelectRepo = (repo: typeof repos[0]) => {
     setSelectedRepo(repo);
     setSessionName(repo.name);
@@ -38,17 +62,31 @@ export default function NewSessionDialog({ isOpen, onClose }: NewSessionDialogPr
   };
 
   const handleCreate = async () => {
-    if (!selectedRepo) return;
+    if (!selectedRepo && !selectedFolder) return;
 
     setIsCreating(true);
     try {
-      const session = await createSession({
-        name: sessionName,
-        repoUrl: selectedRepo.cloneUrl,
-        branch,
-      });
-      setActiveSession(session.id);
-      handleClose();
+      let session;
+      if (selectedFolder) {
+        // Create session from local folder using dev mode
+        session = await window.electronAPI.dev.createSession({
+          name: sessionName,
+          repoPath: selectedFolder,
+          branch,
+        });
+      } else if (selectedRepo) {
+        // Create session from GitHub repo
+        session = await createSession({
+          name: sessionName,
+          repoUrl: selectedRepo.cloneUrl,
+          branch,
+        });
+      }
+
+      if (session) {
+        setActiveSession(session.id);
+        handleClose();
+      }
     } catch (error) {
       console.error('Failed to create session:', error);
     } finally {
@@ -57,9 +95,10 @@ export default function NewSessionDialog({ isOpen, onClose }: NewSessionDialogPr
   };
 
   const handleClose = () => {
-    setStep('repo');
+    setStep(initialPath ? 'config' : 'source');
     setSearchQuery('');
     setSelectedRepo(null);
+    setSelectedFolder('');
     setSessionName('');
     setBranch('');
     onClose();
@@ -79,7 +118,10 @@ export default function NewSessionDialog({ isOpen, onClose }: NewSessionDialogPr
               className="text-sm font-bold text-claude-text"
               style={{ letterSpacing: '0.1em' }}
             >
-              {step === 'repo' ? 'SELECT REPOSITORY' : 'CONFIGURE SESSION'}
+              {step === 'source' && 'NEW SESSION'}
+              {step === 'repo' && 'SELECT REPOSITORY'}
+              {step === 'folder' && 'SELECT FOLDER'}
+              {step === 'config' && 'CONFIGURE SESSION'}
             </Dialog.Title>
             <Dialog.Close asChild>
               <button
@@ -93,7 +135,58 @@ export default function NewSessionDialog({ isOpen, onClose }: NewSessionDialogPr
 
           {/* Content */}
           <div className="p-4">
-            {step === 'repo' ? (
+            {step === 'source' ? (
+              <>
+                {/* Source selection */}
+                <div className="space-y-3">
+                  <p className="text-xs text-claude-text-secondary mb-4" style={{ letterSpacing: '0.05em' }}>
+                    Choose how you want to create your session
+                  </p>
+
+                  {/* GitHub option */}
+                  <button
+                    onClick={() => handleSelectSource('github')}
+                    className="w-full p-4 text-left hover:bg-claude-bg transition-colors border border-claude-border group"
+                    style={{ borderRadius: 0 }}
+                  >
+                    <div className="flex items-start gap-3">
+                      <div className="p-2 bg-claude-bg group-hover:bg-claude-surface transition-colors">
+                        <Github size={20} className="text-claude-accent" />
+                      </div>
+                      <div className="flex-1">
+                        <h4 className="text-sm font-bold text-claude-text mb-1">
+                          GitHub Repository
+                        </h4>
+                        <p className="text-xs text-claude-text-secondary">
+                          Clone a repository from your GitHub account
+                        </p>
+                      </div>
+                    </div>
+                  </button>
+
+                  {/* Local folder option */}
+                  <button
+                    onClick={() => handleSelectSource('local')}
+                    className="w-full p-4 text-left hover:bg-claude-bg transition-colors border border-claude-border group"
+                    style={{ borderRadius: 0 }}
+                  >
+                    <div className="flex items-start gap-3">
+                      <div className="p-2 bg-claude-bg group-hover:bg-claude-surface transition-colors">
+                        <Folder size={20} className="text-claude-accent" />
+                      </div>
+                      <div className="flex-1">
+                        <h4 className="text-sm font-bold text-claude-text mb-1">
+                          Local Folder
+                        </h4>
+                        <p className="text-xs text-claude-text-secondary">
+                          Open an existing folder on your computer
+                        </p>
+                      </div>
+                    </div>
+                  </button>
+                </div>
+              </>
+            ) : step === 'repo' ? (
               <>
                 {/* Search - brutalist */}
                 <div className="relative mb-3">
@@ -198,10 +291,21 @@ export default function NewSessionDialog({ isOpen, onClose }: NewSessionDialogPr
                     style={{ borderRadius: 0 }}
                   >
                     <div className="flex items-center gap-2 text-xs">
-                      <Globe size={14} className="text-claude-text-secondary" />
-                      <span className="font-bold text-claude-text">
-                        {selectedRepo?.fullName}
-                      </span>
+                      {selectedRepo ? (
+                        <>
+                          <Globe size={14} className="text-claude-text-secondary" />
+                          <span className="font-bold text-claude-text">
+                            {selectedRepo.fullName}
+                          </span>
+                        </>
+                      ) : (
+                        <>
+                          <Folder size={14} className="text-claude-text-secondary" />
+                          <span className="font-bold text-claude-text truncate">
+                            {selectedFolder}
+                          </span>
+                        </>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -211,9 +315,18 @@ export default function NewSessionDialog({ isOpen, onClose }: NewSessionDialogPr
 
           {/* Footer */}
           <div className="flex items-center justify-between p-4 border-t border-claude-border">
-            {step === 'config' && (
+            {step === 'config' && !initialPath && (
               <button
-                onClick={() => setStep('repo')}
+                onClick={() => setStep(selectedRepo ? 'repo' : 'source')}
+                className="px-3 py-1.5 text-[10px] font-bold hover:bg-claude-bg transition-colors text-claude-text-secondary"
+                style={{ letterSpacing: '0.05em', borderRadius: 0 }}
+              >
+                BACK
+              </button>
+            )}
+            {step === 'repo' && (
+              <button
+                onClick={() => setStep('source')}
                 className="px-3 py-1.5 text-[10px] font-bold hover:bg-claude-bg transition-colors text-claude-text-secondary"
                 style={{ letterSpacing: '0.05em', borderRadius: 0 }}
               >

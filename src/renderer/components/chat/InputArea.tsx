@@ -1,11 +1,12 @@
 import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
-import { Paperclip, X, Image, FileCode, Target, File, Folder, AtSign, Brain } from 'lucide-react';
+import { Paperclip, X, Image, FileCode, Target, File, Folder, AtSign, Brain, Square } from 'lucide-react';
 import { useSessionStore, type PermissionMode, type ThinkingMode } from '../../stores/session.store';
 import { useUIStore } from '../../stores/ui.store';
 import { useAudioStore } from '../../stores/audio.store';
 import MentionAutocomplete, { type Mention } from './MentionAutocomplete';
 import CommandAutocomplete from './CommandAutocomplete';
 import { MicrophoneButton } from './MicrophoneButton';
+import { MessageQueuePanel } from './MessageQueuePanel';
 
 interface TodoItem {
   content: string;
@@ -120,9 +121,12 @@ export default function InputArea({ sessionId, disabled, systemInfo, isStreaming
   const [mentionPosition, setMentionPosition] = useState({ top: 0, left: 0 });
   const [mentionStartIndex, setMentionStartIndex] = useState(-1);
   const [showTodoList, setShowTodoList] = useState(false);
+  const [escapeKeyCount, setEscapeKeyCount] = useState(0);
+  const [escapeTimeout, setEscapeTimeout] = useState<NodeJS.Timeout | null>(null);
+  const [showEscapeWarning, setShowEscapeWarning] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
-  const { sendMessage, isStreaming, permissionMode, cyclePermissionMode, thinkingMode, cycleThinkingMode, currentToolCalls, messages, sessions } = useSessionStore();
+  const { sendMessage, isStreaming, permissionMode, cyclePermissionMode, thinkingMode, cycleThinkingMode, currentToolCalls, messages, sessions, messageQueue } = useSessionStore();
   const { selectedElement, setSelectedElement, setInspectorActive, toggleBrowserPanel } = useUIStore();
   const { settings: audioSettings, setAudioMode } = useAudioStore();
 
@@ -145,6 +149,8 @@ export default function InputArea({ sessionId, disabled, systemInfo, isStreaming
   const thinkingConfig = THINKING_MODE_CONFIG[currentThinkingMode];
 
   const isSending = isStreaming[sessionId] || false;
+  const queuedMessages = messageQueue[sessionId] || [];
+  const hasQueuedMessages = queuedMessages.length > 0;
 
   // Extract current todos from the most recent TodoWrite tool call
   const currentTodos = useMemo((): TodoItem[] => {
@@ -187,6 +193,40 @@ export default function InputArea({ sessionId, disabled, systemInfo, isStreaming
     const total = currentTodos.length;
     return { completed, total };
   }, [currentTodos]);
+
+  // Helper function to extract subagent type from Task tool input
+  const getSubagentType = (input: Record<string, unknown>): string | null => {
+    const description = (input.description as string) || '';
+    const prompt = (input.prompt as string) || '';
+    const combined = `${description} ${prompt}`.toLowerCase();
+
+    if (combined.includes('explore') || combined.includes('search')) return 'EXPLORE';
+    if (combined.includes('plan')) return 'PLAN';
+    if (combined.includes('implement') || combined.includes('code') || combined.includes('bond')) return 'IMPLEMENT';
+    if (combined.includes('document') || combined.includes('moneypenny')) return 'DOCUMENT';
+    if (combined.includes('test') || combined.includes('verify') || combined.includes('scaramanga')) return 'TEST';
+    if (combined.includes('q') || combined.includes('briefing')) return 'BRIEF';
+
+    if (input.subagent_type) {
+      return (input.subagent_type as string).toUpperCase();
+    }
+
+    return null;
+  };
+
+  // Detect active subagent (Task tool)
+  const activeSubagent = useMemo(() => {
+    const streamingToolCalls = currentToolCalls[sessionId] || [];
+    const activeTask = streamingToolCalls.find(tc =>
+      tc.name === 'Task' && (tc.status === 'running' || tc.status === 'pending')
+    );
+    if (activeTask) {
+      const type = getSubagentType(activeTask.input);
+      const description = (activeTask.input.description as string) || (activeTask.input.prompt as string) || '';
+      return { type, description };
+    }
+    return null;
+  }, [sessionId, currentToolCalls]);
 
   // Handle selected element from browser inspector
   useEffect(() => {
@@ -385,6 +425,12 @@ export default function InputArea({ sessionId, disabled, systemInfo, isStreaming
     await sendMessage(sessionId, fullMessage, otherAttachments.length > 0 ? otherAttachments : undefined);
   };
 
+  const handleStopStreaming = useCallback(() => {
+    if (isSending) {
+      window.electronAPI.claude.cancel(sessionId);
+    }
+  }, [isSending, sessionId]);
+
   const handleKeyDown = (e: React.KeyboardEvent) => {
     // Don't submit if any autocomplete is open
     if ((showMentions || showCommands) && (e.key === 'ArrowDown' || e.key === 'ArrowUp' || e.key === 'Enter')) {
@@ -397,11 +443,44 @@ export default function InputArea({ sessionId, disabled, systemInfo, isStreaming
     }
 
     if (e.key === 'Escape') {
+      // Close autocompletes first
       if (showMentions) {
         setShowMentions(false);
+        return;
       }
       if (showCommands) {
         setShowCommands(false);
+        return;
+      }
+
+      // Double-escape to stop streaming
+      if (isSending) {
+        // Clear any existing timeout
+        if (escapeTimeout) {
+          clearTimeout(escapeTimeout);
+        }
+
+        const newCount = escapeKeyCount + 1;
+        setEscapeKeyCount(newCount);
+
+        if (newCount >= 2) {
+          // Stop streaming
+          handleStopStreaming();
+          setEscapeKeyCount(0);
+          setEscapeTimeout(null);
+          setShowEscapeWarning(false);
+        } else {
+          // Show warning on first press
+          setShowEscapeWarning(true);
+
+          // Set timeout to reset counter and hide warning
+          const timeout = setTimeout(() => {
+            setEscapeKeyCount(0);
+            setEscapeTimeout(null);
+            setShowEscapeWarning(false);
+          }, 500); // 500ms window for double-escape
+          setEscapeTimeout(timeout);
+        }
       }
     }
   };
@@ -466,12 +545,16 @@ export default function InputArea({ sessionId, disabled, systemInfo, isStreaming
   };
 
   return (
-    <div
-      ref={containerRef}
-      className="px-4 py-2 relative font-mono border-t border-claude-border"
-    >
-      {/* Mention Autocomplete */}
-      {showMentions && (
+    <>
+      {/* Message Queue Panel */}
+      <MessageQueuePanel sessionId={sessionId} />
+
+      <div
+        ref={containerRef}
+        className="px-4 py-2 relative font-mono border-t border-claude-border"
+      >
+        {/* Mention Autocomplete */}
+        {showMentions && (
         <MentionAutocomplete
           sessionId={sessionId}
           query={mentionQuery}
@@ -524,6 +607,27 @@ export default function InputArea({ sessionId, disabled, systemInfo, isStreaming
         </div>
       )}
 
+      {/* Escape warning message */}
+      {showEscapeWarning && (
+        <div className="mb-2 px-3 py-2 bg-amber-500/20 border border-amber-500/50 flex items-center gap-2 animate-fade-in">
+          <span className="text-amber-200 text-xs font-mono uppercase" style={{ letterSpacing: '0.05em' }}>
+            Press ESC again to stop Claudette
+          </span>
+        </div>
+      )}
+
+      {/* Queued messages indicator */}
+      {hasQueuedMessages && (
+        <div className="mb-2 px-3 py-2 bg-blue-500/20 border border-blue-500/50 flex items-center gap-2">
+          <div className="flex items-center gap-1.5 text-blue-200 text-xs font-mono">
+            <div className="w-2 h-2 rounded-full bg-blue-400 animate-pulse" />
+            <span className="uppercase" style={{ letterSpacing: '0.05em' }}>
+              {queuedMessages.length} message{queuedMessages.length !== 1 ? 's' : ''} queued
+            </span>
+          </div>
+        </div>
+      )}
+
       {/* Input row - CLI style */}
       <div className="flex items-center gap-2">
         {/* Permission mode selector - clickable prompt indicator */}
@@ -543,11 +647,11 @@ export default function InputArea({ sessionId, disabled, systemInfo, isStreaming
             value={message}
             onChange={handleInputChange}
             onKeyDown={handleKeyDown}
-            placeholder={disabled ? 'session inactive...' : 'type here... (@ to mention files)'}
-            disabled={disabled || isSending}
+            placeholder={disabled ? 'session inactive...' : isSending ? `type to queue message${hasQueuedMessages ? ` (${queuedMessages.length} queued)` : ''}...` : 'type here... (@ to mention files)'}
+            disabled={disabled}
             className={`w-full py-0 resize-none focus:outline-none disabled:opacity-40 disabled:cursor-not-allowed min-h-[24px] max-h-[200px] font-mono bg-transparent text-base text-claude-text placeholder:text-claude-text-secondary leading-6 caret-claude-accent ${
               useAudioStore.getState().recordingStates[sessionId]?.isRecording ? 'border-l-2 border-red-500 pl-2' : ''
-            }`}
+            } ${isSending ? 'opacity-60' : ''}`}
             rows={1}
           />
         </div>
@@ -556,7 +660,7 @@ export default function InputArea({ sessionId, disabled, systemInfo, isStreaming
         <div className="flex items-center gap-0.5">
           <button
             onClick={handleAtButtonClick}
-            disabled={disabled}
+            disabled={disabled || isSending}
             className="p-1 transition-colors hover:bg-claude-bg disabled:opacity-40 disabled:cursor-not-allowed text-claude-text-secondary hover:text-claude-accent"
             style={{ borderRadius: 0 }}
             title="@ mention file"
@@ -565,13 +669,23 @@ export default function InputArea({ sessionId, disabled, systemInfo, isStreaming
           </button>
           <button
             onClick={handleInspectElement}
-            disabled={disabled}
+            disabled={disabled || isSending}
             className="p-1 transition-colors hover:bg-claude-bg disabled:opacity-40 disabled:cursor-not-allowed text-claude-text-secondary"
             style={{ borderRadius: 0 }}
             title="Inspect element"
           >
             <Target size={14} />
           </button>
+          {isSending && (
+            <button
+              onClick={handleStopStreaming}
+              className="p-1 transition-colors hover:bg-claude-bg text-red-400 hover:text-red-300 animate-pulse"
+              style={{ borderRadius: 0 }}
+              title="Stop (ESC ESC)"
+            >
+              <Square size={14} fill="currentColor" />
+            </button>
+          )}
           <MicrophoneButton
             sessionId={sessionId}
             onInterimTranscript={(text) => {
@@ -664,8 +778,16 @@ export default function InputArea({ sessionId, disabled, systemInfo, isStreaming
           </>
         )}
 
-        {/* Task progress */}
-        {todoStats && (
+        {/* Subagent status or Task progress */}
+        {activeSubagent ? (
+          <div className="flex items-center gap-1.5 text-purple-400">
+            <div className="w-3 h-3 border-2 border-purple-400 border-t-transparent rounded-full animate-spin" />
+            <span>
+              {activeSubagent.type ? `[${activeSubagent.type}]` : 'AGENT'}
+              {activeSubagent.description && ` ${activeSubagent.description.slice(0, 40)}${activeSubagent.description.length > 40 ? '...' : ''}`}
+            </span>
+          </div>
+        ) : todoStats ? (
           <button
             onClick={() => setShowTodoList(!showTodoList)}
             className="flex items-center gap-1.5 hover:text-claude-text transition-colors"
@@ -676,7 +798,7 @@ export default function InputArea({ sessionId, disabled, systemInfo, isStreaming
               {activeTask ? (activeTask.activeForm || activeTask.content) : `${todoStats.completed}/${todoStats.total}`}
             </span>
           </button>
-        )}
+        ) : null}
       </div>
 
       {/* Expandable task list */}
@@ -710,6 +832,7 @@ export default function InputArea({ sessionId, disabled, systemInfo, isStreaming
           </div>
         </div>
       )}
-    </div>
+      </div>
+    </>
   );
 }

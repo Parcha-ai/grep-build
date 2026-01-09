@@ -7,8 +7,10 @@ import {
   Target,
   Code,
   X,
+  Trash2,
 } from 'lucide-react';
 import { useUIStore } from '../../stores/ui.store';
+import { useSessionStore } from '../../stores/session.store';
 import type { Session, DOMElementContext } from '../../../shared/types';
 
 interface BrowserPreviewProps {
@@ -17,8 +19,12 @@ interface BrowserPreviewProps {
 
 export default function BrowserPreview({ session }: BrowserPreviewProps) {
   const webviewRef = useRef<Electron.WebviewTag>(null);
-  const [url, setUrl] = useState(`http://localhost:${session.ports.web}`);
-  const [inputUrl, setInputUrl] = useState(url);
+  const { updateSession } = useSessionStore();
+
+  // Use last browser URL if available, otherwise default to session's web port
+  const initialUrl = session.lastBrowserUrl || `http://localhost:${session.ports.web}`;
+  const [url, setUrl] = useState(initialUrl);
+  const [inputUrl, setInputUrl] = useState(initialUrl);
   const [isLoading, setIsLoading] = useState(false);
   const [canGoBack, setCanGoBack] = useState(false);
   const [canGoForward, setCanGoForward] = useState(false);
@@ -28,29 +34,61 @@ export default function BrowserPreview({ session }: BrowserPreviewProps) {
   // Handle webview events
   useEffect(() => {
     const webview = webviewRef.current;
-    if (!webview) return;
+    if (!webview) {
+      console.error('[BrowserPreview] No webview ref');
+      return;
+    }
 
-    const handleDidStartLoading = () => setIsLoading(true);
+    console.log('[BrowserPreview] Setting up webview, initial URL:', url);
+
+    const handleDidStartLoading = () => {
+      console.log('[BrowserPreview] Started loading');
+      setIsLoading(true);
+    };
     const handleDidStopLoading = () => {
+      console.log('[BrowserPreview] Stopped loading');
       setIsLoading(false);
       setCanGoBack(webview.canGoBack());
       setCanGoForward(webview.canGoForward());
     };
     const handleDidNavigate = (e: Electron.DidNavigateEvent) => {
+      console.log('[BrowserPreview] Navigated to:', e.url);
       setUrl(e.url);
       setInputUrl(e.url);
+      // Save the URL to session so it persists across reloads
+      updateSession(session.id, { lastBrowserUrl: e.url });
+
+      // Debug: Check localStorage after navigation
+      if (webview && e.url.includes('localhost:5173')) {
+        setTimeout(() => {
+          webview.executeJavaScript('JSON.stringify(localStorage)').then((storage) => {
+            console.log('[BrowserPreview] LocalStorage contents:', storage);
+          }).catch(err => {
+            console.error('[BrowserPreview] Failed to read localStorage:', err);
+          });
+        }, 1000);
+      }
+    };
+    const handleDidFailLoad = (e: any) => {
+      console.error('[BrowserPreview] Navigation failed:', e);
+      // Don't stop loading spinner on transient errors - OAuth redirects can trigger these
+      if (e.errorCode !== -3) { // -3 is ERR_ABORTED, often happens during redirects
+        setIsLoading(false);
+      }
     };
 
     webview.addEventListener('did-start-loading', handleDidStartLoading);
     webview.addEventListener('did-stop-loading', handleDidStopLoading);
     webview.addEventListener('did-navigate', handleDidNavigate as any);
     webview.addEventListener('did-navigate-in-page', handleDidNavigate as any);
+    webview.addEventListener('did-fail-load', handleDidFailLoad as any);
 
     return () => {
       webview.removeEventListener('did-start-loading', handleDidStartLoading);
       webview.removeEventListener('did-stop-loading', handleDidStopLoading);
       webview.removeEventListener('did-navigate', handleDidNavigate as any);
       webview.removeEventListener('did-navigate-in-page', handleDidNavigate as any);
+      webview.removeEventListener('did-fail-load', handleDidFailLoad as any);
     };
   }, []);
 
@@ -60,6 +98,64 @@ export default function BrowserPreview({ session }: BrowserPreviewProps) {
       injectInspector();
     }
   }, [isInspectorActive]);
+
+  // Handle snapshot capture requests from main process
+  useEffect(() => {
+    const unsubscribe = window.electronAPI.browser.onCaptureRequest(async (data: { sessionId: string; requestId?: string }) => {
+      const { sessionId: reqSessionId, requestId } = data;
+      if (reqSessionId !== session.id) return;
+
+      const webview = webviewRef.current;
+      if (!webview) {
+        console.error('[BrowserPreview] No webview available for snapshot');
+        return;
+      }
+
+      try {
+        // Capture screenshot
+        const screenshot = await webview.capturePage();
+        const screenshotDataUrl = screenshot.toDataURL();
+
+        // Get HTML content with timeout protection
+        const html = await Promise.race([
+          webview.executeJavaScript('document.documentElement.outerHTML'),
+          new Promise<string>((_, reject) =>
+            setTimeout(() => reject(new Error('JavaScript execution timeout (5s)')), 5000)
+          )
+        ]);
+
+        // Get current URL safely
+        const url = webview.getURL() || 'about:blank';
+
+        // Send snapshot data back to main process
+        window.electronAPI.browser.sendSnapshotData({
+          url,
+          screenshot: screenshotDataUrl,
+          html,
+          timestamp: new Date(),
+          requestId, // Include requestId for proper matching
+        });
+
+        console.log('[BrowserPreview] Snapshot captured successfully');
+      } catch (error) {
+        console.error('[BrowserPreview] Error capturing snapshot:', error);
+        // Send error snapshot so main process doesn't timeout
+        window.electronAPI.browser.sendSnapshotData({
+          url: webview.getURL() || 'about:blank',
+          screenshot: '',
+          html: `<error>${error instanceof Error ? error.message : String(error)}</error>`,
+          timestamp: new Date(),
+          requestId,
+        });
+      }
+    });
+
+    return () => {
+      if (unsubscribe) {
+        unsubscribe();
+      }
+    };
+  }, [session.id]);
 
   const injectInspector = async () => {
     const webview = webviewRef.current;
@@ -226,6 +322,37 @@ export default function BrowserPreview({ session }: BrowserPreviewProps) {
     navigate(inputUrl);
   };
 
+  const clearStorage = async () => {
+    const webview = webviewRef.current;
+    if (!webview) return;
+
+    try {
+      // First, clear storage at the Electron session level (cookies, etc.)
+      await window.electronAPI.browser.clearStorage();
+
+      // Then clear storage in the page context (localStorage, sessionStorage, IndexedDB)
+      await webview.executeJavaScript(`
+        localStorage.clear();
+        sessionStorage.clear();
+        // Clear all IndexedDB databases
+        if (window.indexedDB && window.indexedDB.databases) {
+          window.indexedDB.databases().then(dbs => {
+            dbs.forEach(db => {
+              if (db.name) window.indexedDB.deleteDatabase(db.name);
+            });
+          });
+        }
+      `);
+
+      console.log('[BrowserPreview] All storage cleared successfully');
+
+      // Reload the page to start fresh
+      webview.reload();
+    } catch (error) {
+      console.error('[BrowserPreview] Failed to clear storage:', error);
+    }
+  };
+
   if (session.status !== 'running') {
     return (
       <div className="h-full flex items-center justify-center bg-claude-bg text-claude-text-secondary">
@@ -258,6 +385,13 @@ export default function BrowserPreview({ session }: BrowserPreviewProps) {
           className="p-1.5 rounded hover:bg-claude-bg transition-colors"
         >
           <RotateCw size={16} className={isLoading ? 'animate-spin' : ''} />
+        </button>
+        <button
+          onClick={clearStorage}
+          className="p-1.5 rounded hover:bg-claude-bg transition-colors text-red-400 hover:text-red-300"
+          title="Clear all storage (cookies, localStorage, sessionStorage, IndexedDB)"
+        >
+          <Trash2 size={16} />
         </button>
 
         {/* URL bar */}
@@ -318,9 +452,7 @@ export default function BrowserPreview({ session }: BrowserPreviewProps) {
           ref={webviewRef}
           src={url}
           className="absolute inset-0 w-full h-full"
-          partition={`persist:session-${session.id}`}
-          allowpopups={true}
-          webpreferences="contextIsolation=yes,nodeIntegration=no,sandbox=no,enableRemoteModule=no"
+          partition="persist:browser"
         />
       </div>
     </div>

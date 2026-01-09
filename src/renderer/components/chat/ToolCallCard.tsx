@@ -1,6 +1,6 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { Terminal, FileText, Search, FolderOpen, Play, Edit2, Globe, Code, HelpCircle, ListTodo, Loader2, ChevronRight, ChevronDown, CheckCircle2, Circle, Clock, ExternalLink, Copy } from 'lucide-react';
-import Editor from '@monaco-editor/react';
+import Editor, { DiffEditor } from '@monaco-editor/react';
 import type { ToolCall } from '../../../shared/types';
 import { useEditorStore } from '../../stores/editor.store';
 
@@ -18,7 +18,14 @@ interface TodoItem {
 }
 
 // Map tool names to icons and labels
-const TOOL_CONFIG: Record<string, { icon: React.ElementType; label: string; color: string }> = {
+const TOOL_CONFIG: Record<string, {
+  icon: React.ElementType;
+  label: string;
+  color: string;
+  bgGradient?: string;  // Optional background gradient for special tools
+  borderColor?: string; // Optional border color
+  iconSize?: number;    // Optional icon size override
+}> = {
   Bash: { icon: Terminal, label: 'Bash', color: 'text-green-400' },
   Read: { icon: FileText, label: 'Read', color: 'text-blue-400' },
   Grep: { icon: Search, label: 'Grep', color: 'text-purple-400' },
@@ -27,12 +34,41 @@ const TOOL_CONFIG: Record<string, { icon: React.ElementType; label: string; colo
   Edit: { icon: Edit2, label: 'Edit', color: 'text-orange-400' },
   WebFetch: { icon: Globe, label: 'WebFetch', color: 'text-cyan-400' },
   WebSearch: { icon: Search, label: 'WebSearch', color: 'text-teal-400' },
-  Task: { icon: Code, label: 'Task', color: 'text-indigo-400' },
+  Task: {
+    icon: Code,
+    label: 'Agent Task',
+    color: 'text-purple-400',
+    bgGradient: 'from-purple-900/20 to-indigo-900/20',
+    borderColor: 'border-purple-500/50',
+    iconSize: 18
+  },
   TodoWrite: { icon: ListTodo, label: 'Todo', color: 'text-amber-400' },
   AskUserQuestion: { icon: HelpCircle, label: 'Ask', color: 'text-rose-400' },
 };
 
 const DEFAULT_CONFIG = { icon: Play, label: 'Tool', color: 'text-gray-400' };
+
+// Extract subagent type from Task tool input
+function getSubagentType(input: Record<string, unknown>): string | null {
+  const description = (input.description as string) || '';
+  const prompt = (input.prompt as string) || '';
+  const combined = `${description} ${prompt}`.toLowerCase();
+
+  // Pattern match common subagent types from descriptions
+  if (combined.includes('explore') || combined.includes('search')) return 'EXPLORE';
+  if (combined.includes('plan')) return 'PLAN';
+  if (combined.includes('implement') || combined.includes('code') || combined.includes('bond')) return 'IMPLEMENT';
+  if (combined.includes('document') || combined.includes('moneypenny')) return 'DOCUMENT';
+  if (combined.includes('test') || combined.includes('verify') || combined.includes('scaramanga')) return 'TEST';
+  if (combined.includes('q') || combined.includes('briefing')) return 'BRIEF';
+
+  // Check for explicit subagent_type field
+  if (input.subagent_type) {
+    return (input.subagent_type as string).toUpperCase();
+  }
+
+  return 'TASK'; // Fallback generic label
+}
 
 // Format the tool input as a readable string for the summary
 function formatToolInput(name: string, input: Record<string, unknown>): string {
@@ -53,8 +89,11 @@ function formatToolInput(name: string, input: Record<string, unknown>): string {
       return (input.url as string) || '';
     case 'WebSearch':
       return (input.query as string) || '';
-    case 'Task':
-      return (input.description as string) || (input.prompt as string)?.slice(0, 80) || '';
+    case 'Task': {
+      const type = getSubagentType(input);
+      const description = (input.description as string) || (input.prompt as string)?.slice(0, 80) || '';
+      return type ? `[${type}] ${description}` : description;
+    }
     case 'TodoWrite': {
       const todos = input.todos as TodoItem[] | undefined;
       if (!todos?.length) return 'Updating tasks...';
@@ -149,6 +188,21 @@ function WriteView({ content, filePath }: { content: string; filePath: string })
 // Render a diff view for Edit tool using Monaco diff editor
 function DiffView({ oldString, newString, filePath }: { oldString: string; newString: string; filePath: string }) {
   const language = getLanguageFromPath(filePath);
+  const editorRef = useRef<any>(null);
+
+  useEffect(() => {
+    return () => {
+      // Cleanup: properly dispose the diff editor on unmount
+      if (editorRef.current) {
+        try {
+          editorRef.current.dispose();
+        } catch (e) {
+          // Ignore disposal errors
+        }
+        editorRef.current = null;
+      }
+    };
+  }, []);
 
   return (
     <div className="space-y-2 text-xs">
@@ -157,15 +211,16 @@ function DiffView({ oldString, newString, filePath }: { oldString: string; newSt
         <ClickableFilePath filePath={filePath} />
       </div>
 
-      {/* Monaco Diff Editor */}
+      {/* Monaco Diff Editor - side by side */}
       <div className="border border-claude-border overflow-hidden" style={{ borderRadius: 0 }}>
         <div className="px-2 py-1 bg-claude-surface text-claude-text-secondary text-xs font-bold uppercase border-b border-claude-border" style={{ letterSpacing: '0.05em' }}>
           DIFF
         </div>
-        <Editor
+        <DiffEditor
           height="400px"
           language={language}
-          value={newString}
+          original={oldString}
+          modified={newString}
           theme="vs-dark"
           loading={<div className="p-4 text-claude-text-secondary">Loading...</div>}
           options={{
@@ -177,6 +232,13 @@ function DiffView({ oldString, newString, filePath }: { oldString: string; newSt
             contextmenu: false,
             renderLineHighlight: 'all',
             automaticLayout: true,
+            renderSideBySide: true,
+            enableSplitViewResizing: false,
+            renderOverviewRuler: false,
+          }}
+          onMount={(editor, monaco) => {
+            editorRef.current = editor;
+            monaco.editor.setTheme('vs-dark');
           }}
         />
       </div>
@@ -237,6 +299,34 @@ function ExpandedContent({ toolCall }: { toolCall: ToolCall }) {
     );
   }
 
+  // Special rendering for Bash tool - show command line
+  if (name === 'Bash') {
+    const command = (input.command as string) || '';
+
+    return (
+      <div className="space-y-2 text-xs">
+        {command && (
+          <div>
+            <div className="text-claude-text-secondary mb-1 font-semibold">Command:</div>
+            <pre className="whitespace-pre-wrap text-green-400 bg-black/50 p-2 overflow-x-auto font-mono border-l-2 border-green-500/30">
+              $ {command}
+            </pre>
+          </div>
+        )}
+
+        {/* Result section */}
+        {result !== undefined && (
+          <div>
+            <div className="text-claude-text-secondary mb-1 font-semibold">Output:</div>
+            <pre className="whitespace-pre-wrap text-claude-text bg-claude-bg/50 p-2 overflow-x-auto max-h-60 overflow-y-auto font-mono text-sm">
+              {typeof result === 'object' ? JSON.stringify(result, null, 2) : String(result)}
+            </pre>
+          </div>
+        )}
+      </div>
+    );
+  }
+
   // Special rendering for Write tool - show file content being written
   if (name === 'Write') {
     const content = (input.content as string) || '';
@@ -289,16 +379,23 @@ function ExpandedContent({ toolCall }: { toolCall: ToolCall }) {
     );
   }
 
+  // Check if input has meaningful content
+  const hasInput = typeof input === 'object'
+    ? Object.keys(input).length > 0
+    : input !== null && input !== undefined && String(input).trim() !== '';
+
   // For other tools, show input and result
   return (
     <div className="space-y-2 text-xs">
-      {/* Input section */}
-      <div>
-        <div className="text-claude-text-secondary mb-1 font-semibold">Input:</div>
-        <pre className="whitespace-pre-wrap text-claude-text bg-claude-bg/50 p-2 overflow-x-auto max-h-40 overflow-y-auto">
-          {typeof input === 'object' ? JSON.stringify(input, null, 2) : String(input)}
-        </pre>
-      </div>
+      {/* Input section - only show if there's meaningful input */}
+      {hasInput && (
+        <div>
+          <div className="text-claude-text-secondary mb-1 font-semibold">Input:</div>
+          <pre className="whitespace-pre-wrap text-claude-text bg-claude-bg/50 p-2 overflow-x-auto max-h-40 overflow-y-auto">
+            {typeof input === 'object' ? JSON.stringify(input, null, 2) : String(input)}
+          </pre>
+        </div>
+      )}
 
       {/* Result section (if available) */}
       {result !== undefined && (
@@ -330,15 +427,35 @@ export default function ToolCallCard({ toolCall, isLatest = false, isLatestToolC
 
   const isRunning = toolCall.status === 'running' || toolCall.status === 'pending';
 
+  // Detect if this is a Task tool (subagent)
+  const isTaskTool = toolCall.name === 'Task';
+  const subagentType = isTaskTool ? getSubagentType(toolCall.input) : null;
+
   // Status dot color
   const dotColor = isRunning ? 'bg-yellow-500' : 'bg-green-500';
 
+  // Apply enhanced styling for Task tools
+  const cardClasses = isTaskTool
+    ? `font-mono text-sm bg-gradient-to-r ${config.bgGradient} border-l-4 ${config.borderColor} px-2 py-1 rounded`
+    : 'font-mono text-sm';
+
+  const buttonClasses = `w-full flex items-center gap-2 py-0.5 hover:bg-claude-surface/50 transition-colors text-left ${
+    isTaskTool && isRunning ? 'animate-pulse-slow' : ''
+  }`;
+
   return (
-    <div className="font-mono text-sm">
+    <div className={cardClasses}>
+      {/* Subagent type badge (Task tools only) */}
+      {isTaskTool && subagentType && (
+        <div className="mb-1 inline-block px-2 py-0.5 text-[10px] bg-purple-500/20 border border-purple-500/50 text-purple-300 font-bold tracking-wider rounded">
+          {subagentType}
+        </div>
+      )}
+
       {/* Header row - clickable */}
       <button
         onClick={() => setIsExpanded(!isExpanded)}
-        className="w-full flex items-center gap-2 py-0.5 hover:bg-claude-surface/50 transition-colors text-left"
+        className={buttonClasses}
       >
         {/* Expand/collapse chevron */}
         {isExpanded ? (
@@ -352,8 +469,8 @@ export default function ToolCallCard({ toolCall, isLatest = false, isLatestToolC
           className={`w-2 h-2 rounded-full flex-shrink-0 ${dotColor} ${isRunning ? 'animate-pulse' : ''}`}
         />
 
-        {/* Tool icon and name */}
-        <Icon size={14} className={config.color} />
+        {/* Tool icon and name (larger icon for Task tools) */}
+        <Icon size={config.iconSize || 14} className={config.color} />
         <span className={`font-semibold ${config.color}`}>{config.label}</span>
 
         {/* Input/command summary (only when collapsed) */}
