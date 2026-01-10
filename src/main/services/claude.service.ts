@@ -135,7 +135,7 @@ export class ClaudeService {
             };
           }
 
-          // Return snapshot info with image
+          // Return snapshot info with image (MCP format)
           return {
             content: [
               {
@@ -144,11 +144,8 @@ export class ClaudeService {
               },
               {
                 type: 'image',
-                source: {
-                  type: 'base64',
-                  media_type: 'image/png',
-                  data: screenshotData,
-                },
+                data: screenshotData,
+                mimeType: 'image/png',
               },
             ],
           };
