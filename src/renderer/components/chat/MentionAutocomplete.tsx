@@ -135,7 +135,7 @@ export default function MentionAutocomplete({
       <div className="flex items-center justify-between px-2.5 py-1.5 bg-claude-bg/50 border-b border-claude-border">
         <div className="flex items-center gap-1.5 text-[10px] text-claude-text-secondary">
           <Search size={10} />
-          <span style={{ letterSpacing: '0.05em' }}>SEARCH FILES</span>
+          <span style={{ letterSpacing: '0.05em' }}>SEARCH FILES & FOLDERS</span>
         </div>
         <button
           onClick={onClose}
@@ -157,7 +157,7 @@ export default function MentionAutocomplete({
           </div>
         ) : files.length === 0 ? (
           <div className="p-4 text-center text-[10px] text-claude-text-secondary" style={{ letterSpacing: '0.05em' }}>
-            {query ? 'NO FILES FOUND' : 'TYPE TO SEARCH...'}
+            {query ? 'NO MATCHES FOUND' : 'TYPE TO SEARCH...'}
           </div>
         ) : (
           files.map((file, index) => (

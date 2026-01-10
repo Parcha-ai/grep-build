@@ -96,6 +96,7 @@ export default function ChatContainer({ session }: ChatContainerProps) {
           streamEvents={sessionStreamEvents}
           streamContent={streamContent}
           streamingToolCalls={streamingToolCalls}
+          currentToolCalls={streamingToolCalls}
         />
 
         {/* Permission request - inline at end of chat */}

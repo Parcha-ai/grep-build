@@ -101,10 +101,12 @@ const electronAPI = {
 
   // Claude
   claude: {
-    sendMessage: (sessionId: string, message: string, attachments?: unknown[], permissionMode?: string, thinkingMode?: string): Promise<void> =>
-      ipcRenderer.invoke(IPC_CHANNELS.CLAUDE_SEND_MESSAGE, sessionId, message, attachments, permissionMode, thinkingMode),
+    sendMessage: (sessionId: string, message: string, attachments?: unknown[], permissionMode?: string, thinkingMode?: string, model?: string): Promise<void> =>
+      ipcRenderer.invoke(IPC_CHANNELS.CLAUDE_SEND_MESSAGE, sessionId, message, attachments, permissionMode, thinkingMode, model),
     getMessages: (sessionId: string): Promise<ChatMessage[]> =>
       ipcRenderer.invoke(IPC_CHANNELS.CLAUDE_GET_MESSAGES, sessionId),
+    getModels: (): Promise<Array<{ id: string; name: string; description: string }>> =>
+      ipcRenderer.invoke(IPC_CHANNELS.CLAUDE_GET_MODELS),
     cancel: (sessionId: string): void =>
       ipcRenderer.send(IPC_CHANNELS.CLAUDE_CANCEL, sessionId),
     onStreamChunk: (callback: (chunk: { sessionId: string; content: string }) => void) => {
@@ -182,11 +184,35 @@ const electronAPI = {
       ipcRenderer.on('browser:capture-snapshot', handler);
       return () => ipcRenderer.removeListener('browser:capture-snapshot', handler);
     },
+    onNavigate: (callback: (data: { sessionId: string; url: string }) => void) => {
+      const handler = (_: IpcRendererEvent, data: { sessionId: string; url: string }) => callback(data);
+      ipcRenderer.on('browser:navigate', handler);
+      return () => ipcRenderer.removeListener('browser:navigate', handler);
+    },
+    onAction: (callback: (data: { sessionId: string; requestId: string; action: string; params: Record<string, unknown> }) => void) => {
+      const handler = (_: IpcRendererEvent, data: { sessionId: string; requestId: string; action: string; params: Record<string, unknown> }) => callback(data);
+      ipcRenderer.on('browser:action', handler);
+      return () => ipcRenderer.removeListener('browser:action', handler);
+    },
     sendSnapshotData: (snapshot: any) => {
       ipcRenderer.send('browser:snapshot-captured', snapshot);
     },
+    sendActionResult: (result: { requestId: string; success: boolean; data?: any; error?: string }) => {
+      ipcRenderer.send('browser:action-result', result);
+    },
     clearStorage: (): Promise<{ success: boolean }> =>
       ipcRenderer.invoke(IPC_CHANNELS.BROWSER_CLEAR_STORAGE),
+    registerWebview: (sessionId: string, webContentsId: number) => {
+      ipcRenderer.send('browser:register-webview', { sessionId, webContentsId });
+    },
+    unregisterWebview: (sessionId: string) => {
+      ipcRenderer.send('browser:unregister-webview', { sessionId });
+    },
+    onAutomationEvent: (callback: (data: { sessionId: string; type: string; action: string; data?: Record<string, unknown> }) => void) => {
+      const handler = (_: IpcRendererEvent, data: { sessionId: string; type: string; action: string; data?: Record<string, unknown> }) => callback(data);
+      ipcRenderer.on('browser:automation-event', handler);
+      return () => ipcRenderer.removeListener('browser:automation-event', handler);
+    },
   },
 
   // Settings

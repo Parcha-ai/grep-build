@@ -2,7 +2,7 @@ import { IpcMain } from 'electron';
 import { IPC_CHANNELS } from '../../shared/constants/channels';
 import { ClaudeService } from '../services/claude.service';
 import { getMainWindow } from '../index';
-import type { QuestionResponse } from '../../shared/types';
+import type { QuestionResponse, Attachment } from '../../shared/types';
 
 const claudeService = new ClaudeService();
 
@@ -69,11 +69,23 @@ export function registerClaudeHandlers(ipcMain: IpcMain): void {
     claudeService.setMainWindow(mainWindow);
   }
 
+  // Handler to get available models
+  ipcMain.handle(IPC_CHANNELS.CLAUDE_GET_MODELS, async () => {
+    return claudeService.getAvailableModels();
+  });
+
   ipcMain.handle(
     IPC_CHANNELS.CLAUDE_SEND_MESSAGE,
-    async (_, sessionId: string, message: string, attachments?: unknown[], permissionMode?: string, thinkingMode?: string) => {
+    async (_, sessionId: string, message: string, attachments?: Attachment[], permissionMode?: string, thinkingMode?: string, model?: string) => {
       const mainWindow = getMainWindow();
       if (!mainWindow) return;
+
+      console.log('[Claude IPC] sendMessage received with attachments:', attachments?.length || 0, 'model:', model);
+      if (attachments) {
+        attachments.forEach((a, i) => {
+          console.log(`[Claude IPC] Attachment ${i}: type=${a?.type}, name=${a?.name}, content length=${a?.content?.length || 0}`);
+        });
+      }
 
       // Create batcher for this session
       const batcher = new ChunkBatcher(
@@ -84,7 +96,7 @@ export function registerClaudeHandlers(ipcMain: IpcMain): void {
 
       try {
         // Stream the response
-        for await (const event of claudeService.streamMessage(sessionId, message, attachments, permissionMode, thinkingMode)) {
+        for await (const event of claudeService.streamMessage(sessionId, message, attachments, permissionMode, thinkingMode, model)) {
           switch (event.type) {
             case 'text_delta':
               batcher.addText(event.content || '');

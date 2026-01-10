@@ -1,11 +1,12 @@
 import { query, tool, createSdkMcpServer } from '@anthropic-ai/claude-agent-sdk';
-import type { SDKMessage } from '@anthropic-ai/claude-agent-sdk';
+import type { SDKMessage, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
+import type { ImageBlockParam, TextBlockParam } from '@anthropic-ai/sdk/resources';
 import { z } from 'zod';
 import Store from 'electron-store';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
-import type { ChatMessage, ToolCall, Session, QuestionRequest, QuestionResponse } from '../../shared/types';
+import type { ChatMessage, ToolCall, Session, QuestionRequest, QuestionResponse, Attachment } from '../../shared/types';
 import { BrowserWindow } from 'electron';
 import { IPC_CHANNELS } from '../../shared/constants/channels';
 import { browserService } from './browser.service';
@@ -55,6 +56,32 @@ export class ClaudeService {
 
   getApiKey(): string | undefined {
     return this.store.get('anthropicApiKey') as string | undefined;
+  }
+
+  // Get available Claude models
+  getAvailableModels(): Array<{ id: string; name: string; description: string }> {
+    return [
+      {
+        id: 'claude-opus-4-5-20250514',
+        name: 'Opus 4.5',
+        description: 'Most capable model - best for complex tasks'
+      },
+      {
+        id: 'claude-sonnet-4-5-20250929',
+        name: 'Sonnet 4.5',
+        description: 'Balanced performance and speed'
+      },
+      {
+        id: 'claude-sonnet-4-20250514',
+        name: 'Sonnet 4',
+        description: 'Fast and capable'
+      },
+      {
+        id: 'claude-3-5-haiku-20241022',
+        name: 'Haiku 3.5',
+        description: 'Fastest model - best for simple tasks'
+      },
+    ];
   }
 
   // Get or create MCP server with browser snapshot tool for session
@@ -138,10 +165,430 @@ export class ClaudeService {
       }
     );
 
+    // BrowserNavigate tool - simpler navigation without snapshot
+    const browserNavigateTool = tool(
+      'BrowserNavigate',
+      'Navigate the browser preview to a URL without capturing a snapshot. Use this when you just want to go to a page.',
+      {
+        url: z.string().describe('The URL to navigate to'),
+      },
+      async (args) => {
+        try {
+          const { url } = args;
+          console.log('[Claude Service] Navigating browser to:', url);
+          await browserService.navigate(sessionId, url);
+          return {
+            content: [{
+              type: 'text',
+              text: `Navigated to ${url}`,
+            }],
+          };
+        } catch (error) {
+          return {
+            content: [{
+              type: 'text',
+              text: `Failed to navigate: ${error instanceof Error ? error.message : String(error)}`,
+            }],
+            isError: true,
+          };
+        }
+      }
+    );
+
+    // BrowserClick tool - click on elements
+    const browserClickTool = tool(
+      'BrowserClick',
+      'Click on an element in the browser preview using a CSS selector. Use this to interact with buttons, links, or other clickable elements.',
+      {
+        selector: z.string().describe('CSS selector for the element to click (e.g., "button.submit", "#login-btn", "a[href=\'/about\']")'),
+      },
+      async (args) => {
+        try {
+          const { selector } = args;
+          console.log('[Claude Service] Clicking element:', selector);
+          const result = await browserService.click(sessionId, selector);
+          if (result.success) {
+            return {
+              content: [{
+                type: 'text',
+                text: `Clicked element: ${selector}`,
+              }],
+            };
+          } else {
+            return {
+              content: [{
+                type: 'text',
+                text: `Failed to click: ${result.error}`,
+              }],
+              isError: true,
+            };
+          }
+        } catch (error) {
+          return {
+            content: [{
+              type: 'text',
+              text: `Failed to click: ${error instanceof Error ? error.message : String(error)}`,
+            }],
+            isError: true,
+          };
+        }
+      }
+    );
+
+    // BrowserType tool - type text into inputs
+    const browserTypeTool = tool(
+      'BrowserType',
+      'Type text into an input field or textarea in the browser preview using a CSS selector.',
+      {
+        selector: z.string().describe('CSS selector for the input element (e.g., "input[name=\'email\']", "#search-box", "textarea.comment")'),
+        text: z.string().describe('The text to type into the element'),
+      },
+      async (args) => {
+        try {
+          const { selector, text } = args;
+          console.log('[Claude Service] Typing into element:', selector);
+          const result = await browserService.type(sessionId, selector, text);
+          if (result.success) {
+            return {
+              content: [{
+                type: 'text',
+                text: `Typed "${text.slice(0, 50)}${text.length > 50 ? '...' : ''}" into ${selector}`,
+              }],
+            };
+          } else {
+            return {
+              content: [{
+                type: 'text',
+                text: `Failed to type: ${result.error}`,
+              }],
+              isError: true,
+            };
+          }
+        } catch (error) {
+          return {
+            content: [{
+              type: 'text',
+              text: `Failed to type: ${error instanceof Error ? error.message : String(error)}`,
+            }],
+            isError: true,
+          };
+        }
+      }
+    );
+
+    // BrowserExtract tool - extract text from page
+    const browserExtractTool = tool(
+      'BrowserExtract',
+      'Extract text content from the browser preview. Can extract from the whole page or a specific element using a CSS selector.',
+      {
+        selector: z.string().optional().describe('Optional CSS selector to extract from specific element. If not provided, extracts all page text.'),
+      },
+      async (args) => {
+        try {
+          const { selector } = args;
+          console.log('[Claude Service] Extracting text:', selector || 'full page');
+          const result = await browserService.extractText(sessionId, selector);
+          if (result.success && result.text !== undefined) {
+            const truncated = result.text.length > 5000;
+            return {
+              content: [{
+                type: 'text',
+                text: `Extracted text${selector ? ` from ${selector}` : ''}:\n\n${result.text.slice(0, 5000)}${truncated ? '\n\n...(truncated)' : ''}`,
+              }],
+            };
+          } else {
+            return {
+              content: [{
+                type: 'text',
+                text: `Failed to extract: ${result.error}`,
+              }],
+              isError: true,
+            };
+          }
+        } catch (error) {
+          return {
+            content: [{
+              type: 'text',
+              text: `Failed to extract: ${error instanceof Error ? error.message : String(error)}`,
+            }],
+            isError: true,
+          };
+        }
+      }
+    );
+
+    // BrowserGetInfo tool - get current page info
+    const browserGetInfoTool = tool(
+      'BrowserGetInfo',
+      'Get information about the current page in the browser preview (URL, title).',
+      {},
+      async () => {
+        try {
+          console.log('[Claude Service] Getting page info');
+          const result = await browserService.getPageInfo(sessionId);
+          if (result.success) {
+            return {
+              content: [{
+                type: 'text',
+                text: `Current page:\nURL: ${result.url}\nTitle: ${result.title}`,
+              }],
+            };
+          } else {
+            return {
+              content: [{
+                type: 'text',
+                text: `Failed to get page info: ${result.error}`,
+              }],
+              isError: true,
+            };
+          }
+        } catch (error) {
+          return {
+            content: [{
+              type: 'text',
+              text: `Failed to get page info: ${error instanceof Error ? error.message : String(error)}`,
+            }],
+            isError: true,
+          };
+        }
+      }
+    );
+
+    // BrowserEnableDebugging tool - enable console and network capture
+    const browserEnableDebuggingTool = tool(
+      'BrowserEnableDebugging',
+      'Enable browser debugging to capture console logs and network requests. Call this before trying to read console logs or network requests.',
+      {},
+      async () => {
+        try {
+          console.log('[Claude Service] Enabling browser debugging');
+          const result = await browserService.enableDebugging(sessionId);
+          if (result.success) {
+            return {
+              content: [{
+                type: 'text',
+                text: 'Browser debugging enabled. Console logs and network requests are now being captured.',
+              }],
+            };
+          } else {
+            return {
+              content: [{
+                type: 'text',
+                text: `Failed to enable debugging: ${result.error}`,
+              }],
+              isError: true,
+            };
+          }
+        } catch (error) {
+          return {
+            content: [{
+              type: 'text',
+              text: `Failed to enable debugging: ${error instanceof Error ? error.message : String(error)}`,
+            }],
+            isError: true,
+          };
+        }
+      }
+    );
+
+    // BrowserGetConsoleLogs tool - get captured console logs
+    const browserGetConsoleLogsTool = tool(
+      'BrowserGetConsoleLogs',
+      'Get captured console logs from the browser. Must call BrowserEnableDebugging first. Can filter by type (log, warning, error, info, debug) and limit the number of results.',
+      {
+        type: z.enum(['log', 'warning', 'error', 'info', 'debug']).optional().describe('Filter by log type'),
+        limit: z.number().optional().describe('Maximum number of logs to return (default: all)'),
+      },
+      async (args) => {
+        try {
+          const { type, limit } = args;
+          console.log('[Claude Service] Getting console logs:', { type, limit });
+          const logs = browserService.getConsoleLogs(sessionId, { type, limit });
+
+          if (logs.length === 0) {
+            return {
+              content: [{
+                type: 'text',
+                text: 'No console logs captured. Make sure to call BrowserEnableDebugging first and that the page has logged something.',
+              }],
+            };
+          }
+
+          const formatted = logs.map(log => {
+            let line = `[${log.type.toUpperCase()}] ${log.text}`;
+            if (log.url) {
+              line += `\n  at ${log.url}${log.lineNumber !== undefined ? `:${log.lineNumber}` : ''}`;
+            }
+            return line;
+          }).join('\n\n');
+
+          return {
+            content: [{
+              type: 'text',
+              text: `Console logs (${logs.length}):\n\n${formatted}`,
+            }],
+          };
+        } catch (error) {
+          return {
+            content: [{
+              type: 'text',
+              text: `Failed to get console logs: ${error instanceof Error ? error.message : String(error)}`,
+            }],
+            isError: true,
+          };
+        }
+      }
+    );
+
+    // BrowserGetNetworkRequests tool - get captured network requests
+    const browserGetNetworkRequestsTool = tool(
+      'BrowserGetNetworkRequests',
+      'Get captured network requests from the browser. Must call BrowserEnableDebugging first. Can filter by URL pattern, HTTP method, and status code.',
+      {
+        urlPattern: z.string().optional().describe('Regex pattern to filter URLs (e.g., "api", "\.json$")'),
+        method: z.string().optional().describe('Filter by HTTP method (GET, POST, etc.)'),
+        status: z.number().optional().describe('Filter by status code (e.g., 200, 404, 500)'),
+        limit: z.number().optional().describe('Maximum number of requests to return (default: all)'),
+      },
+      async (args) => {
+        try {
+          const { urlPattern, method, status, limit } = args;
+          console.log('[Claude Service] Getting network requests:', { urlPattern, method, status, limit });
+          const requests = browserService.getNetworkRequests(sessionId, { urlPattern, method, status, limit });
+
+          if (requests.length === 0) {
+            return {
+              content: [{
+                type: 'text',
+                text: 'No network requests captured. Make sure to call BrowserEnableDebugging first and that the page has made network requests.',
+              }],
+            };
+          }
+
+          const formatted = requests.map(req => {
+            let line = `${req.method} ${req.url}`;
+            if (req.status !== undefined) {
+              line += ` → ${req.status} ${req.statusText || ''}`;
+            }
+            if (req.timing?.duration !== undefined) {
+              line += ` (${req.timing.duration}ms)`;
+            }
+            if (req.responseSize !== undefined) {
+              line += ` [${req.responseSize} bytes]`;
+            }
+            return line;
+          }).join('\n');
+
+          return {
+            content: [{
+              type: 'text',
+              text: `Network requests (${requests.length}):\n\n${formatted}`,
+            }],
+          };
+        } catch (error) {
+          return {
+            content: [{
+              type: 'text',
+              text: `Failed to get network requests: ${error instanceof Error ? error.message : String(error)}`,
+            }],
+            isError: true,
+          };
+        }
+      }
+    );
+
+    // BrowserGetResponseBody tool - get response body for a network request
+    const browserGetResponseBodyTool = tool(
+      'BrowserGetResponseBody',
+      'Get the response body for a specific network request. Use BrowserGetNetworkRequests first to find the requestId.',
+      {
+        requestId: z.string().describe('The requestId from BrowserGetNetworkRequests'),
+      },
+      async (args) => {
+        try {
+          const { requestId } = args;
+          console.log('[Claude Service] Getting response body:', requestId);
+          const result = await browserService.getResponseBody(sessionId, requestId);
+
+          if (result.success && result.body !== undefined) {
+            let body = result.body;
+            if (result.base64Encoded) {
+              body = Buffer.from(result.body, 'base64').toString('utf-8');
+            }
+            const truncated = body.length > 10000;
+            return {
+              content: [{
+                type: 'text',
+                text: `Response body:\n\n${body.slice(0, 10000)}${truncated ? '\n\n...(truncated)' : ''}`,
+              }],
+            };
+          } else {
+            return {
+              content: [{
+                type: 'text',
+                text: `Failed to get response body: ${result.error || 'Response not available (may have been evicted from browser cache)'}`,
+              }],
+              isError: true,
+            };
+          }
+        } catch (error) {
+          return {
+            content: [{
+              type: 'text',
+              text: `Failed to get response body: ${error instanceof Error ? error.message : String(error)}`,
+            }],
+            isError: true,
+          };
+        }
+      }
+    );
+
+    // BrowserClearLogs tool - clear console logs and network requests
+    const browserClearLogsTool = tool(
+      'BrowserClearLogs',
+      'Clear captured console logs and/or network requests. Useful to start fresh when debugging.',
+      {
+        console: z.boolean().optional().describe('Clear console logs (default: true)'),
+        network: z.boolean().optional().describe('Clear network requests (default: true)'),
+      },
+      async (args) => {
+        const { console: clearConsole = true, network: clearNetwork = true } = args;
+        const cleared: string[] = [];
+
+        if (clearConsole) {
+          browserService.clearConsoleLogs(sessionId);
+          cleared.push('console logs');
+        }
+        if (clearNetwork) {
+          browserService.clearNetworkRequests(sessionId);
+          cleared.push('network requests');
+        }
+
+        return {
+          content: [{
+            type: 'text',
+            text: `Cleared ${cleared.join(' and ')}.`,
+          }],
+        };
+      }
+    );
+
     const mcpServer = createSdkMcpServer({
       name: 'claudette-browser',
       version: '1.0.0',
-      tools: [browserSnapshotTool],
+      tools: [
+        browserSnapshotTool,
+        browserNavigateTool,
+        browserClickTool,
+        browserTypeTool,
+        browserExtractTool,
+        browserGetInfoTool,
+        browserEnableDebuggingTool,
+        browserGetConsoleLogsTool,
+        browserGetNetworkRequestsTool,
+        browserGetResponseBodyTool,
+        browserClearLogsTool,
+      ],
     });
 
     this.browserMcpServers.set(sessionId, mcpServer);
@@ -194,10 +641,10 @@ export class ClaudeService {
   async *streamMessage(
     sessionId: string,
     userMessage: string,
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    _attachments?: unknown[],
+    attachments?: Attachment[],
     permissionMode?: string,
-    thinkingMode?: string
+    thinkingMode?: string,
+    model?: string
   ): AsyncGenerator<StreamEvent> {
     const apiKey = this.getApiKey();
     if (!apiKey) {
@@ -221,11 +668,14 @@ export class ClaudeService {
       const sdkSessionId = this.sessionStore.get(`sessions.${sessionId}.sdkSessionId`) as string | undefined;
 
       // Validate and cast permission mode to SDK type
-      const validModes = ['default', 'acceptEdits', 'plan'] as const;
+      const validModes = ['default', 'acceptEdits', 'bypassPermissions', 'plan', 'dontAsk'] as const;
       type SDKPermissionMode = typeof validModes[number];
       const sdkPermissionMode: SDKPermissionMode = validModes.includes(permissionMode as SDKPermissionMode)
         ? (permissionMode as SDKPermissionMode)
         : 'acceptEdits';
+
+      // Check if bypassPermissions mode requires the danger flag
+      const requiresDangerFlag = sdkPermissionMode === 'bypassPermissions';
 
       // Map thinking mode to token counts
       // off = undefined (no extended thinking)
@@ -238,16 +688,90 @@ export class ClaudeService {
       };
       const maxThinkingTokens = thinkingTokensMap[thinkingMode || 'thinking'];
 
+      // Build prompt with attachments
+      const imageAttachments = attachments?.filter(a => a.type === 'image') || [];
+      const domElementAttachments = attachments?.filter(a => a.type === 'dom_element') || [];
+      const hasImages = imageAttachments.length > 0;
+      const hasDomElements = domElementAttachments.length > 0;
+
+      console.log('[Claude Service] streamMessage - Attachments received:', attachments?.length || 0);
+      console.log('[Claude Service] streamMessage - Image attachments:', imageAttachments.length);
+      console.log('[Claude Service] streamMessage - DOM element attachments:', domElementAttachments.length);
+      if (attachments) {
+        attachments.forEach((a, i) => {
+          console.log(`[Claude Service] Attachment ${i}: type=${a.type}, name=${a.name}, content exists=${!!a.content}, content length=${a.content?.length || 0}`);
+        });
+      }
+
+      // Build the text message with DOM element context prepended
+      let fullTextMessage = userMessage;
+      if (hasDomElements) {
+        const domContext = domElementAttachments.map((el, i) => {
+          return `<selected-element index="${i + 1}" selector="${el.name}">\n${el.content}\n</selected-element>`;
+        }).join('\n\n');
+        fullTextMessage = `${domContext}\n\n${userMessage}`;
+        console.log('[Claude Service] Added DOM element context to message');
+      }
+
+      if (hasImages) {
+        console.log('[Claude Service] Will use multimodal prompt with images');
+        imageAttachments.forEach((a, i) => {
+          console.log(`[Claude Service] Image ${i}: name=${a.name}, base64 length=${a.content?.length || 0}, first 50 chars=${a.content?.slice(0, 50)}`);
+        });
+      }
+
+      // Create async generator for prompt with images
+      async function* createPromptWithImages(): AsyncIterable<SDKUserMessage> {
+        const content: (TextBlockParam | ImageBlockParam)[] = [
+          { type: 'text', text: fullTextMessage }
+        ];
+
+        for (const attachment of imageAttachments) {
+          // Determine media type from filename or default to png
+          const ext = attachment.name.split('.').pop()?.toLowerCase();
+          const mediaType = ext === 'jpg' || ext === 'jpeg' ? 'image/jpeg'
+            : ext === 'gif' ? 'image/gif'
+            : ext === 'webp' ? 'image/webp'
+            : 'image/png';
+
+          content.push({
+            type: 'image',
+            source: {
+              type: 'base64',
+              media_type: mediaType as 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp',
+              data: attachment.content,
+            },
+          });
+        }
+
+        yield {
+          type: 'user',
+          message: {
+            role: 'user',
+            content,
+          },
+          parent_tool_use_id: null,
+          session_id: sdkSessionId || '',
+        } as SDKUserMessage;
+      }
+
+      const prompt = hasImages ? createPromptWithImages() : fullTextMessage;
+      console.log('[Claude Service] Using prompt type:', hasImages ? 'multimodal (async generator)' : 'text string');
+      if (hasDomElements && !hasImages) {
+        console.log('[Claude Service] DOM element context included in text prompt');
+      }
+
       // Use the Claude Agent SDK query function with Claude Code's system prompt
       const messages = query({
-        prompt: userMessage,
+        prompt,
         options: {
           cwd: session.worktreePath || session.repoPath || process.cwd(),
           abortController,
           permissionMode: sdkPermissionMode,
+          ...(requiresDangerFlag ? { allowDangerouslySkipPermissions: true } : {}),
           includePartialMessages: true,
-          // Use Claude Sonnet 4.5 (latest) with extended thinking enabled
-          model: 'claude-sonnet-4-5-20250929',
+          // Use selected model or default to Claude Sonnet 4.5
+          model: model || 'claude-sonnet-4-5-20250929',
           ...(maxThinkingTokens ? { maxThinkingTokens } : {}),
           // Use Claude Code's system prompt preset
           systemPrompt: {
@@ -263,7 +787,7 @@ export class ClaudeService {
           },
           // Resume previous conversation if we have an SDK session ID
           ...(sdkSessionId ? { resume: sdkSessionId } : {}),
-          // Add custom browser snapshot tool via MCP server
+          // Add custom browser tools via MCP server (controls internal webview)
           mcpServers: {
             'claudette-browser': this.getBrowserMcpServer(sessionId),
           },
@@ -389,6 +913,14 @@ export class ClaudeService {
                     };
                     toolCalls.push(toolCall);
                     yield { type: 'tool_use', toolCall };
+                  } else {
+                    // Update existing tool call with complete input from full assistant message
+                    // stream_event often fires with empty input, this has the complete data
+                    if (block.input && Object.keys(block.input).length > 0) {
+                      existingTool.input = block.input;
+                      // Emit tool_use again to trigger UI update with complete input
+                      yield { type: 'tool_use', toolCall: existingTool };
+                    }
                   }
                 }
                 // Note: thinking blocks from assistant message are ignored here

@@ -19,6 +19,14 @@ if (require('electron-squirrel-startup')) {
   app.quit();
 }
 
+// CRITICAL: Disable Chromium privacy features that break OAuth and localStorage for third-party contexts
+// These must be set before app.ready
+// ThirdPartyStoragePartitioning - Prevents localStorage from being partitioned by top-level site (breaks Descope token storage)
+// BlockThirdPartyCookies - Prevents cookies from being blocked in third-party contexts
+// PartitionedCookies - Prevents cookies from being partitioned (CHIPS)
+app.commandLine.appendSwitch('disable-features', 'ThirdPartyCookieDeprecationTrialSettings,BlockThirdPartyCookies,SameSiteByDefaultCookies,CookiesWithoutSameSiteMustBeSecure,PartitionedCookies,ThirdPartyStoragePartitioning');
+app.commandLine.appendSwitch('enable-features', 'AllowSameSiteNoneCookies');
+
 // Register custom protocol for Monaco assets - MUST be before app.ready
 protocol.registerSchemesAsPrivileged([
   {
@@ -83,14 +91,53 @@ const createWindow = (): void => {
   // Log storage path to verify it's persistent
   console.log('[Main] Webview session storage path:', webviewSession.getStoragePath());
 
-  // Enable third-party cookies (critical for OAuth)
+  // DEBUG: Log all POST requests to descope to see what's being sent
+  webviewSession.webRequest.onBeforeSendHeaders(
+    { urls: ['*://api.descope.com/*'] },
+    (details, callback) => {
+      console.log('[Main] Descope request:', details.method, details.url);
+      console.log('[Main] Descope headers:', JSON.stringify(details.requestHeaders, null, 2));
+      if (details.uploadData) {
+        console.log('[Main] Descope uploadData:', JSON.stringify(details.uploadData));
+      } else {
+        console.log('[Main] Descope uploadData: NONE');
+      }
+      // Don't modify anything - just pass through
+      callback({ requestHeaders: details.requestHeaders });
+    }
+  );
+
+  // Log cookies and response details from Descope
+  webviewSession.webRequest.onHeadersReceived(
+    { urls: ['*://api.descope.com/*'] },
+    (details, callback) => {
+      const setCookie = details.responseHeaders?.['set-cookie'] || details.responseHeaders?.['Set-Cookie'];
+      if (setCookie) {
+        console.log('[Main] Descope SET-COOKIE:', JSON.stringify(setCookie));
+      }
+      // Log response status for key endpoints
+      if (details.url.includes('/flow/next') || details.url.includes('/auth/refresh')) {
+        console.log('[Main] Descope RESPONSE:', details.url, 'status:', details.statusCode);
+      }
+      callback({ responseHeaders: details.responseHeaders });
+    }
+  );
+
+  // Also log what cookies we currently have for descope
+  webviewSession.cookies.get({ domain: 'descope.com' }).then(cookies => {
+    console.log('[Main] Current Descope cookies:', JSON.stringify(cookies, null, 2));
+  });
+
+  // CRITICAL: Enable cross-site cookies for OAuth flows
+  // Set sameSite=none to allow third-party cookies
   webviewSession.cookies.set({
     url: 'https://api.descope.com',
     name: 'test',
     value: 'test',
-    expirationDate: Math.floor(Date.now() / 1000) + 3600
+    expirationDate: Math.floor(Date.now() / 1000) + 3600,
+    sameSite: 'no_restriction' as any // Allow cross-site cookies
   }).then(() => {
-    console.log('[Main] Webview session cookies enabled');
+    console.log('[Main] Webview session cookies enabled with cross-site support');
   }).catch(err => {
     console.error('[Main] Failed to set test cookie:', err);
   });
@@ -102,20 +149,188 @@ const createWindow = (): void => {
     callback(true);
   });
 
+  // Cache for Descope tokens intercepted from flow/next responses
+  // This persists across page navigations within the session
+  const descopeTokenCache: { sessionJwt?: string; refreshJwt?: string; user?: any } = {};
+
+  // Function to inject cached tokens into webview localStorage
+  const injectTokensIntoWebview = async (webContents: Electron.WebContents) => {
+    if (!descopeTokenCache.sessionJwt && !descopeTokenCache.refreshJwt) {
+      return;
+    }
+
+    console.log('[Main] Injecting cached Descope tokens into webview');
+    try {
+      await webContents.executeJavaScript(`
+        (function() {
+          const DS = ${JSON.stringify(descopeTokenCache.sessionJwt || '')};
+          const DSR = ${JSON.stringify(descopeTokenCache.refreshJwt || '')};
+          if (DS) {
+            localStorage.setItem('DS', DS);
+            console.log('[Injected] Set DS token');
+          }
+          if (DSR) {
+            localStorage.setItem('DSR', DSR);
+            console.log('[Injected] Set DSR token');
+          }
+        })();
+      `);
+    } catch (err) {
+      console.error('[Main] Failed to inject tokens:', err);
+    }
+  };
+
+  // Track attached debuggers to avoid re-attaching
+  const debuggerAttached = new Set<number>();
+
+  // Attach debugger to webContents to intercept network responses
+  const attachDebuggerForTokenCapture = (webContents: Electron.WebContents, label: string) => {
+    const id = webContents.id;
+    if (debuggerAttached.has(id)) return;
+
+    try {
+      webContents.debugger.attach('1.3');
+      debuggerAttached.add(id);
+      console.log(`[Main] Debugger attached to ${label} (id: ${id})`);
+
+      webContents.debugger.sendCommand('Network.enable');
+
+      // Track request IDs for flow/next requests
+      const flowNextRequests = new Map<string, string>(); // requestId -> url
+
+      webContents.debugger.on('message', async (event, method, params) => {
+        // Track flow/next requests
+        if (method === 'Network.requestWillBeSent') {
+          const url = params.request?.url || '';
+          if (url.includes('api.descope.com') && url.includes('/flow/next')) {
+            flowNextRequests.set(params.requestId, url);
+            console.log(`[Main] Tracking flow/next request: ${params.requestId}`);
+          }
+        }
+
+        // When we get a response for flow/next, capture the body
+        if (method === 'Network.responseReceived') {
+          const requestId = params.requestId;
+          if (flowNextRequests.has(requestId)) {
+            console.log(`[Main] flow/next response received for ${requestId}`);
+            try {
+              // Wait a bit for the response body to be available
+              await new Promise(resolve => setTimeout(resolve, 100));
+
+              const response = await webContents.debugger.sendCommand('Network.getResponseBody', { requestId });
+              const body = response.base64Encoded
+                ? Buffer.from(response.body, 'base64').toString('utf8')
+                : response.body;
+
+              console.log('[Main] flow/next response body length:', body?.length || 0);
+
+              const data = JSON.parse(body);
+              if (data.sessionJwt) {
+                descopeTokenCache.sessionJwt = data.sessionJwt;
+                console.log('[Main] *** CAPTURED sessionJwt from flow/next ***');
+              }
+              if (data.refreshJwt) {
+                descopeTokenCache.refreshJwt = data.refreshJwt;
+                console.log('[Main] *** CAPTURED refreshJwt from flow/next ***');
+              }
+              if (data.user) {
+                descopeTokenCache.user = data.user;
+              }
+
+              // If we got tokens, inject them into all webviews with our partition
+              if (descopeTokenCache.sessionJwt || descopeTokenCache.refreshJwt) {
+                // Find and inject into all webviews
+                const allWebContents = require('electron').webContents.getAllWebContents();
+                for (const wc of allWebContents) {
+                  // Only inject into webviews in our partition
+                  const wcUrl = wc.getURL();
+                  if (wc.getType() === 'webview' || wcUrl.includes('localhost')) {
+                    await injectTokensIntoWebview(wc);
+                  }
+                }
+              }
+            } catch (err) {
+              console.error('[Main] Failed to get flow/next response body:', err);
+            }
+            flowNextRequests.delete(requestId);
+          }
+        }
+      });
+
+      webContents.on('destroyed', () => {
+        debuggerAttached.delete(id);
+        console.log(`[Main] WebContents ${label} destroyed, debugger cleaned up`);
+      });
+    } catch (err) {
+      console.error(`[Main] Failed to attach debugger to ${label}:`, err);
+    }
+  };
+
   // Handle webview creation - configure for OAuth flows
   mainWindow.webContents.on('will-attach-webview', (event, webPreferences, params) => {
     console.log('[Main] Attaching webview with partition:', params.partition);
-    // Keep web security enabled but configure for OAuth
+    // Configure webview for OAuth (sandbox must be false for webview to work)
     webPreferences.nodeIntegration = false;
-    webPreferences.contextIsolation = true;
-    webPreferences.sandbox = true;
+    webPreferences.contextIsolation = false; // CHANGED: Allow preload to share context with page
+    webPreferences.sandbox = false; // CRITICAL: webview requires sandbox disabled
+    webPreferences.webSecurity = false; // CRITICAL: Allow cross-site cookies for OAuth
     // CRITICAL: Enable persistent storage for localStorage/cookies
     webPreferences.partition = params.partition || 'persist:browser';
     webPreferences.enableWebSQL = false;
     webPreferences.experimentalFeatures = true;
   });
 
-  // Handle new windows from webview (OAuth popups)
+  // After webview is attached, set up debugger and event handlers
+  mainWindow.webContents.on('did-attach-webview', (event, webviewContents) => {
+    console.log('[Main] Webview attached, id:', webviewContents.id);
+
+    // Attach debugger to capture flow/next responses
+    attachDebuggerForTokenCapture(webviewContents, 'webview');
+
+    // When webview navigates, inject any cached tokens
+    webviewContents.on('did-finish-load', async () => {
+      console.log('[Main] Webview finished loading:', webviewContents.getURL());
+      // Small delay to ensure page is ready
+      await new Promise(resolve => setTimeout(resolve, 200));
+      await injectTokensIntoWebview(webviewContents);
+    });
+
+    // Handle popups/new windows from within the webview
+    webviewContents.setWindowOpenHandler(({ url }) => {
+      console.log('[Main] Webview popup requested:', url);
+      // Allow OAuth-related popups
+      if (url.includes('google.com') || url.includes('descope.com') ||
+          url.includes('accounts.google') || url.includes('auth')) {
+        return {
+          action: 'allow',
+          overrideBrowserWindowOptions: {
+            webPreferences: {
+              partition: 'persist:browser',
+              webSecurity: false,
+            }
+          }
+        };
+      }
+      return { action: 'deny' };
+    });
+
+    // When a popup window is created from the webview, attach debugger to it too
+    webviewContents.on('did-create-window', (childWindow) => {
+      console.log('[Main] Webview created popup window:', childWindow.webContents.getURL());
+      attachDebuggerForTokenCapture(childWindow.webContents, 'oauth-popup');
+
+      // Also handle OAuth completion in popup
+      childWindow.webContents.on('did-navigate', async (event, url) => {
+        console.log('[Main] Popup navigated to:', url);
+        // After OAuth completes, the popup may have the tokens - inject them
+        if (descopeTokenCache.sessionJwt || descopeTokenCache.refreshJwt) {
+          await injectTokensIntoWebview(webviewContents);
+        }
+      });
+    });
+  });
+
+  // Handle new windows from main window (fallback)
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     console.log('[Main] Window open requested:', url);
     // Allow OAuth popups

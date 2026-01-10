@@ -98,7 +98,9 @@ export default function QuickSearch() {
     const permissionModeLabels: Record<PermissionMode, string> = {
       'acceptEdits': 'Accept Edits',
       'default': 'Default',
+      'bypassPermissions': 'Just Vibe It!',
       'plan': 'Plan Mode',
+      'dontAsk': "Don't Ask",
     };
 
     const thinkingModeLabels: Record<ThinkingMode, string> = {

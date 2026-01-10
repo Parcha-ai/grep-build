@@ -44,6 +44,7 @@ export const IPC_CHANNELS = {
   // Claude channels
   CLAUDE_SEND_MESSAGE: 'claude:send-message',
   CLAUDE_GET_MESSAGES: 'claude:get-messages',
+  CLAUDE_GET_MODELS: 'claude:get-models',
   CLAUDE_STREAM_CHUNK: 'claude:stream-chunk',
   CLAUDE_THINKING_CHUNK: 'claude:thinking-chunk',
   CLAUDE_STREAM_END: 'claude:stream-end',

@@ -10,6 +10,7 @@ interface MessageListProps {
   streamEvents: StreamEvent[];
   streamContent: string;
   streamingToolCalls?: ToolCall[];
+  currentToolCalls?: ToolCall[]; // Live-updated tool calls (not snapshots)
 }
 
 export default function MessageList({
@@ -18,7 +19,28 @@ export default function MessageList({
   streamEvents,
   streamContent,
   streamingToolCalls,
+  currentToolCalls = [],
 }: MessageListProps) {
+  // All hooks must be called before any conditional returns
+
+  // Create a map for quick lookup of current tool call state by ID
+  const toolCallMap = React.useMemo(() => {
+    const map = new Map<string, ToolCall>();
+    for (const tc of currentToolCalls) {
+      map.set(tc.id, tc);
+    }
+    return map;
+  }, [currentToolCalls]);
+
+  // Sort messages by timestamp to ensure chronological order
+  const sortedMessages = React.useMemo(() => {
+    return [...messages].sort((a, b) => {
+      const timeA = new Date(a.timestamp).getTime();
+      const timeB = new Date(b.timestamp).getTime();
+      return timeA - timeB;
+    });
+  }, [messages]);
+
   // Check if we have any content to show (either messages, streaming content, or streaming tool calls)
   const hasStreamingContent = isStreaming && (streamContent || (streamingToolCalls && streamingToolCalls.length > 0));
 
@@ -33,15 +55,6 @@ export default function MessageList({
     );
   }
 
-  // Sort messages by timestamp to ensure chronological order
-  const sortedMessages = React.useMemo(() => {
-    return [...messages].sort((a, b) => {
-      const timeA = new Date(a.timestamp).getTime();
-      const timeB = new Date(b.timestamp).getTime();
-      return timeA - timeB;
-    });
-  }, [messages]);
-
   return (
     <div className="p-4 space-y-4">
       {sortedMessages.map((message, index) => (
@@ -54,16 +67,18 @@ export default function MessageList({
 
       {/* Streaming events in chronological order (excluding thinking - shown separately) */}
       {isStreaming && streamEvents.length > 0 && (
-        <div className="px-4 space-y-2">
+        <div className="space-y-2">
           {streamEvents.map((event) => {
             // Skip thinking events - they're shown in the dedicated thinking section
             if (event.type === 'thinking') {
               return null;
             } else if (event.type === 'tool') {
+              // Use the live-updated tool call from currentToolCalls, fall back to snapshot
+              const liveToolCall = toolCallMap.get(event.toolCall!.id) || event.toolCall!;
               return (
                 <ToolCallCard
                   key={event.id}
-                  toolCall={event.toolCall!}
+                  toolCall={liveToolCall}
                   isLatest={false}
                   isStreaming={true}
                 />

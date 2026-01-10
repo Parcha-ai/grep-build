@@ -174,6 +174,39 @@ function MessageBubble({ message, isStreaming, streamingToolCalls, isLatestMessa
                     em({ children }) {
                       return <em className="italic">{children}</em>;
                     },
+                    // Style tables
+                    table({ children }) {
+                      return (
+                        <div className="my-2 overflow-x-auto">
+                          <table className="min-w-full border border-claude-border" style={{ borderRadius: 0 }}>
+                            {children}
+                          </table>
+                        </div>
+                      );
+                    },
+                    thead({ children }) {
+                      return <thead className="bg-claude-surface">{children}</thead>;
+                    },
+                    tbody({ children }) {
+                      return <tbody>{children}</tbody>;
+                    },
+                    tr({ children }) {
+                      return <tr className="border-b border-claude-border">{children}</tr>;
+                    },
+                    th({ children }) {
+                      return (
+                        <th className="px-3 py-2 text-left text-sm font-bold border-r border-claude-border last:border-r-0">
+                          {children}
+                        </th>
+                      );
+                    },
+                    td({ children }) {
+                      return (
+                        <td className="px-3 py-2 text-sm border-r border-claude-border last:border-r-0">
+                          {children}
+                        </td>
+                      );
+                    },
                   }}
                 >
                   {message.content}

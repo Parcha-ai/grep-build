@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
-import { Paperclip, X, Image, FileCode, Target, File, Folder, AtSign, Brain, Square } from 'lucide-react';
-import { useSessionStore, type PermissionMode, type ThinkingMode } from '../../stores/session.store';
+import { Paperclip, X, Image, FileCode, Target, File, Folder, AtSign, Brain, Square, Code } from 'lucide-react';
+import { useSessionStore, type PermissionMode, type ThinkingMode, type ModelInfo } from '../../stores/session.store';
 import { useUIStore } from '../../stores/ui.store';
 import { useAudioStore } from '../../stores/audio.store';
 import MentionAutocomplete, { type Mention } from './MentionAutocomplete';
@@ -57,7 +57,7 @@ function ProgressCircle({ completed, total }: { completed: number; total: number
 const PERMISSION_MODE_CONFIG: Record<PermissionMode, { prompt: string; label: string; color: string; description: string }> = {
   acceptEdits: {
     prompt: '>>',
-    label: 'AUTO',
+    label: 'ACCEPT EDITS',
     color: 'text-green-400',
     description: 'Auto-accept edits',
   },
@@ -67,11 +67,23 @@ const PERMISSION_MODE_CONFIG: Record<PermissionMode, { prompt: string; label: st
     color: 'text-amber-400',
     description: 'Require approval',
   },
+  bypassPermissions: {
+    prompt: '>>>',
+    label: 'JUST VIBE IT!',
+    color: 'text-red-400',
+    description: 'Bypass all permissions (dangerous!)',
+  },
   plan: {
     prompt: '?',
     label: 'PLAN',
     color: 'text-blue-400',
     description: 'Planning mode (no execution)',
+  },
+  dontAsk: {
+    prompt: '#',
+    label: 'DENY',
+    color: 'text-gray-500',
+    description: "Don't ask (deny if not pre-approved)",
   },
 };
 
@@ -111,6 +123,7 @@ interface Attachment {
   name: string;
   content: string;
   path?: string;
+  subType?: 'file' | 'folder' | 'symbol'; // For mentions: preserves the original type
 }
 
 export default function InputArea({ sessionId, disabled, systemInfo, isStreaming: isStreamingProp }: InputAreaProps) {
@@ -126,7 +139,7 @@ export default function InputArea({ sessionId, disabled, systemInfo, isStreaming
   const [showEscapeWarning, setShowEscapeWarning] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
-  const { sendMessage, isStreaming, permissionMode, cyclePermissionMode, thinkingMode, cycleThinkingMode, currentToolCalls, messages, sessions, messageQueue } = useSessionStore();
+  const { sendMessage, isStreaming, permissionMode, cyclePermissionMode, thinkingMode, cycleThinkingMode, currentToolCalls, messages, sessions, messageQueue, selectedModel, setSelectedModel, availableModels, loadAvailableModels } = useSessionStore();
   const { selectedElement, setSelectedElement, setInspectorActive, toggleBrowserPanel } = useUIStore();
   const { settings: audioSettings, setAudioMode } = useAudioStore();
 
@@ -151,6 +164,37 @@ export default function InputArea({ sessionId, disabled, systemInfo, isStreaming
   const isSending = isStreaming[sessionId] || false;
   const queuedMessages = messageQueue[sessionId] || [];
   const hasQueuedMessages = queuedMessages.length > 0;
+
+  // Model selector state
+  const [showModelDropdown, setShowModelDropdown] = useState(false);
+  const modelDropdownRef = useRef<HTMLDivElement>(null);
+  const currentModel = selectedModel[sessionId] || 'claude-sonnet-4-5-20250929';
+
+  // Get current model display name
+  const currentModelInfo = useMemo(() => {
+    const model = availableModels.find(m => m.id === currentModel);
+    return model || { id: currentModel, name: currentModel.split('-').slice(1, 3).join(' ').toUpperCase(), description: '' };
+  }, [availableModels, currentModel]);
+
+  // Load available models on mount
+  useEffect(() => {
+    if (availableModels.length === 0) {
+      loadAvailableModels();
+    }
+  }, []);
+
+  // Close model dropdown on outside click
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (modelDropdownRef.current && !modelDropdownRef.current.contains(event.target as Node)) {
+        setShowModelDropdown(false);
+      }
+    };
+    if (showModelDropdown) {
+      document.addEventListener('mousedown', handleClickOutside);
+    }
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [showModelDropdown]);
 
   // Extract current todos from the most recent TodoWrite tool call
   const currentTodos = useMemo((): TodoItem[] => {
@@ -230,16 +274,44 @@ export default function InputArea({ sessionId, disabled, systemInfo, isStreaming
 
   // Handle selected element from browser inspector
   useEffect(() => {
+    console.log('[InputArea] selectedElement changed:', selectedElement);
     if (selectedElement) {
-      const element = selectedElement as { selector: string; outerHTML: string };
-      setAttachments((prev) => [
-        ...prev,
-        {
-          type: 'dom_element',
-          name: element.selector || 'DOM Element',
+      const element = selectedElement as {
+        selector: string;
+        outerHTML: string;
+        screenshot?: string;
+        tagName?: string;
+        reactComponent?: string;
+      };
+      console.log('[InputArea] Adding DOM element attachment:', element.selector);
+
+      setAttachments((prev) => {
+        const newAttachments = [...prev];
+
+        // Add the DOM element info
+        const displayName = element.reactComponent
+          ? `${element.reactComponent} (${element.tagName})`
+          : element.selector || 'DOM Element';
+
+        newAttachments.push({
+          type: 'dom_element' as const,
+          name: displayName,
           content: element.outerHTML || '',
-        },
-      ]);
+        });
+
+        // Add screenshot if available
+        if (element.screenshot && element.screenshot.length > 0) {
+          console.log('[InputArea] Adding element screenshot, size:', element.screenshot.length);
+          newAttachments.push({
+            type: 'image' as const,
+            name: `element-screenshot-${Date.now()}.png`,
+            content: element.screenshot,
+          });
+        }
+
+        console.log('[InputArea] New attachments count:', newAttachments.length);
+        return newAttachments;
+      });
       setSelectedElement(null);
     }
   }, [selectedElement, setSelectedElement]);
@@ -344,6 +416,7 @@ export default function InputArea({ sessionId, disabled, systemInfo, isStreaming
           name: mention.displayName,
           content: mention.path,
           path: mention.path,
+          subType: mention.type, // Preserve whether it's a file, folder, or symbol
         },
       ]);
 
@@ -396,7 +469,8 @@ export default function InputArea({ sessionId, disabled, systemInfo, isStreaming
 
   const handleSubmit = async () => {
     if (!message.trim() && attachments.length === 0) return;
-    if (disabled || isSending) return;
+    if (disabled) return;
+    // Note: We don't block on isSending - the store handles queueing if already streaming
 
     // Deactivate audio mode when typing manually
     setAudioMode(sessionId, false);
@@ -418,11 +492,18 @@ export default function InputArea({ sessionId, disabled, systemInfo, isStreaming
     }
 
     const otherAttachments = attachments.filter((a) => a.type !== 'mention');
+    console.log('[InputArea] Submitting with attachments:', otherAttachments.length);
+    otherAttachments.forEach((a, i) => {
+      console.log(`[InputArea] Attachment ${i}: type=${a.type}, name=${a.name}, content length=${a.content?.length || 0}`);
+    });
+
+    // Capture attachments before clearing state
+    const attachmentsToSend = otherAttachments.length > 0 ? [...otherAttachments] : undefined;
 
     setMessage('');
     setAttachments([]);
 
-    await sendMessage(sessionId, fullMessage, otherAttachments.length > 0 ? otherAttachments : undefined);
+    await sendMessage(sessionId, fullMessage, attachmentsToSend);
   };
 
   const handleStopStreaming = useCallback(() => {
@@ -435,6 +516,13 @@ export default function InputArea({ sessionId, disabled, systemInfo, isStreaming
     // Don't submit if any autocomplete is open
     if ((showMentions || showCommands) && (e.key === 'ArrowDown' || e.key === 'ArrowUp' || e.key === 'Enter')) {
       return; // Let autocomplete components handle these
+    }
+
+    // Shift+Tab to cycle permission modes
+    if (e.key === 'Tab' && e.shiftKey) {
+      e.preventDefault();
+      cyclePermissionMode(sessionId);
+      return;
     }
 
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -489,6 +577,102 @@ export default function InputArea({ sessionId, disabled, systemInfo, isStreaming
     setAttachments((prev) => prev.filter((_, i) => i !== index));
   };
 
+  // Handle paste event for images
+  const handlePaste = async (e: React.ClipboardEvent) => {
+    const clipboardData = e.clipboardData;
+    if (!clipboardData) {
+      console.log('[InputArea] No clipboardData available');
+      return;
+    }
+
+    const items = clipboardData.items;
+    const files = clipboardData.files;
+
+    console.log('[InputArea] Paste event - items:', items?.length || 0, 'files:', files?.length || 0);
+    console.log('[InputArea] Available types:', clipboardData.types.join(', '));
+
+    // Try files first (more reliable for some browsers)
+    if (files && files.length > 0) {
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        console.log('[InputArea] File from clipboardData.files:', file.name, file.type, file.size);
+        if (file.type.startsWith('image/')) {
+          e.preventDefault();
+          await processImageFile(file);
+        }
+      }
+    }
+
+    // Also check items (DataTransferItemList)
+    if (items) {
+      const itemsArray = Array.from(items);
+      for (const item of itemsArray) {
+        console.log('[InputArea] Clipboard item - type:', item.type, 'kind:', item.kind);
+
+        // Check for image types (including variations)
+        const isImage = item.type.startsWith('image/') ||
+                       item.type === 'image' ||
+                       (item.kind === 'file' && item.type.includes('image'));
+
+        if (isImage && item.kind === 'file') {
+          e.preventDefault();
+
+          const file = item.getAsFile();
+          if (!file) {
+            console.log('[InputArea] Could not get file from clipboard item');
+            continue;
+          }
+
+          // Check if we already processed this file from clipboardData.files
+          // (some browsers provide the same file in both places)
+          const alreadyProcessed = attachments.some(a =>
+            a.type === 'image' && a.name.includes(`${file.size}`)
+          );
+          if (!alreadyProcessed) {
+            await processImageFile(file);
+          }
+        }
+      }
+    }
+
+    async function processImageFile(file: File) {
+      console.log('[InputArea] Processing image file:', file.name, file.type, file.size);
+
+      return new Promise<void>((resolve) => {
+        const reader = new FileReader();
+
+        reader.onload = () => {
+          const base64 = reader.result as string;
+          console.log('[InputArea] FileReader completed, result length:', base64?.length || 0);
+
+          // Extract just the base64 data (remove data:image/xxx;base64, prefix)
+          const base64Data = base64.split(',')[1] || base64;
+          console.log('[InputArea] Base64 data extracted, length:', base64Data.length);
+
+          const imageAttachment: Attachment = {
+            type: 'image',
+            name: `pasted-image-${Date.now()}.${file.type.split('/')[1] || 'png'}`,
+            content: base64Data,
+          };
+
+          setAttachments(prev => {
+            console.log('[InputArea] Adding attachment to state. Current count:', prev.length);
+            return [...prev, imageAttachment];
+          });
+          console.log('[InputArea] Image pasted and attached:', imageAttachment.name, 'content length:', base64Data.length);
+          resolve();
+        };
+
+        reader.onerror = (error) => {
+          console.error('[InputArea] FileReader error:', error);
+          resolve();
+        };
+
+        reader.readAsDataURL(file);
+      });
+    }
+  };
+
   const handleInspectElement = () => {
     setInspectorActive(true);
     toggleBrowserPanel(); // Open browser panel if not already open
@@ -534,11 +718,14 @@ export default function InputArea({ sessionId, disabled, systemInfo, isStreaming
       case 'image':
         return <Image size={12} className="text-green-400" />;
       case 'mention':
-        return attachment.name.includes('/') || attachment.name.includes('.') ? (
-          <File size={12} className="text-cyan-400" />
-        ) : (
-          <Folder size={12} className="text-amber-400" />
-        );
+        // Use the actual subType instead of guessing from the name
+        if (attachment.subType === 'folder') {
+          return <Folder size={12} className="text-amber-400" />;
+        } else if (attachment.subType === 'symbol') {
+          return <Code size={12} className="text-purple-400" />;
+        } else {
+          return <File size={12} className="text-cyan-400" />;
+        }
       default:
         return <FileCode size={12} className="text-purple-400" />;
     }
@@ -616,18 +803,6 @@ export default function InputArea({ sessionId, disabled, systemInfo, isStreaming
         </div>
       )}
 
-      {/* Queued messages indicator */}
-      {hasQueuedMessages && (
-        <div className="mb-2 px-3 py-2 bg-blue-500/20 border border-blue-500/50 flex items-center gap-2">
-          <div className="flex items-center gap-1.5 text-blue-200 text-xs font-mono">
-            <div className="w-2 h-2 rounded-full bg-blue-400 animate-pulse" />
-            <span className="uppercase" style={{ letterSpacing: '0.05em' }}>
-              {queuedMessages.length} message{queuedMessages.length !== 1 ? 's' : ''} queued
-            </span>
-          </div>
-        </div>
-      )}
-
       {/* Input row - CLI style */}
       <div className="flex items-center gap-2">
         {/* Permission mode selector - clickable prompt indicator */}
@@ -647,7 +822,8 @@ export default function InputArea({ sessionId, disabled, systemInfo, isStreaming
             value={message}
             onChange={handleInputChange}
             onKeyDown={handleKeyDown}
-            placeholder={disabled ? 'session inactive...' : isSending ? `type to queue message${hasQueuedMessages ? ` (${queuedMessages.length} queued)` : ''}...` : 'type here... (@ to mention files)'}
+            onPaste={handlePaste}
+            placeholder={disabled ? 'session inactive...' : isSending ? `type to queue message${hasQueuedMessages ? ` (${queuedMessages.length} queued)` : ''}...` : 'type here... (@ to mention, paste images)'}
             disabled={disabled}
             className={`w-full py-0 resize-none focus:outline-none disabled:opacity-40 disabled:cursor-not-allowed min-h-[24px] max-h-[200px] font-mono bg-transparent text-base text-claude-text placeholder:text-claude-text-secondary leading-6 caret-claude-accent ${
               useAudioStore.getState().recordingStates[sessionId]?.isRecording ? 'border-l-2 border-red-500 pl-2' : ''
@@ -764,14 +940,40 @@ export default function InputArea({ sessionId, disabled, systemInfo, isStreaming
           <Brain size={10} />
           <span>{thinkingConfig.label}</span>
         </button>
-        {isStreamingProp && systemInfo ? (
-          <>
-            <span className="text-claude-text-secondary">{systemInfo.model || 'claude'}</span>
-            {systemInfo.tools && systemInfo.tools.length > 0 && (
-              <span className="text-claude-text-secondary">{systemInfo.tools.length} TOOLS</span>
-            )}
-          </>
-        ) : (
+        {/* Model selector - always visible */}
+        <div className="relative" ref={modelDropdownRef}>
+          <button
+            onClick={() => setShowModelDropdown(!showModelDropdown)}
+            disabled={disabled || isSending}
+            className="text-claude-text-secondary hover:text-claude-text transition-colors disabled:opacity-40"
+            title={`${currentModelInfo.description} (click to change)`}
+          >
+            {isStreamingProp && systemInfo ? (systemInfo.model || currentModelInfo.name) : currentModelInfo.name}
+          </button>
+          {showModelDropdown && (
+            <div className="absolute bottom-full left-0 mb-1 bg-claude-surface border border-claude-border shadow-lg z-50 min-w-48">
+              {availableModels.map((model) => (
+                <button
+                  key={model.id}
+                  onClick={() => {
+                    setSelectedModel(sessionId, model.id);
+                    setShowModelDropdown(false);
+                  }}
+                  className={`w-full text-left px-3 py-2 hover:bg-claude-bg transition-colors ${
+                    model.id === currentModel ? 'bg-claude-bg text-claude-accent' : 'text-claude-text'
+                  }`}
+                >
+                  <div className="font-mono text-xs">{model.name}</div>
+                  <div className="text-[10px] text-claude-text-secondary">{model.description}</div>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+        {isStreamingProp && systemInfo?.tools && systemInfo.tools.length > 0 && (
+          <span className="text-claude-text-secondary">{systemInfo.tools.length} TOOLS</span>
+        )}
+        {!isStreamingProp && (
           <>
             <span>@ FILE</span>
             <span>ENTER SEND</span>

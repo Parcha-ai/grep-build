@@ -74,21 +74,21 @@ function getSubagentType(input: Record<string, unknown>): string | null {
 function formatToolInput(name: string, input: Record<string, unknown>): string {
   switch (name) {
     case 'Bash':
-      return (input.command as string) || '';
+      return (input.command as string) || 'Running command...';
     case 'Read':
-      return (input.file_path as string) || '';
+      return (input.file_path as string) || 'Reading file...';
     case 'Grep':
-      return `${input.pattern || ''} ${input.path || ''}`.trim();
+      return `${input.pattern || ''} ${input.path || ''}`.trim() || 'Searching...';
     case 'Glob':
-      return (input.pattern as string) || '';
+      return (input.pattern as string) || 'Finding files...';
     case 'Write':
-      return (input.file_path as string) || '';
+      return (input.file_path as string) || 'Writing file...';
     case 'Edit':
-      return (input.file_path as string) || '';
+      return (input.file_path as string) || 'Editing file...';
     case 'WebFetch':
-      return (input.url as string) || '';
+      return (input.url as string) || 'Fetching URL...';
     case 'WebSearch':
-      return (input.query as string) || '';
+      return (input.query as string) || 'Searching web...';
     case 'Task': {
       const type = getSubagentType(input);
       const description = (input.description as string) || (input.prompt as string)?.slice(0, 80) || '';
@@ -249,12 +249,23 @@ function DiffView({ oldString, newString, filePath }: { oldString: string; newSt
 // Render expanded content based on tool type
 function ExpandedContent({ toolCall }: { toolCall: ToolCall }) {
   const { name, input, result } = toolCall;
+  const isRunning = toolCall.status === 'running' || toolCall.status === 'pending';
 
   // Special rendering for Read tool - show clickable file path with Monaco preview
   if (name === 'Read') {
     const filePath = (input.file_path as string) || '';
     const lineNumber = (input.offset as number) || undefined;
     const language = getLanguageFromPath(filePath);
+
+    // Show loading state if no file path yet
+    if (!filePath) {
+      return (
+        <div className="flex items-center gap-2 text-xs text-claude-text-secondary">
+          <Loader2 size={12} className="animate-spin" />
+          <span>Loading file path...</span>
+        </div>
+      );
+    }
 
     return (
       <div className="space-y-2 text-xs">
@@ -264,7 +275,7 @@ function ExpandedContent({ toolCall }: { toolCall: ToolCall }) {
         </div>
 
         {/* Result preview with Monaco if available */}
-        {result !== undefined && (
+        {result !== undefined ? (
           <div>
             <div className="text-claude-text-secondary mb-1 font-semibold">Content Preview:</div>
             {typeof result === 'string' && result.length > 10 ? (
@@ -294,7 +305,12 @@ function ExpandedContent({ toolCall }: { toolCall: ToolCall }) {
               </pre>
             )}
           </div>
-        )}
+        ) : isRunning ? (
+          <div className="flex items-center gap-2 text-claude-text-secondary">
+            <Loader2 size={12} className="animate-spin" />
+            <span>Reading file...</span>
+          </div>
+        ) : null}
       </div>
     );
   }
@@ -303,26 +319,39 @@ function ExpandedContent({ toolCall }: { toolCall: ToolCall }) {
   if (name === 'Bash') {
     const command = (input.command as string) || '';
 
+    // Show loading state if no command yet
+    if (!command) {
+      return (
+        <div className="flex items-center gap-2 text-xs text-claude-text-secondary">
+          <Loader2 size={12} className="animate-spin" />
+          <span>Loading command...</span>
+        </div>
+      );
+    }
+
     return (
       <div className="space-y-2 text-xs">
-        {command && (
-          <div>
-            <div className="text-claude-text-secondary mb-1 font-semibold">Command:</div>
-            <pre className="whitespace-pre-wrap text-green-400 bg-black/50 p-2 overflow-x-auto font-mono border-l-2 border-green-500/30">
-              $ {command}
-            </pre>
-          </div>
-        )}
+        <div>
+          <div className="text-claude-text-secondary mb-1 font-semibold">Command:</div>
+          <pre className="whitespace-pre-wrap text-green-400 bg-black/50 p-2 overflow-x-auto font-mono border-l-2 border-green-500/30">
+            $ {command}
+          </pre>
+        </div>
 
         {/* Result section */}
-        {result !== undefined && (
+        {result !== undefined ? (
           <div>
             <div className="text-claude-text-secondary mb-1 font-semibold">Output:</div>
             <pre className="whitespace-pre-wrap text-claude-text bg-claude-bg/50 p-2 overflow-x-auto max-h-60 overflow-y-auto font-mono text-sm">
               {typeof result === 'object' ? JSON.stringify(result, null, 2) : String(result)}
             </pre>
           </div>
-        )}
+        ) : isRunning ? (
+          <div className="flex items-center gap-2 text-claude-text-secondary">
+            <Loader2 size={12} className="animate-spin" />
+            <span>Running...</span>
+          </div>
+        ) : null}
       </div>
     );
   }
@@ -332,9 +361,27 @@ function ExpandedContent({ toolCall }: { toolCall: ToolCall }) {
     const content = (input.content as string) || '';
     const filePath = (input.file_path as string) || '';
 
+    // Show loading state if no content yet
+    if (!content && !filePath) {
+      return (
+        <div className="flex items-center gap-2 text-xs text-claude-text-secondary">
+          <Loader2 size={12} className="animate-spin" />
+          <span>Preparing file content...</span>
+        </div>
+      );
+    }
+
     if (content) {
       return <WriteView content={content} filePath={filePath} />;
     }
+
+    // Have file path but no content yet
+    return (
+      <div className="flex items-center gap-2 text-xs text-claude-text-secondary">
+        <Loader2 size={12} className="animate-spin" />
+        <span>Writing to {filePath.split('/').pop() || filePath}...</span>
+      </div>
+    );
   }
 
   // Special rendering for Edit tool - show diff view
@@ -343,9 +390,27 @@ function ExpandedContent({ toolCall }: { toolCall: ToolCall }) {
     const newString = (input.new_string as string) || '';
     const filePath = (input.file_path as string) || '';
 
+    // Show loading state if no content yet
+    if (!oldString && !newString && !filePath) {
+      return (
+        <div className="flex items-center gap-2 text-xs text-claude-text-secondary">
+          <Loader2 size={12} className="animate-spin" />
+          <span>Preparing edit...</span>
+        </div>
+      );
+    }
+
     if (oldString || newString) {
       return <DiffView oldString={oldString} newString={newString} filePath={filePath} />;
     }
+
+    // Have file path but no diff content yet
+    return (
+      <div className="flex items-center gap-2 text-xs text-claude-text-secondary">
+        <Loader2 size={12} className="animate-spin" />
+        <span>Loading changes for {filePath.split('/').pop() || filePath}...</span>
+      </div>
+    );
   }
 
   // Special rendering for TodoWrite - show task list
@@ -411,14 +476,11 @@ function ExpandedContent({ toolCall }: { toolCall: ToolCall }) {
 }
 
 export default function ToolCallCard({ toolCall, isLatest = false, isLatestToolCall = false }: ToolCallCardProps) {
-  // Expand by default if this is the latest tool call
-  const shouldExpand = isLatest || isLatestToolCall;
-  const [isExpanded, setIsExpanded] = useState(shouldExpand);
+  // Always expanded by default - user can collapse manually if desired
+  const [isExpanded, setIsExpanded] = useState(true);
 
-  // Auto-collapse when this is no longer the latest, auto-expand when it becomes latest
-  useEffect(() => {
-    setIsExpanded(shouldExpand);
-  }, [shouldExpand]);
+  // Keep isLatest/isLatestToolCall for potential future use but don't auto-collapse
+  const _shouldExpand = isLatest || isLatestToolCall; // eslint-disable-line @typescript-eslint/no-unused-vars
 
   const config = TOOL_CONFIG[toolCall.name] || DEFAULT_CONFIG;
   const Icon = config.icon;
@@ -473,10 +535,13 @@ export default function ToolCallCard({ toolCall, isLatest = false, isLatestToolC
         <Icon size={config.iconSize || 14} className={config.color} />
         <span className={`font-semibold ${config.color}`}>{config.label}</span>
 
-        {/* Input/command summary (only when collapsed) */}
-        {!isExpanded && (
-          <span className="text-claude-text-secondary truncate flex-1">{commandDisplay}</span>
-        )}
+        {/* Separator */}
+        <span className="text-claude-text-secondary">·</span>
+
+        {/* Input/command summary (always visible) */}
+        <span className="text-claude-text truncate flex-1">
+          {commandDisplay}
+        </span>
 
         {/* Loading spinner for running tools */}
         {isRunning && (

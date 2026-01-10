@@ -8,10 +8,19 @@ import {
   Code,
   X,
   Trash2,
+  Bot,
 } from 'lucide-react';
 import { useUIStore } from '../../stores/ui.store';
 import { useSessionStore } from '../../stores/session.store';
 import type { Session, DOMElementContext } from '../../../shared/types';
+
+interface AutomationIndicator {
+  type: 'click' | 'type' | 'navigate' | 'snapshot';
+  x?: number;
+  y?: number;
+  selector?: string;
+  text?: string;
+}
 
 interface BrowserPreviewProps {
   session: Session;
@@ -19,17 +28,63 @@ interface BrowserPreviewProps {
 
 export default function BrowserPreview({ session }: BrowserPreviewProps) {
   const webviewRef = useRef<Electron.WebviewTag>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
   const { updateSession } = useSessionStore();
 
   // Use last browser URL if available, otherwise default to session's web port
-  const initialUrl = session.lastBrowserUrl || `http://localhost:${session.ports.web}`;
-  const [url, setUrl] = useState(initialUrl);
-  const [inputUrl, setInputUrl] = useState(initialUrl);
+  const getSessionUrl = () => session.lastBrowserUrl || `http://localhost:${session.ports.web}`;
+  const [url, setUrl] = useState(getSessionUrl);
+  const [inputUrl, setInputUrl] = useState(getSessionUrl);
   const [isLoading, setIsLoading] = useState(false);
   const [canGoBack, setCanGoBack] = useState(false);
   const [canGoForward, setCanGoForward] = useState(false);
 
+  // Automation visual feedback state
+  const [isAutomationActive, setIsAutomationActive] = useState(false);
+  const [automationIndicator, setAutomationIndicator] = useState<AutomationIndicator | null>(null);
+  const [clickRipples, setClickRipples] = useState<Array<{ id: number; x: number; y: number }>>([]);
+
   const { isInspectorActive, setInspectorActive, setSelectedElement } = useUIStore();
+
+  // Sync URL when session changes (switching between sessions)
+  useEffect(() => {
+    const newUrl = getSessionUrl();
+    console.log('[BrowserPreview] Session changed, restoring URL:', session.id, '->', newUrl);
+    setUrl(newUrl);
+    setInputUrl(newUrl);
+    // Reset navigation state for new session
+    setCanGoBack(false);
+    setCanGoForward(false);
+    // Reset automation/inspector state
+    setIsAutomationActive(false);
+    setAutomationIndicator(null);
+    setClickRipples([]);
+    setInspectorActive(false);
+    setSelectedElement(null);
+  }, [session.id, setInspectorActive, setSelectedElement]);
+
+  // Register webview with main process for CDP access
+  useEffect(() => {
+    const webview = webviewRef.current;
+    if (!webview) return;
+
+    const handleDomReady = () => {
+      // Get webContentsId and register with main process for CDP
+      const webContentsId = (webview as any).getWebContentsId?.();
+      if (webContentsId) {
+        console.log('[BrowserPreview] Registering webview for CDP:', session.id, '->', webContentsId);
+        window.electronAPI.browser.registerWebview(session.id, webContentsId);
+      }
+    };
+
+    webview.addEventListener('dom-ready', handleDomReady);
+
+    return () => {
+      webview.removeEventListener('dom-ready', handleDomReady);
+      // Unregister when unmounting
+      window.electronAPI.browser.unregisterWebview(session.id);
+    };
+  }, [session.id]);
 
   // Handle webview events
   useEffect(() => {
@@ -57,17 +112,6 @@ export default function BrowserPreview({ session }: BrowserPreviewProps) {
       setInputUrl(e.url);
       // Save the URL to session so it persists across reloads
       updateSession(session.id, { lastBrowserUrl: e.url });
-
-      // Debug: Check localStorage after navigation
-      if (webview && e.url.includes('localhost:5173')) {
-        setTimeout(() => {
-          webview.executeJavaScript('JSON.stringify(localStorage)').then((storage) => {
-            console.log('[BrowserPreview] LocalStorage contents:', storage);
-          }).catch(err => {
-            console.error('[BrowserPreview] Failed to read localStorage:', err);
-          });
-        }, 1000);
-      }
     };
     const handleDidFailLoad = (e: any) => {
       console.error('[BrowserPreview] Navigation failed:', e);
@@ -98,6 +142,246 @@ export default function BrowserPreview({ session }: BrowserPreviewProps) {
       injectInspector();
     }
   }, [isInspectorActive]);
+
+  // Handle navigation requests from main process (e.g., from BrowserSnapshot tool)
+  useEffect(() => {
+    const unsubscribe = window.electronAPI.browser.onNavigate((data: { sessionId: string; url: string }) => {
+      const { sessionId: reqSessionId, url: targetUrl } = data;
+      if (reqSessionId !== session.id) return;
+
+      console.log('[BrowserPreview] Navigation request from main process:', targetUrl);
+      navigate(targetUrl);
+    });
+
+    return () => {
+      if (unsubscribe) {
+        unsubscribe();
+      }
+    };
+  }, [session.id]);
+
+  // Handle automation events from main process (CDP-based automation visual feedback)
+  useEffect(() => {
+    console.log('[BrowserPreview] Setting up automation event listener for session:', session.id);
+    const unsubscribe = window.electronAPI.browser.onAutomationEvent((data: { sessionId: string; type: string; action: string; data?: Record<string, unknown> }) => {
+      console.log('[BrowserPreview] Received automation event:', data, 'current session:', session.id);
+      if (data.sessionId !== session.id) {
+        console.log('[BrowserPreview] Ignoring event - session mismatch');
+        return;
+      }
+
+      console.log('[BrowserPreview] Processing automation event:', data);
+
+      if (data.type === 'start') {
+        setIsAutomationActive(true);
+        setAutomationIndicator({
+          type: data.action as any,
+          selector: data.data?.selector as string,
+          text: data.data?.text as string,
+        });
+      } else if (data.type === 'position' && data.action === 'click') {
+        // Show click ripple at position
+        const x = data.data?.x as number;
+        const y = data.data?.y as number;
+        if (x !== undefined && y !== undefined) {
+          const id = Date.now();
+          setClickRipples(prev => [...prev, { id, x, y }]);
+          setTimeout(() => {
+            setClickRipples(prev => prev.filter(r => r.id !== id));
+          }, 600);
+        }
+      } else if (data.type === 'end') {
+        // Clear automation state after a short delay for visual feedback
+        setTimeout(() => {
+          setIsAutomationActive(false);
+          setAutomationIndicator(null);
+        }, 300);
+      }
+    });
+
+    return () => {
+      if (unsubscribe) {
+        unsubscribe();
+      }
+    };
+  }, [session.id]);
+
+  // Helper to show click ripple effect
+  const showClickRipple = async (selector: string) => {
+    const webview = webviewRef.current;
+    if (!webview) return;
+
+    try {
+      // Get element position from webview
+      const pos = await webview.executeJavaScript(`
+        (function() {
+          const el = document.querySelector(${JSON.stringify(selector)});
+          if (!el) return null;
+          const rect = el.getBoundingClientRect();
+          return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+        })()
+      `);
+
+      if (pos) {
+        const id = Date.now();
+        setClickRipples(prev => [...prev, { id, x: pos.x, y: pos.y }]);
+        // Remove ripple after animation
+        setTimeout(() => {
+          setClickRipples(prev => prev.filter(r => r.id !== id));
+        }, 600);
+      }
+    } catch (e) {
+      console.error('[BrowserPreview] Failed to show click ripple:', e);
+    }
+  };
+
+  // Handle browser action requests from main process (click, type, extract, etc.)
+  useEffect(() => {
+    const unsubscribe = window.electronAPI.browser.onAction(async (data: { sessionId: string; requestId: string; action: string; params: Record<string, unknown> }) => {
+      const { sessionId: reqSessionId, requestId, action, params } = data;
+      if (reqSessionId !== session.id) return;
+
+      const webview = webviewRef.current;
+      if (!webview) {
+        window.electronAPI.browser.sendActionResult({ requestId, success: false, error: 'No webview available' });
+        return;
+      }
+
+      console.log('[BrowserPreview] Action request:', action, params);
+
+      // Show automation active state
+      setIsAutomationActive(true);
+
+      try {
+        let result: any;
+
+        switch (action) {
+          case 'click': {
+            const { selector } = params as { selector: string };
+            // Show visual indicator
+            setAutomationIndicator({ type: 'click', selector });
+            // Show click ripple
+            await showClickRipple(selector);
+
+            result = await webview.executeJavaScript(`
+              (function() {
+                const el = document.querySelector(${JSON.stringify(selector)});
+                if (!el) return { found: false, error: 'Element not found: ' + ${JSON.stringify(selector)} };
+                el.click();
+                return { found: true, tagName: el.tagName, text: el.textContent?.slice(0, 100) };
+              })()
+            `);
+            if (!result.found) {
+              setIsAutomationActive(false);
+              setAutomationIndicator(null);
+              window.electronAPI.browser.sendActionResult({ requestId, success: false, error: result.error });
+              return;
+            }
+            window.electronAPI.browser.sendActionResult({ requestId, success: true, data: { clicked: result } });
+            break;
+          }
+
+          case 'type': {
+            const { selector, text } = params as { selector: string; text: string };
+            // Show visual indicator
+            setAutomationIndicator({ type: 'type', selector, text: text.slice(0, 30) });
+
+            result = await webview.executeJavaScript(`
+              (function() {
+                const el = document.querySelector(${JSON.stringify(selector)});
+                if (!el) return { found: false, error: 'Element not found: ' + ${JSON.stringify(selector)} };
+                if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') {
+                  el.value = ${JSON.stringify(text)};
+                  el.dispatchEvent(new Event('input', { bubbles: true }));
+                  el.dispatchEvent(new Event('change', { bubbles: true }));
+                } else if (el.isContentEditable) {
+                  el.textContent = ${JSON.stringify(text)};
+                  el.dispatchEvent(new Event('input', { bubbles: true }));
+                } else {
+                  return { found: true, error: 'Element is not editable' };
+                }
+                return { found: true, typed: true };
+              })()
+            `);
+            if (!result.found) {
+              setIsAutomationActive(false);
+              setAutomationIndicator(null);
+              window.electronAPI.browser.sendActionResult({ requestId, success: false, error: result.error });
+              return;
+            }
+            if (result.error) {
+              setIsAutomationActive(false);
+              setAutomationIndicator(null);
+              window.electronAPI.browser.sendActionResult({ requestId, success: false, error: result.error });
+              return;
+            }
+            window.electronAPI.browser.sendActionResult({ requestId, success: true, data: { typed: true } });
+            break;
+          }
+
+          case 'extractText': {
+            const { selector } = params as { selector?: string };
+            if (selector) {
+              result = await webview.executeJavaScript(`
+                (function() {
+                  const el = document.querySelector(${JSON.stringify(selector)});
+                  if (!el) return { found: false, error: 'Element not found: ' + ${JSON.stringify(selector)} };
+                  return { found: true, text: el.textContent || '' };
+                })()
+              `);
+              if (!result.found) {
+                window.electronAPI.browser.sendActionResult({ requestId, success: false, error: result.error });
+                return;
+              }
+              window.electronAPI.browser.sendActionResult({ requestId, success: true, data: { text: result.text } });
+            } else {
+              const text = await webview.executeJavaScript('document.body.innerText');
+              window.electronAPI.browser.sendActionResult({ requestId, success: true, data: { text } });
+            }
+            break;
+          }
+
+          case 'executeScript': {
+            const { script } = params as { script: string };
+            result = await webview.executeJavaScript(script);
+            window.electronAPI.browser.sendActionResult({ requestId, success: true, data: { result } });
+            break;
+          }
+
+          case 'getPageInfo': {
+            const pageUrl = webview.getURL();
+            const title = await webview.executeJavaScript('document.title');
+            window.electronAPI.browser.sendActionResult({ requestId, success: true, data: { url: pageUrl, title } });
+            break;
+          }
+
+          default:
+            window.electronAPI.browser.sendActionResult({ requestId, success: false, error: `Unknown action: ${action}` });
+        }
+
+        // Clear automation indicator after successful action (with delay for visual feedback)
+        setTimeout(() => {
+          setIsAutomationActive(false);
+          setAutomationIndicator(null);
+        }, 500);
+      } catch (error) {
+        console.error('[BrowserPreview] Action error:', error);
+        setIsAutomationActive(false);
+        setAutomationIndicator(null);
+        window.electronAPI.browser.sendActionResult({
+          requestId,
+          success: false,
+          error: error instanceof Error ? error.message : String(error)
+        });
+      }
+    });
+
+    return () => {
+      if (unsubscribe) {
+        unsubscribe();
+      }
+    };
+  }, [session.id]);
 
   // Handle snapshot capture requests from main process
   useEffect(() => {
@@ -162,11 +446,44 @@ export default function BrowserPreview({ session }: BrowserPreviewProps) {
     if (!webview) return;
 
     // Listen for console messages (our communication channel)
-    const handleConsoleMessage = (event: Electron.ConsoleMessageEvent) => {
+    const handleConsoleMessage = async (event: Electron.ConsoleMessageEvent) => {
+      console.log('[BrowserPreview] Console message received:', event.message.slice(0, 100));
       if (event.message.startsWith('GREP_INSPECTOR:')) {
         try {
           const data = JSON.parse(event.message.replace('GREP_INSPECTOR:', ''));
-          setSelectedElement(data);
+          console.log('[BrowserPreview] Inspector data parsed:', data);
+
+          // Capture screenshot of element bounds
+          let screenshotBase64 = '';
+          if (data.boundingRect && webview) {
+            const { x, y, width, height } = data.boundingRect;
+            // Add some padding around the element
+            const padding = 10;
+            const rect = {
+              x: Math.max(0, x - padding),
+              y: Math.max(0, y - padding),
+              width: width + (padding * 2),
+              height: height + (padding * 2),
+            };
+
+            try {
+              console.log('[BrowserPreview] Capturing screenshot of rect:', rect);
+              const image = await webview.capturePage(rect as Electron.Rectangle);
+              screenshotBase64 = image.toDataURL().split(',')[1] || '';
+              console.log('[BrowserPreview] Screenshot captured, size:', screenshotBase64.length);
+            } catch (screenshotError) {
+              console.error('[BrowserPreview] Failed to capture screenshot:', screenshotError);
+            }
+          }
+
+          // Include screenshot in the element data
+          const elementWithScreenshot = {
+            ...data,
+            screenshot: screenshotBase64,
+          };
+
+          setSelectedElement(elementWithScreenshot);
+          console.log('[BrowserPreview] setSelectedElement called with screenshot');
           setInspectorActive(false);
         } catch (e) {
           console.error('Failed to parse inspector data:', e);
@@ -193,23 +510,112 @@ export default function BrowserPreview({ session }: BrowserPreviewProps) {
             console.log('[GREP] Removing existing inspector');
             existing.remove();
           }
+          const existingTooltip = document.getElementById('grep-inspector-tooltip');
+          if (existingTooltip) existingTooltip.remove();
 
-          // Create overlay
+          // Create overlay with purple theme
           const overlay = document.createElement('div');
           overlay.id = 'grep-inspector';
-          overlay.style.cssText = 'position:fixed !important;pointer-events:none !important;background:rgba(59,130,246,0.3) !important;border:2px solid #3b82f6 !important;z-index:2147483647 !important;transition:all 0.1s ease !important;display:block !important;visibility:visible !important;';
+          overlay.style.cssText = 'position:fixed !important;pointer-events:none !important;background:rgba(93,95,239,0.15) !important;border:2px solid #5D5FEF !important;z-index:2147483647 !important;transition:all 0.05s ease !important;display:block !important;visibility:visible !important;box-sizing:border-box !important;';
           document.body.appendChild(overlay);
-          console.log('[GREP] Overlay created:', overlay);
 
-          // Create info tooltip
+          // Create info tooltip - positioned ABOVE element like React DevTools
           const tooltip = document.createElement('div');
           tooltip.id = 'grep-inspector-tooltip';
-          tooltip.style.cssText = 'position:fixed !important;background:#1a1a1a !important;color:#fff !important;padding:4px 8px !important;font-size:12px !important;font-family:monospace !important;border-radius:4px !important;z-index:2147483647 !important;pointer-events:none !important;max-width:300px !important;word-break:break-all !important;display:block !important;visibility:visible !important;';
+          tooltip.style.cssText = 'position:fixed !important;background:#5D5FEF !important;color:#fff !important;padding:3px 8px !important;font-size:11px !important;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,monospace !important;border-radius:3px !important;z-index:2147483647 !important;pointer-events:none !important;white-space:nowrap !important;display:block !important;visibility:visible !important;box-shadow:0 2px 8px rgba(0,0,0,0.3) !important;';
           document.body.appendChild(tooltip);
-          console.log('[GREP] Tooltip created:', tooltip);
 
           document.body.style.cursor = 'crosshair';
-          console.log('[GREP] Cursor set to crosshair');
+
+          // Try to get React component name using DevTools hook or fiber
+          function getReactComponentName(el) {
+            // Method 1: Try React DevTools global hook (most reliable)
+            const devToolsHook = window.__REACT_DEVTOOLS_GLOBAL_HOOK__;
+            if (devToolsHook && devToolsHook.renderers) {
+              for (const [, renderer] of devToolsHook.renderers) {
+                try {
+                  // Try to get fiber from element using DevTools API
+                  if (renderer.findFiberByHostInstance) {
+                    const fiber = renderer.findFiberByHostInstance(el);
+                    if (fiber) {
+                      const name = getComponentNameFromFiber(fiber);
+                      if (name) return name;
+                    }
+                  }
+                } catch (e) {
+                  // DevTools API not available or error, try fallback
+                }
+              }
+            }
+
+            // Method 2: Direct fiber access (fallback)
+            const fiberKey = Object.keys(el).find(key =>
+              key.startsWith('__reactFiber$') ||
+              key.startsWith('__reactInternalInstance$')
+            );
+
+            if (fiberKey) {
+              const fiber = el[fiberKey];
+              return getComponentNameFromFiber(fiber);
+            }
+            return null;
+          }
+
+          // Extract component name from React fiber
+          function getComponentNameFromFiber(fiber) {
+            let current = fiber;
+            // Walk up to find the nearest named component
+            while (current) {
+              if (current.type) {
+                // Function/class component
+                if (typeof current.type === 'function') {
+                  const name = current.type.displayName || current.type.name;
+                  if (name && name !== 'Anonymous' && !name.startsWith('_') && name.length < 50) {
+                    return name;
+                  }
+                }
+                // ForwardRef: { $$typeof: Symbol(react.forward_ref), render: fn }
+                if (current.type.$$typeof?.toString().includes('forward_ref')) {
+                  const name = current.type.displayName || current.type.render?.displayName || current.type.render?.name;
+                  if (name) return name;
+                }
+                // Memo: { $$typeof: Symbol(react.memo), type: fn }
+                if (current.type.$$typeof?.toString().includes('memo')) {
+                  const innerType = current.type.type;
+                  const name = innerType?.displayName || innerType?.name;
+                  if (name) return name;
+                }
+                // Context Provider/Consumer
+                if (current.type._context) {
+                  return current.type._context.displayName || 'Context';
+                }
+              }
+              current = current.return;
+            }
+            return null;
+          }
+
+          // Get a nice display name for the element
+          function getDisplayName(el) {
+            const reactName = getReactComponentName(el);
+            const tagName = el.tagName.toLowerCase();
+
+            if (reactName) {
+              return reactName + ' · ' + tagName;
+            }
+
+            // Fallback to tag + id/class
+            if (el.id) {
+              return tagName + '#' + el.id;
+            }
+            if (el.className && typeof el.className === 'string') {
+              const mainClass = el.className.split(' ').filter(Boolean)[0];
+              if (mainClass) {
+                return tagName + '.' + mainClass;
+              }
+            }
+            return tagName;
+          }
 
           function getSelector(el) {
             const parts = [];
@@ -227,22 +633,43 @@ export default function BrowserPreview({ session }: BrowserPreviewProps) {
           }
 
           function handleMove(e) {
-            if (!e.target) return;
+            if (!e.target || e.target === document.body || e.target === document.documentElement) return;
 
             const el = e.target;
             const rect = el.getBoundingClientRect();
 
+            // Position overlay
             overlay.style.display = 'block';
-            overlay.style.top = rect.top + window.scrollY + 'px';
-            overlay.style.left = rect.left + window.scrollX + 'px';
+            overlay.style.top = rect.top + 'px';
+            overlay.style.left = rect.left + 'px';
             overlay.style.width = rect.width + 'px';
             overlay.style.height = rect.height + 'px';
 
-            const selector = getSelector(el);
+            // Get display name and position tooltip ABOVE the element
+            const displayName = getDisplayName(el);
+            tooltip.textContent = displayName;
             tooltip.style.display = 'block';
-            tooltip.textContent = selector;
-            tooltip.style.top = Math.max(10, rect.top + window.scrollY - 30) + 'px';
-            tooltip.style.left = Math.max(10, Math.min(rect.left + window.scrollX, window.innerWidth - 310)) + 'px';
+
+            // Position tooltip above element, or below if not enough space
+            const tooltipHeight = 24;
+            const spaceAbove = rect.top;
+
+            if (spaceAbove >= tooltipHeight + 4) {
+              // Position above
+              tooltip.style.top = (rect.top - tooltipHeight - 4) + 'px';
+            } else {
+              // Position below
+              tooltip.style.top = (rect.bottom + 4) + 'px';
+            }
+
+            // Align left edge with element, but keep on screen
+            const tooltipWidth = tooltip.offsetWidth || 100;
+            let leftPos = rect.left;
+            if (leftPos + tooltipWidth > window.innerWidth - 10) {
+              leftPos = window.innerWidth - tooltipWidth - 10;
+            }
+            if (leftPos < 10) leftPos = 10;
+            tooltip.style.left = leftPos + 'px';
           }
 
           function handleClick(e) {
@@ -251,18 +678,29 @@ export default function BrowserPreview({ session }: BrowserPreviewProps) {
 
             const el = e.target;
             const selector = getSelector(el);
+            const reactComponent = getReactComponentName(el);
 
             console.log('[GREP] Element clicked:', selector);
 
+            // Get bounding rect for screenshot capture
+            const rect = el.getBoundingClientRect();
             const context = {
               tagName: el.tagName.toLowerCase(),
               id: el.id || '',
               className: (typeof el.className === 'string' ? el.className : ''),
               selector: selector,
+              reactComponent: reactComponent || '',
               innerHTML: (el.innerHTML || '').slice(0, 500),
               outerHTML: (el.outerHTML || '').slice(0, 1000),
               textContent: (el.textContent || '').slice(0, 500),
               attributes: Array.from(el.attributes || []).map(a => ({ name: a.name, value: a.value })),
+              // Include bounding rect for screenshot capture
+              boundingRect: {
+                x: Math.max(0, Math.floor(rect.x)),
+                y: Math.max(0, Math.floor(rect.y)),
+                width: Math.ceil(rect.width),
+                height: Math.ceil(rect.height),
+              },
             };
 
             // Send via console.log which will be caught by console-message event
@@ -409,9 +847,10 @@ export default function BrowserPreview({ session }: BrowserPreviewProps) {
           onClick={() => setInspectorActive(true)}
           className={`p-1.5 rounded transition-colors ${
             isInspectorActive
-              ? 'bg-blue-600 text-white'
+              ? 'text-white'
               : 'hover:bg-claude-bg'
           }`}
+          style={isInspectorActive ? { backgroundColor: '#5D5FEF' } : undefined}
           title="Select element"
         >
           <Target size={16} />
@@ -434,12 +873,12 @@ export default function BrowserPreview({ session }: BrowserPreviewProps) {
 
       {/* Inspector mode banner */}
       {isInspectorActive && (
-        <div className="h-8 flex items-center justify-center gap-2 bg-blue-600 text-white text-sm">
+        <div className="h-8 flex items-center justify-center gap-2 text-white text-sm" style={{ backgroundColor: '#5D5FEF' }}>
           <Target size={14} />
           <span>Click any element to select it</span>
           <button
             onClick={cancelInspector}
-            className="ml-2 p-0.5 rounded hover:bg-blue-500"
+            className="ml-2 p-0.5 rounded hover:opacity-80"
           >
             <X size={14} />
           </button>
@@ -447,14 +886,73 @@ export default function BrowserPreview({ session }: BrowserPreviewProps) {
       )}
 
       {/* Webview */}
-      <div className="flex-1 relative">
+      <div
+        ref={containerRef}
+        className={`flex-1 relative transition-all duration-300 ${
+          isAutomationActive
+            ? 'ring-2 ring-opacity-75 shadow-[0_0_20px_rgba(93,95,239,0.4)]'
+            : ''
+        }`}
+        style={isAutomationActive ? { '--tw-ring-color': '#5D5FEF' } as React.CSSProperties : undefined}
+      >
         <webview
           ref={webviewRef}
           src={url}
           className="absolute inset-0 w-full h-full"
           partition="persist:browser"
         />
+
+        {/* Automation indicator overlay */}
+        {isAutomationActive && (
+          <div className="absolute top-2 right-2 z-50 flex items-center gap-2 text-white px-3 py-1.5 rounded-full text-xs font-medium shadow-lg animate-pulse" style={{ backgroundColor: 'rgba(93,95,239,0.9)' }}>
+            <Bot size={14} className="animate-bounce" />
+            <span>
+              {automationIndicator?.type === 'click' && `Clicking: ${automationIndicator.selector}`}
+              {automationIndicator?.type === 'type' && `Typing: "${automationIndicator.text}..."`}
+              {automationIndicator?.type === 'navigate' && 'Navigating...'}
+              {automationIndicator?.type === 'snapshot' && 'Taking snapshot...'}
+              {!automationIndicator && 'Automating...'}
+            </span>
+          </div>
+        )}
+
+        {/* Click ripple effects */}
+        {clickRipples.map(ripple => (
+          <div
+            key={ripple.id}
+            className="absolute pointer-events-none z-40"
+            style={{
+              left: ripple.x - 20,
+              top: ripple.y - 20,
+            }}
+          >
+            {/* Outer expanding ring */}
+            <div
+              className="w-10 h-10 rounded-full border-2 animate-ping"
+              style={{ borderColor: '#5D5FEF', animationDuration: '0.6s' }}
+            />
+            {/* Inner solid dot */}
+            <div
+              className="absolute inset-0 flex items-center justify-center"
+            >
+              <div className="w-3 h-3 rounded-full animate-pulse" style={{ backgroundColor: '#5D5FEF' }} />
+            </div>
+          </div>
+        ))}
       </div>
+
+      {/* Automation mode footer indicator */}
+      {isAutomationActive && (
+        <div className="h-6 flex items-center justify-center gap-2 text-white text-xs" style={{ backgroundColor: '#5D5FEF' }}>
+          <Bot size={12} />
+          <span>Browser automation in progress</span>
+          <div className="flex gap-1 ml-2">
+            <div className="w-1.5 h-1.5 rounded-full bg-white animate-bounce" style={{ animationDelay: '0ms' }} />
+            <div className="w-1.5 h-1.5 rounded-full bg-white animate-bounce" style={{ animationDelay: '150ms' }} />
+            <div className="w-1.5 h-1.5 rounded-full bg-white animate-bounce" style={{ animationDelay: '300ms' }} />
+          </div>
+        </div>
+      )}
     </div>
   );
 }

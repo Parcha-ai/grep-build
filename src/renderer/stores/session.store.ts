@@ -10,7 +10,7 @@ interface SystemInfo {
 }
 
 // Permission modes from Claude Agent SDK
-export type PermissionMode = 'default' | 'acceptEdits' | 'plan';
+export type PermissionMode = 'default' | 'acceptEdits' | 'bypassPermissions' | 'plan' | 'dontAsk';
 
 // Thinking modes: off (0), thinking (10k tokens), ultrathink (100k tokens)
 export type ThinkingMode = 'off' | 'thinking' | 'ultrathink';
@@ -22,6 +22,13 @@ export interface StreamEvent {
   timestamp: number;
   content?: string;
   toolCall?: ToolCall;
+}
+
+// Model info type
+export interface ModelInfo {
+  id: string;
+  name: string;
+  description: string;
 }
 
 interface SessionState {
@@ -36,6 +43,8 @@ interface SessionState {
   currentSystemInfo: Record<string, SystemInfo | null>;
   permissionMode: Record<string, PermissionMode>;
   thinkingMode: Record<string, ThinkingMode>;
+  selectedModel: Record<string, string>;
+  availableModels: ModelInfo[];
   pendingPermission: Record<string, PermissionRequest | null>;
   pendingQuestion: Record<string, QuestionRequest | null>;
   messageQueue: Record<string, Array<{
@@ -72,6 +81,8 @@ interface SessionState {
   cyclePermissionMode: (sessionId: string) => void;
   setThinkingMode: (sessionId: string, mode: ThinkingMode) => void;
   cycleThinkingMode: (sessionId: string) => void;
+  setSelectedModel: (sessionId: string, model: string) => void;
+  loadAvailableModels: () => Promise<void>;
   sendMessage: (sessionId: string, message: string, attachments?: unknown[]) => Promise<void>;
   loadMessages: (sessionId: string) => Promise<void>;
   subscribeToClaude: () => () => void;
@@ -102,6 +113,8 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   currentSystemInfo: {},
   permissionMode: {},
   thinkingMode: {},
+  selectedModel: {},
+  availableModels: [],
   pendingPermission: {},
   pendingQuestion: {},
   messageQueue: {},
@@ -278,20 +291,39 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   },
 
   addToolCall: (sessionId, toolCall) => {
-    set((state) => ({
-      currentToolCalls: {
-        ...state.currentToolCalls,
-        [sessionId]: [...(state.currentToolCalls[sessionId] || []), toolCall],
-      },
-      // Add to chronological stream
-      streamEvents: {
-        ...state.streamEvents,
-        [sessionId]: [
-          ...(state.streamEvents[sessionId] || []),
-          { id: toolCall.id, type: 'tool', timestamp: Date.now(), toolCall },
-        ],
-      },
-    }));
+    set((state) => {
+      const existingToolCalls = state.currentToolCalls[sessionId] || [];
+      const existingIndex = existingToolCalls.findIndex(tc => tc.id === toolCall.id);
+
+      // If tool call already exists, update it instead of adding duplicate
+      if (existingIndex !== -1) {
+        const updatedToolCalls = [...existingToolCalls];
+        updatedToolCalls[existingIndex] = { ...existingToolCalls[existingIndex], ...toolCall };
+        return {
+          currentToolCalls: {
+            ...state.currentToolCalls,
+            [sessionId]: updatedToolCalls,
+          },
+          // Don't add duplicate to streamEvents, just keep existing
+          streamEvents: state.streamEvents,
+        };
+      }
+
+      // New tool call - add to both arrays
+      return {
+        currentToolCalls: {
+          ...state.currentToolCalls,
+          [sessionId]: [...existingToolCalls, toolCall],
+        },
+        streamEvents: {
+          ...state.streamEvents,
+          [sessionId]: [
+            ...(state.streamEvents[sessionId] || []),
+            { id: toolCall.id, type: 'tool', timestamp: Date.now(), toolCall },
+          ],
+        },
+      };
+    });
   },
 
   updateToolCall: (sessionId, toolCallId, updates) => {
@@ -410,7 +442,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   },
 
   cyclePermissionMode: (sessionId) => {
-    const modes: PermissionMode[] = ['acceptEdits', 'default', 'plan'];
+    const modes: PermissionMode[] = ['acceptEdits', 'default', 'bypassPermissions', 'plan', 'dontAsk'];
     set((state) => {
       const currentMode = state.permissionMode[sessionId] || 'acceptEdits';
       const currentIndex = modes.indexOf(currentMode);
@@ -448,9 +480,35 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     });
   },
 
+  setSelectedModel: (sessionId, model) => {
+    set((state) => ({
+      selectedModel: {
+        ...state.selectedModel,
+        [sessionId]: model,
+      },
+    }));
+  },
+
+  loadAvailableModels: async () => {
+    if (!hasElectronAPI) return;
+    try {
+      const models = await window.electronAPI.claude.getModels();
+      set({ availableModels: models });
+    } catch (error) {
+      console.error('[SessionStore] Failed to load available models:', error);
+    }
+  },
+
   sendMessage: async (sessionId, message, attachments) => {
     if (!hasElectronAPI) return;
     const state = get();
+
+    console.log('[SessionStore] sendMessage called with attachments:', attachments?.length || 0);
+    if (attachments) {
+      attachments.forEach((a: any, i: number) => {
+        console.log(`[SessionStore] Attachment ${i}: type=${a?.type}, name=${a?.name}, content length=${a?.content?.length || 0}`);
+      });
+    }
 
     // If already streaming, queue the message
     if (state.isStreaming[sessionId]) {
@@ -474,9 +532,10 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       return;
     }
 
-    const { addMessage, setStreaming, permissionMode, thinkingMode } = state;
+    const { addMessage, setStreaming, permissionMode, thinkingMode, selectedModel } = state;
     const mode = permissionMode[sessionId] || 'acceptEdits';
     const thinking = thinkingMode[sessionId] || 'thinking';
+    const model = selectedModel[sessionId]; // undefined = use default
 
     // Update session's updatedAt timestamp for recent activity
     set((state) => ({
@@ -500,7 +559,8 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     setStreaming(sessionId, true);
 
     try {
-      await window.electronAPI.claude.sendMessage(sessionId, message, attachments, mode, thinking);
+      console.log('[SessionStore] Calling electronAPI.claude.sendMessage with', attachments?.length || 0, 'attachments, model:', model);
+      await window.electronAPI.claude.sendMessage(sessionId, message, attachments, mode, thinking, model);
       // Update timestamp in backend as well
       window.electronAPI.sessions.update(sessionId, { updatedAt: new Date() });
     } catch (error) {
@@ -539,13 +599,18 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     });
 
     const unsubToolCall = window.electronAPI.claude.onToolCall(({ sessionId, toolCall }) => {
-      addToolCall(sessionId, toolCall as ToolCall);
+      const tc = toolCall as ToolCall;
+      console.log('[SessionStore] onToolCall received:', tc?.name, 'input:', JSON.stringify(tc?.input || {}));
+      addToolCall(sessionId, tc);
     });
 
     const unsubToolResult = window.electronAPI.claude.onToolResult(({ sessionId, toolCall }) => {
       if (!toolCall) return;
       const tc = toolCall as ToolCall;
+      console.log('[SessionStore] onToolResult received:', tc.name, 'input:', JSON.stringify(tc.input || {}));
+      // Update all fields that might have changed, including input which may have been streamed
       updateToolCall(sessionId, tc.id, {
+        input: tc.input,
         status: tc.status,
         result: tc.result,
         completedAt: tc.completedAt,
