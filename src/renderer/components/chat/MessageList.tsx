@@ -1,4 +1,5 @@
 import React from 'react';
+import ReactMarkdown from 'react-markdown';
 import MessageBubble from './MessageBubble';
 import ToolCallCard from './ToolCallCard';
 import type { ChatMessage, ToolCall } from '../../../shared/types';
@@ -85,8 +86,41 @@ export default function MessageList({
               );
             } else if (event.type === 'text' && event.content) {
               return (
-                <div key={event.id} className="text-claude-text font-mono">
-                  {event.content}
+                <div key={event.id} className="prose prose-invert max-w-none font-mono text-claude-text">
+                  <ReactMarkdown
+                    components={{
+                      code({ className, children, ...props }) {
+                        const match = /language-(\w+)/.exec(className || '');
+                        const isBlock = String(children).includes('\n') || match;
+                        if (isBlock) {
+                          return (
+                            <div className="overflow-hidden border border-claude-border my-2" style={{ borderRadius: 0 }}>
+                              {match && (
+                                <div className="px-2 py-1 text-xs font-bold font-mono bg-claude-surface border-b border-claude-border text-claude-text-secondary" style={{ letterSpacing: '0.05em' }}>
+                                  {match[1].toUpperCase()}
+                                </div>
+                              )}
+                              <pre className="p-3 bg-claude-bg m-0 whitespace-pre-wrap break-words">
+                                <code className="text-sm font-mono text-claude-text" {...props}>{children}</code>
+                              </pre>
+                            </div>
+                          );
+                        }
+                        return <code className="px-1 py-0.5 text-sm font-mono bg-claude-surface text-claude-accent" style={{ borderRadius: 0 }} {...props}>{children}</code>;
+                      },
+                      p({ children }) { return <p className="my-1 leading-relaxed">{children}</p>; },
+                      ul({ children }) { return <ul className="my-1 ml-6 pl-0 list-disc list-outside">{children}</ul>; },
+                      ol({ children }) { return <ol className="my-1 ml-6 pl-0 list-decimal list-outside">{children}</ol>; },
+                      li({ children }) { return <li className="my-0.5 ml-0 pl-1">{children}</li>; },
+                      h1({ children }) { return <h1 className="text-lg font-bold mt-3 mb-1">{children}</h1>; },
+                      h2({ children }) { return <h2 className="text-base font-bold mt-2 mb-1">{children}</h2>; },
+                      h3({ children }) { return <h3 className="text-sm font-bold mt-2 mb-1">{children}</h3>; },
+                      strong({ children }) { return <strong className="font-bold text-claude-text">{children}</strong>; },
+                      em({ children }) { return <em className="italic">{children}</em>; },
+                    }}
+                  >
+                    {event.content}
+                  </ReactMarkdown>
                 </div>
               );
             }
