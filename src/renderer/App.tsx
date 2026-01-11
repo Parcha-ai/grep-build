@@ -10,6 +10,7 @@ import StatusBar from './components/layout/StatusBar';
 import LoginScreen from './components/auth/LoginScreen';
 import SettingsDialog from './components/settings/SettingsDialog';
 import QuickSearch from './components/editor/QuickSearch';
+import SessionSwitcher from './components/session/SessionSwitcher';
 import { Terminal, Globe, PanelRight, Settings, PanelLeftClose, Monitor, AlertTriangle, Package } from 'lucide-react';
 
 // Check if we're running in Electron (has electronAPI) or browser preview mode
@@ -273,6 +274,9 @@ function ElectronApp() {
 
       {/* Quick Search (Cmd+K) */}
       <QuickSearch />
+
+      {/* Session Switcher (Ctrl+Tab) */}
+      <SessionSwitcher />
     </div>
   );
 }
