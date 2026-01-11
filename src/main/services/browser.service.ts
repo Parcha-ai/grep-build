@@ -40,6 +40,7 @@ export interface NetworkRequest {
 
 /**
  * Service for browser automation using Chrome DevTools Protocol
+ * Supports multiple simultaneous sessions with independent browsers
  */
 export class BrowserService {
   private webviewSnapshots = new Map<string, BrowserSnapshot>();
@@ -47,8 +48,12 @@ export class BrowserService {
 
   // Map sessionId to webContentsId for CDP access
   private sessionWebContents = new Map<string, number>();
+  // Reverse map: webContentsId to sessionId (for routing debugger events)
+  private webContentsToSession = new Map<number, string>();
   // Track attached debuggers
   private attachedDebuggers = new Set<number>();
+  // Track which webContents have debugger event listeners attached
+  private debuggerListenersAttached = new Set<number>();
 
   // Console and network capture storage (keyed by sessionId)
   private consoleLogs = new Map<string, ConsoleMessage[]>();
@@ -70,16 +75,29 @@ export class BrowserService {
     // Listen for webview registration from renderer
     ipcMain.on('browser:register-webview', (_event, data: { sessionId: string; webContentsId: number }) => {
       console.log('[Browser Service] Registering webview:', data.sessionId, '->', data.webContentsId);
+      // Clean up any existing mapping for this session (in case of re-registration)
+      const oldWebContentsId = this.sessionWebContents.get(data.sessionId);
+      if (oldWebContentsId && oldWebContentsId !== data.webContentsId) {
+        this.webContentsToSession.delete(oldWebContentsId);
+      }
+      // Set up new mappings
       this.sessionWebContents.set(data.sessionId, data.webContentsId);
+      this.webContentsToSession.set(data.webContentsId, data.sessionId);
+      console.log('[Browser Service] Active sessions with browsers:', Array.from(this.sessionWebContents.keys()));
     });
 
     // Listen for webview unregistration
     ipcMain.on('browser:unregister-webview', (_event, data: { sessionId: string }) => {
       const webContentsId = this.sessionWebContents.get(data.sessionId);
+      console.log('[Browser Service] Unregistering webview:', data.sessionId, '-> webContentsId:', webContentsId);
       if (webContentsId) {
         this.detachDebugger(webContentsId);
         this.sessionWebContents.delete(data.sessionId);
+        this.webContentsToSession.delete(webContentsId);
+        // Clean up enabled domains for this session
+        this.enabledDomains.delete(data.sessionId);
       }
+      console.log('[Browser Service] Remaining sessions with browsers:', Array.from(this.sessionWebContents.keys()));
     });
   }
 
@@ -110,7 +128,16 @@ export class BrowserService {
 
       // Clean up when webContents is destroyed
       wc.once('destroyed', () => {
+        console.log('[Browser Service] WebContents destroyed:', wc.id);
         this.attachedDebuggers.delete(wc.id);
+        this.debuggerListenersAttached.delete(wc.id);
+        // Clean up reverse mapping
+        const sessionId = this.webContentsToSession.get(wc.id);
+        if (sessionId) {
+          this.sessionWebContents.delete(sessionId);
+          this.webContentsToSession.delete(wc.id);
+          this.enabledDomains.delete(sessionId);
+        }
       });
     } catch (err) {
       // Already attached or devtools open
@@ -446,6 +473,130 @@ export class BrowserService {
   }
 
   /**
+   * Set up debugger event listener for a webContents (only once per webContents)
+   * Routes events to the correct session based on webContentsId -> sessionId mapping
+   */
+  private setupDebuggerEventListener(wc: Electron.WebContents): void {
+    if (this.debuggerListenersAttached.has(wc.id)) {
+      return;
+    }
+
+    this.debuggerListenersAttached.add(wc.id);
+    console.log('[Browser Service] Setting up debugger event listener for webContents:', wc.id);
+
+    wc.debugger.on('message', (_event, method, params) => {
+      // Get the sessionId for this webContents
+      const sessionId = this.webContentsToSession.get(wc.id);
+      if (!sessionId) {
+        return;
+      }
+
+      // Handle Runtime (console) events
+      if (method === 'Runtime.consoleAPICalled') {
+        const logs = this.consoleLogs.get(sessionId) || [];
+        const args = (params.args || []).map((arg: any) => {
+          if (arg.type === 'string') return arg.value;
+          if (arg.type === 'number') return String(arg.value);
+          if (arg.type === 'boolean') return String(arg.value);
+          if (arg.type === 'undefined') return 'undefined';
+          if (arg.type === 'object' && arg.preview) {
+            return JSON.stringify(arg.preview.properties?.reduce((acc: any, p: any) => {
+              acc[p.name] = p.value;
+              return acc;
+            }, {}) || arg.description);
+          }
+          return arg.description || String(arg.value);
+        });
+
+        logs.push({
+          type: params.type as ConsoleMessage['type'],
+          text: args.join(' '),
+          timestamp: new Date(),
+          url: params.stackTrace?.callFrames?.[0]?.url,
+          lineNumber: params.stackTrace?.callFrames?.[0]?.lineNumber,
+          stackTrace: params.stackTrace?.callFrames?.map((f: any) =>
+            `  at ${f.functionName || '(anonymous)'} (${f.url}:${f.lineNumber}:${f.columnNumber})`
+          ).join('\n'),
+        });
+
+        // Keep only last 500 messages
+        if (logs.length > 500) {
+          logs.splice(0, logs.length - 500);
+        }
+        this.consoleLogs.set(sessionId, logs);
+      }
+
+      if (method === 'Runtime.exceptionThrown') {
+        const logs = this.consoleLogs.get(sessionId) || [];
+        const exception = params.exceptionDetails;
+        logs.push({
+          type: 'error',
+          text: exception.text + (exception.exception?.description ? '\n' + exception.exception.description : ''),
+          timestamp: new Date(),
+          url: exception.url,
+          lineNumber: exception.lineNumber,
+          stackTrace: exception.stackTrace?.callFrames?.map((f: any) =>
+            `  at ${f.functionName || '(anonymous)'} (${f.url}:${f.lineNumber}:${f.columnNumber})`
+          ).join('\n'),
+        });
+        this.consoleLogs.set(sessionId, logs);
+      }
+
+      // Handle Network events
+      const requests = this.networkRequests.get(sessionId);
+      if (requests) {
+        if (method === 'Network.requestWillBeSent') {
+          requests.set(params.requestId, {
+            requestId: params.requestId,
+            url: params.request.url,
+            method: params.request.method,
+            type: params.type || 'Other',
+            timestamp: new Date(),
+            requestHeaders: params.request.headers,
+            timing: {
+              started: Date.now(),
+            },
+          });
+        }
+
+        if (method === 'Network.responseReceived') {
+          const req = requests.get(params.requestId);
+          if (req) {
+            req.status = params.response.status;
+            req.statusText = params.response.statusText;
+            req.responseHeaders = params.response.headers;
+            req.type = params.type || req.type;
+          }
+        }
+
+        if (method === 'Network.loadingFinished') {
+          const req = requests.get(params.requestId);
+          if (req && req.timing) {
+            req.timing.finished = Date.now();
+            req.timing.duration = req.timing.finished - req.timing.started;
+            req.responseSize = params.encodedDataLength;
+          }
+        }
+
+        if (method === 'Network.loadingFailed') {
+          const req = requests.get(params.requestId);
+          if (req) {
+            req.status = 0;
+            req.statusText = params.errorText || 'Failed';
+          }
+        }
+
+        // Keep only last 200 requests
+        if (requests.size > 200) {
+          const entries = Array.from(requests.entries());
+          const toDelete = entries.slice(0, entries.length - 200);
+          toDelete.forEach(([key]) => requests.delete(key));
+        }
+      }
+    });
+  }
+
+  /**
    * Enable console capture via CDP Runtime domain
    */
   async enableConsoleCapture(sessionId: string): Promise<{ success: boolean; error?: string }> {
@@ -468,61 +619,11 @@ export class BrowserService {
 
       await this.attachDebugger(wc);
 
+      // Set up event listener (only once per webContents)
+      this.setupDebuggerEventListener(wc);
+
       // Enable Runtime domain
       await wc.debugger.sendCommand('Runtime.enable');
-
-      // Listen for console API calls
-      wc.debugger.on('message', (_event, method, params) => {
-        if (method === 'Runtime.consoleAPICalled') {
-          const logs = this.consoleLogs.get(sessionId) || [];
-          const args = (params.args || []).map((arg: any) => {
-            if (arg.type === 'string') return arg.value;
-            if (arg.type === 'number') return String(arg.value);
-            if (arg.type === 'boolean') return String(arg.value);
-            if (arg.type === 'undefined') return 'undefined';
-            if (arg.type === 'object' && arg.preview) {
-              return JSON.stringify(arg.preview.properties?.reduce((acc: any, p: any) => {
-                acc[p.name] = p.value;
-                return acc;
-              }, {}) || arg.description);
-            }
-            return arg.description || String(arg.value);
-          });
-
-          logs.push({
-            type: params.type as ConsoleMessage['type'],
-            text: args.join(' '),
-            timestamp: new Date(),
-            url: params.stackTrace?.callFrames?.[0]?.url,
-            lineNumber: params.stackTrace?.callFrames?.[0]?.lineNumber,
-            stackTrace: params.stackTrace?.callFrames?.map((f: any) =>
-              `  at ${f.functionName || '(anonymous)'} (${f.url}:${f.lineNumber}:${f.columnNumber})`
-            ).join('\n'),
-          });
-
-          // Keep only last 500 messages
-          if (logs.length > 500) {
-            logs.splice(0, logs.length - 500);
-          }
-          this.consoleLogs.set(sessionId, logs);
-        }
-
-        if (method === 'Runtime.exceptionThrown') {
-          const logs = this.consoleLogs.get(sessionId) || [];
-          const exception = params.exceptionDetails;
-          logs.push({
-            type: 'error',
-            text: exception.text + (exception.exception?.description ? '\n' + exception.exception.description : ''),
-            timestamp: new Date(),
-            url: exception.url,
-            lineNumber: exception.lineNumber,
-            stackTrace: exception.stackTrace?.callFrames?.map((f: any) =>
-              `  at ${f.functionName || '(anonymous)'} (${f.url}:${f.lineNumber}:${f.columnNumber})`
-            ).join('\n'),
-          });
-          this.consoleLogs.set(sessionId, logs);
-        }
-      });
 
       domains.add('Runtime');
       this.enabledDomains.set(sessionId, domains);
@@ -586,62 +687,11 @@ export class BrowserService {
 
       await this.attachDebugger(wc);
 
+      // Set up event listener (only once per webContents) - handles both console and network events
+      this.setupDebuggerEventListener(wc);
+
       // Enable Network domain
       await wc.debugger.sendCommand('Network.enable');
-
-      // Listen for network events
-      wc.debugger.on('message', (_event, method, params) => {
-        const requests = this.networkRequests.get(sessionId);
-        if (!requests) return;
-
-        if (method === 'Network.requestWillBeSent') {
-          requests.set(params.requestId, {
-            requestId: params.requestId,
-            url: params.request.url,
-            method: params.request.method,
-            type: params.type || 'Other',
-            timestamp: new Date(),
-            requestHeaders: params.request.headers,
-            timing: {
-              started: Date.now(),
-            },
-          });
-        }
-
-        if (method === 'Network.responseReceived') {
-          const req = requests.get(params.requestId);
-          if (req) {
-            req.status = params.response.status;
-            req.statusText = params.response.statusText;
-            req.responseHeaders = params.response.headers;
-            req.type = params.type || req.type;
-          }
-        }
-
-        if (method === 'Network.loadingFinished') {
-          const req = requests.get(params.requestId);
-          if (req && req.timing) {
-            req.timing.finished = Date.now();
-            req.timing.duration = req.timing.finished - req.timing.started;
-            req.responseSize = params.encodedDataLength;
-          }
-        }
-
-        if (method === 'Network.loadingFailed') {
-          const req = requests.get(params.requestId);
-          if (req) {
-            req.status = 0;
-            req.statusText = params.errorText || 'Failed';
-          }
-        }
-
-        // Keep only last 200 requests
-        if (requests.size > 200) {
-          const entries = Array.from(requests.entries());
-          const toDelete = entries.slice(0, entries.length - 200);
-          toDelete.forEach(([key]) => requests.delete(key));
-        }
-      });
 
       domains.add('Network');
       this.enabledDomains.set(sessionId, domains);

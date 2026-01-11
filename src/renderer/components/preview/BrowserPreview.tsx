@@ -24,9 +24,10 @@ interface AutomationIndicator {
 
 interface BrowserPreviewProps {
   session: Session;
+  isVisible?: boolean; // Controls visibility without unmounting
 }
 
-export default function BrowserPreview({ session }: BrowserPreviewProps) {
+export default function BrowserPreview({ session, isVisible = true }: BrowserPreviewProps) {
   const webviewRef = useRef<Electron.WebviewTag>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const { updateSession } = useSessionStore();
@@ -44,24 +45,27 @@ export default function BrowserPreview({ session }: BrowserPreviewProps) {
   const [automationIndicator, setAutomationIndicator] = useState<AutomationIndicator | null>(null);
   const [clickRipples, setClickRipples] = useState<Array<{ id: number; x: number; y: number }>>([]);
 
-  const { isInspectorActive, setInspectorActive, setSelectedElement } = useUIStore();
+  // Use per-session inspector state for multi-session support
+  const {
+    sessionInspectorActive,
+    setSessionInspectorActive,
+    sessionSelectedElement,
+    setSessionSelectedElement,
+  } = useUIStore();
 
-  // Sync URL when session changes (switching between sessions)
+  // Get this session's inspector state
+  const isInspectorActive = sessionInspectorActive[session.id] || false;
+  const setInspectorActive = (active: boolean) => setSessionInspectorActive(session.id, active);
+  const setSelectedElement = (element: unknown | null) => setSessionSelectedElement(session.id, element);
+
+  // Initialize URL on mount (each BrowserPreview is now dedicated to one session)
   useEffect(() => {
     const newUrl = getSessionUrl();
-    console.log('[BrowserPreview] Session changed, restoring URL:', session.id, '->', newUrl);
+    console.log('[BrowserPreview] Initializing browser for session:', session.id, '->', newUrl);
     setUrl(newUrl);
     setInputUrl(newUrl);
-    // Reset navigation state for new session
-    setCanGoBack(false);
-    setCanGoForward(false);
-    // Reset automation/inspector state
-    setIsAutomationActive(false);
-    setAutomationIndicator(null);
-    setClickRipples([]);
-    setInspectorActive(false);
-    setSelectedElement(null);
-  }, [session.id, setInspectorActive, setSelectedElement]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // Only run once on mount - session won't change for this instance
 
   // Register webview with main process for CDP access
   useEffect(() => {
@@ -793,14 +797,20 @@ export default function BrowserPreview({ session }: BrowserPreviewProps) {
 
   if (session.status !== 'running') {
     return (
-      <div className="h-full flex items-center justify-center bg-claude-bg text-claude-text-secondary">
+      <div
+        className="h-full flex items-center justify-center bg-claude-bg text-claude-text-secondary"
+        style={{ display: isVisible ? 'flex' : 'none' }}
+      >
         <p>Start the session to preview</p>
       </div>
     );
   }
 
   return (
-    <div className="h-full flex flex-col bg-claude-bg">
+    <div
+      className="h-full flex flex-col bg-claude-bg"
+      style={{ display: isVisible ? 'flex' : 'none' }}
+    >
       {/* Toolbar */}
       <div className="h-10 flex items-center gap-2 px-2 bg-claude-surface border-b border-claude-border">
         {/* Navigation */}
@@ -899,7 +909,7 @@ export default function BrowserPreview({ session }: BrowserPreviewProps) {
           ref={webviewRef}
           src={url}
           className="absolute inset-0 w-full h-full"
-          partition="persist:browser"
+          partition={`persist:browser-${session.id}`}
         />
 
         {/* Automation indicator overlay */}

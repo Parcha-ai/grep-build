@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useEffect } from 'react';
+import React, { useState, useCallback, useEffect, useMemo } from 'react';
 import { useSessionStore } from '../../stores/session.store';
 import { useUIStore } from '../../stores/ui.store';
 import { useEditorStore } from '../../stores/editor.store';
@@ -25,6 +25,10 @@ export default function MainContent() {
     setTerminalHeight,
     splitRatio,
     cycleSplitRatio,
+    // Multi-session browser support
+    sessionBrowsersEnabled,
+    enableSessionBrowser,
+    disableSessionBrowser,
   } = useUIStore();
   const { isEditorOpen, closeEditor } = useEditorStore();
   const [isTerminalResizing, setIsTerminalResizing] = useState(false);
@@ -39,6 +43,18 @@ export default function MainContent() {
   }, [isTerminalPanelOpen, terminalHeight, setTerminalHeight]);
 
   const activeSession = sessions.find((s) => s.id === activeSessionId);
+
+  // Auto-enable browser for active session when browser panel is opened
+  useEffect(() => {
+    if (isBrowserPanelOpen && activeSessionId && !sessionBrowsersEnabled[activeSessionId]) {
+      enableSessionBrowser(activeSessionId);
+    }
+  }, [isBrowserPanelOpen, activeSessionId, sessionBrowsersEnabled, enableSessionBrowser]);
+
+  // Get all sessions that have browsers enabled (for rendering multiple BrowserPreview instances)
+  const sessionsWithBrowsers = useMemo(() => {
+    return sessions.filter(s => sessionBrowsersEnabled[s.id]);
+  }, [sessions, sessionBrowsersEnabled]);
 
   // Calculate flex basis percentages based on split ratio
   const getFlexBasis = () => {
@@ -188,11 +204,18 @@ export default function MainContent() {
               className="flex flex-col overflow-hidden bg-claude-surface transition-all duration-200"
               style={{ flexBasis: flexBasis.side, flexShrink: 0, flexGrow: 0 }}
             >
-              {/* Browser panel */}
+              {/* Browser panel - renders multiple BrowserPreview instances for multi-session support */}
               {isBrowserPanelOpen && (
                 <div className={`flex flex-col overflow-hidden ${isGitPanelOpen ? 'flex-1' : 'h-full'}`}>
                   <div className="h-10 flex items-center justify-between px-3 border-b border-claude-border bg-claude-surface">
-                    <span className="text-sm font-medium">Browser Preview</span>
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-medium">Browser Preview</span>
+                      {sessionsWithBrowsers.length > 1 && (
+                        <span className="text-xs text-claude-text-secondary">
+                          ({sessionsWithBrowsers.length} browsers)
+                        </span>
+                      )}
+                    </div>
                     <button
                       onClick={toggleBrowserPanel}
                       className="p-1 rounded hover:bg-claude-bg text-claude-text-secondary hover:text-claude-text"
@@ -200,8 +223,25 @@ export default function MainContent() {
                       <X size={14} />
                     </button>
                   </div>
-                  <div className="flex-1 overflow-hidden">
-                    <BrowserPreview session={activeSession} />
+                  <div className="flex-1 overflow-hidden relative">
+                    {/* Render a BrowserPreview for each session with browser enabled */}
+                    {/* Only the active session's browser is visible, others stay mounted but hidden */}
+                    {sessionsWithBrowsers.map(session => (
+                      <div
+                        key={session.id}
+                        className="absolute inset-0"
+                        style={{ display: session.id === activeSessionId ? 'block' : 'none' }}
+                      >
+                        <BrowserPreview
+                          session={session}
+                          isVisible={session.id === activeSessionId}
+                        />
+                      </div>
+                    ))}
+                    {/* Fallback for active session if not in sessionsWithBrowsers yet */}
+                    {activeSession && !sessionBrowsersEnabled[activeSession.id] && (
+                      <BrowserPreview session={activeSession} isVisible={true} />
+                    )}
                   </div>
                 </div>
               )}
