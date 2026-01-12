@@ -14,6 +14,40 @@ import { registerRealtimeHandlers } from './ipc/realtime.ipc';
 import { registerExtensionHandlers } from './ipc/extension.ipc';
 import { registerBrowserHandlers } from './ipc/browser.ipc';
 
+// Global error handlers to prevent crashes from broken pipes and other uncaught errors
+process.on('uncaughtException', (error: Error) => {
+  // EPIPE errors occur when stdout/stderr is closed (e.g., terminal closed during development)
+  // These are safe to ignore as they don't affect app functionality
+  if (error.message.includes('EPIPE')) {
+    // Silently ignore broken pipe errors
+    return;
+  }
+
+  // Log other uncaught exceptions
+  console.error('[Uncaught Exception]', error);
+});
+
+process.on('unhandledRejection', (reason: any) => {
+  console.error('[Unhandled Rejection]', reason);
+});
+
+// Prevent stdout/stderr errors from crashing the app
+if (process.stdout) {
+  process.stdout.on('error', (error: Error) => {
+    if (!error.message.includes('EPIPE')) {
+      console.error('[stdout error]', error);
+    }
+  });
+}
+
+if (process.stderr) {
+  process.stderr.on('error', (error: Error) => {
+    if (!error.message.includes('EPIPE')) {
+      console.error('[stderr error]', error);
+    }
+  });
+}
+
 // Handle creating/removing shortcuts on Windows when installing/uninstalling.
 if (require('electron-squirrel-startup')) {
   app.quit();
