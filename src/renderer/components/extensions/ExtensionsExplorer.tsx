@@ -104,7 +104,7 @@ export default function ExtensionsExplorer({ sessionId, projectPath }: Extension
         }`}
       >
         <div className="flex items-center gap-2">
-          <span className="text-xs font-mono text-claude-text">{skill.name}</span>
+          <span className="text-xs font-mono text-purple-400">/{skill.name}</span>
           {skill.scope === 'user' ? (
             <User size={10} className="text-claude-text-secondary" />
           ) : (
@@ -227,7 +227,7 @@ export default function ExtensionsExplorer({ sessionId, projectPath }: Extension
             <p className="text-xs text-claude-text font-mono">
               {isCommand && `Type /${selectedItem.name} in the input to use this command`}
               {isAgent && `Type @agent-${selectedItem.name} in your message to invoke this agent`}
-              {!isCommand && !isAgent && `This skill is automatically applied by Claude when relevant`}
+              {!isCommand && !isAgent && `Type /${selectedItem.name} to invoke this skill`}
             </p>
           </div>
         </div>
