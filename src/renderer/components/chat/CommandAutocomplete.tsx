@@ -30,16 +30,25 @@ export default function CommandAutocomplete({
     const lowerQuery = query.toLowerCase();
 
     if (type === 'command') {
-      return commands
+      // Show both commands AND skills for slash notation (combined system)
+      const matchedCommands = commands
         .filter(cmd => cmd.name.toLowerCase().includes(lowerQuery))
-        .slice(0, 10);
+        .map(cmd => ({ ...cmd, itemType: 'command' as const }));
+
+      const matchedSkills = skills
+        .filter(skill => skill.name.toLowerCase().includes(lowerQuery))
+        .map(skill => ({ ...skill, itemType: 'skill' as const }));
+
+      return [...matchedCommands, ...matchedSkills].slice(0, 10);
     } else if (type === 'skill') {
       return skills
         .filter(skill => skill.name.toLowerCase().includes(lowerQuery))
+        .map(skill => ({ ...skill, itemType: 'skill' as const }))
         .slice(0, 10);
     } else {
       return agents
         .filter(agent => agent.name.toLowerCase().includes(lowerQuery))
+        .map(agent => ({ ...agent, itemType: 'agent' as const }))
         .slice(0, 10);
     }
   }, [query, type, commands, skills, agents]);
@@ -96,11 +105,13 @@ export default function CommandAutocomplete({
     >
       {filteredItems.map((item, index) => {
         const isSelected = index === selectedIndex;
-        const Icon = type === 'command' ? Terminal : type === 'skill' ? Sparkles : Bot;
+        // Use itemType to determine icon for combined command/skill lists
+        const itemType = (item as any).itemType || type;
+        const Icon = itemType === 'command' ? Terminal : itemType === 'skill' ? Sparkles : Bot;
 
         return (
           <button
-            key={`${type}-${item.name}`}
+            key={`${itemType}-${item.name}`}
             className={`w-full px-3 py-2 text-left hover:bg-claude-accent/20 transition-colors flex items-start gap-2 ${
               isSelected ? 'bg-claude-accent/20' : ''
             }`}
@@ -110,10 +121,10 @@ export default function CommandAutocomplete({
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-2">
                 <span className="font-mono text-sm text-claude-text">
-                  {type === 'command' ? `/${item.name}` : type === 'skill' ? item.name : `@${item.name}`}
+                  {itemType === 'agent' ? `@agent-${item.name}` : `/${item.name}`}
                 </span>
                 <span className="text-xs text-claude-text-secondary">
-                  ({item.scope})
+                  ({item.scope || itemType})
                 </span>
               </div>
               {item.description && (
