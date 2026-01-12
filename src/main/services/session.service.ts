@@ -251,19 +251,29 @@ export class SessionService extends EventEmitter {
               const content = await fs.readFile(transcriptPath, 'utf-8');
               const lines = content.split('\n').filter(l => l.trim());
 
-              // Parse lines to find cwd and sessionId
+              // Parse lines to find cwd, sessionId, and count meaningful messages
               let sessionCwd: string | null = null;
               let transcriptSessionId: string | null = null;
+              let messageCount = 0;
 
-              for (const line of lines.slice(0, 50)) {
+              for (const line of lines) {
                 try {
                   const parsed = JSON.parse(line);
                   if (parsed.cwd) sessionCwd = parsed.cwd;
                   if (parsed.sessionId) transcriptSessionId = parsed.sessionId;
-                  if (sessionCwd && transcriptSessionId) break;
+                  // Count user and assistant messages
+                  if (parsed.type === 'user' || parsed.type === 'assistant') {
+                    messageCount++;
+                  }
                 } catch {
                   // Not valid JSON, skip
                 }
+              }
+
+              // Skip transcripts with fewer than 4 messages (2 complete exchanges)
+              if (messageCount < 4) {
+                console.log('[Session Discovery] Skipping minimal transcript:', jsonlFile, `(${messageCount} messages)`);
+                continue;
               }
 
               // Use the cached valid path if the transcript's cwd doesn't exist
