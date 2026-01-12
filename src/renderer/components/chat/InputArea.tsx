@@ -319,13 +319,9 @@ export default function InputArea({ sessionId, disabled, systemInfo, isStreaming
   // Load commands, skills, and agents when session changes
   useEffect(() => {
     const currentSession = sessions.find(s => s.id === sessionId);
-    if (!currentSession) {
-      console.log('[InputArea] No current session found');
-      return;
-    }
+    if (!currentSession) return;
 
     const projectPath = currentSession.worktreePath;
-    console.log('[InputArea] Loading extensions for:', projectPath);
 
     // Load all extensions
     Promise.all([
@@ -333,7 +329,6 @@ export default function InputArea({ sessionId, disabled, systemInfo, isStreaming
       window.electronAPI.extensions.scanSkills(projectPath),
       window.electronAPI.extensions.scanAgents(projectPath),
     ]).then(([cmds, skls, agts]) => {
-      console.log('[InputArea] Extensions loaded:', { commands: cmds.length, skills: skls.length, agents: agts.length });
       setCommands(cmds);
       setSkills(skls);
       setAgents(agts);
@@ -353,16 +348,15 @@ export default function InputArea({ sessionId, disabled, systemInfo, isStreaming
     // Check for slash commands at the start of input
     if (value.startsWith('/') && cursorPos > 0) {
       const commandText = textBeforeCursor.slice(1);
-      console.log('[InputArea] Slash detected, commandText:', commandText, 'hasSpace:', /\s/.test(commandText));
       if (!/\s/.test(commandText)) {
-        console.log('[InputArea] Showing command autocomplete, query:', commandText, 'commands:', commands.length, 'skills:', skills.length);
+        // Position autocomplete above the input container
+        if (containerRef.current) {
+          const containerRect = containerRef.current.getBoundingClientRect();
 
-        // Calculate position relative to textarea
-        if (textareaRef.current) {
-          const rect = textareaRef.current.getBoundingClientRect();
+          // Position above the input area (dropdown height ~250px, add margin)
           setCommandPosition({
-            top: rect.top - 310, // Position above the textarea
-            left: rect.left
+            top: Math.max(10, containerRect.top - 270), // Ensure at least 10px from top
+            left: containerRect.left
           });
         }
 
@@ -386,12 +380,14 @@ export default function InputArea({ sessionId, disabled, systemInfo, isStreaming
       if (isValidStart && hasNoSpaces) {
         // Check if it's @agent- pattern (for subagents)
         if (textAfterAt.startsWith('agent-')) {
-          // Calculate position relative to textarea
-          if (textareaRef.current) {
-            const rect = textareaRef.current.getBoundingClientRect();
+          // Position autocomplete above the input container
+          if (containerRef.current) {
+            const containerRect = containerRef.current.getBoundingClientRect();
+
+            // Position above the input area (dropdown height ~250px, add margin)
             setCommandPosition({
-              top: rect.top - 310, // Position above the textarea
-              left: rect.left
+              top: Math.max(10, containerRect.top - 270), // Ensure at least 10px from top
+              left: containerRect.left
             });
           }
 
@@ -783,7 +779,6 @@ export default function InputArea({ sessionId, disabled, systemInfo, isStreaming
       )}
 
       {/* Command/Skill/Agent Autocomplete */}
-      {console.log('[InputArea] Render check - showCommands:', showCommands, 'commandQuery:', commandQuery, 'commands:', commands.length, 'skills:', skills.length)}
       {showCommands && (
         <CommandAutocomplete
           query={commandQuery}
