@@ -1211,46 +1211,20 @@ export class ClaudeService {
         yield { type: 'thinking_delta', content: endFlushed.thinking };
       }
 
-      // Post-process content blocks to merge fragmented text around tool calls
-      // This handles cases where Claude says "Let me" [tool] "check the file"
+      // Post-process content blocks to merge adjacent text blocks only
+      // We keep text and tool_use blocks in their natural order, just combining
+      // consecutive text blocks that might have been split during streaming
       const mergedBlocks: ContentBlock[] = [];
       for (let i = 0; i < contentBlocks.length; i++) {
         const block = contentBlocks[i];
         const lastMerged = mergedBlocks[mergedBlocks.length - 1];
 
         if (block.type === 'text') {
-          // Check if this is a continuation of previous text (separated by tools)
-          // Merge if: previous text didn't end with sentence-ending punctuation
-          // and this text is short or starts with lowercase
           const text = block.text || '';
-          const prevText = lastMerged?.type === 'text' ? (lastMerged.text || '') : '';
 
-          // Find the last text block before any intervening tools
-          let lastTextIdx = mergedBlocks.length - 1;
-          while (lastTextIdx >= 0 && mergedBlocks[lastTextIdx].type !== 'text') {
-            lastTextIdx--;
-          }
-          const lastTextBlock = lastTextIdx >= 0 ? mergedBlocks[lastTextIdx] : null;
-          const lastText = lastTextBlock?.text || '';
-
-          // Check if this looks like a continuation (doesn't start a new sentence)
-          const isShortFragment = text.length < 100;
-          const startsLowercase = /^[a-z]/.test(text.trim());
-          const prevEndsWithPunctuation = /[.!?:]\s*$/.test(lastText.trim());
-          const hasParagraphBreak = /\n\n/.test(text) || /\n\n/.test(lastText);
-
-          // Merge conditions: short fragment OR starts lowercase, AND previous didn't end sentence
-          const shouldMerge = lastTextBlock &&
-            !hasParagraphBreak &&
-            !prevEndsWithPunctuation &&
-            (isShortFragment || startsLowercase);
-
-          if (shouldMerge && lastTextBlock) {
-            // Merge with the last text block (skip intervening tool blocks in visual)
-            lastTextBlock.text = lastText + ' ' + text.trim();
-          } else if (lastMerged?.type === 'text') {
-            // Adjacent text blocks - always merge
-            lastMerged.text = prevText + text;
+          // Only merge with immediately preceding text block (not across tools)
+          if (lastMerged?.type === 'text') {
+            lastMerged.text = (lastMerged.text || '') + text;
           } else {
             mergedBlocks.push({ ...block });
           }
@@ -1384,11 +1358,49 @@ export class ClaudeService {
       const content = fs.readFileSync(filePath, 'utf-8');
       const lines = content.split('\n').filter(line => line.trim());
 
+      // Map to track messages by their Claude message ID for merging partial messages
+      const messageMap = new Map<string, ChatMessage>();
+
       for (const line of lines) {
         try {
           const entry = JSON.parse(line);
-          const msg = this.parseTranscriptEntry(entry);
-          if (msg && !seenIds.has(msg.id)) {
+          const result = this.parseTranscriptEntry(entry);
+          if (!result) continue;
+
+          const { msg, messageId } = result;
+
+          // Check if we already have a message with this Claude message ID
+          const existing = messageMap.get(messageId);
+          if (existing) {
+            // Merge content: only add if the new content is different and non-empty
+            if (msg.content && msg.content !== existing.content) {
+              // If existing has no content, use new content; otherwise don't duplicate
+              if (!existing.content) {
+                existing.content = msg.content;
+              }
+              // Don't concatenate - SDK sends the same message multiple times
+              // as it streams, we want the final/fullest version
+              else if (msg.content.length > existing.content.length) {
+                existing.content = msg.content;
+              }
+            }
+            // Merge tool calls
+            if (msg.toolCalls && msg.toolCalls.length > 0) {
+              if (!existing.toolCalls) {
+                existing.toolCalls = msg.toolCalls;
+              } else {
+                // Add any new tool calls (by id)
+                const existingIds = new Set(existing.toolCalls.map(tc => tc.id));
+                for (const tc of msg.toolCalls) {
+                  if (!existingIds.has(tc.id)) {
+                    existing.toolCalls.push(tc);
+                  }
+                }
+              }
+            }
+          } else {
+            // New message
+            messageMap.set(messageId, msg);
             seenIds.add(msg.id);
             messages.push(msg);
           }
@@ -1405,19 +1417,29 @@ export class ClaudeService {
 
   /**
    * Parse a single transcript entry into a ChatMessage
+   * Returns the message ID for deduplication (may differ from the ChatMessage.id)
    */
-  private parseTranscriptEntry(entry: Record<string, unknown>): ChatMessage | null {
+  private parseTranscriptEntry(entry: Record<string, unknown>): { msg: ChatMessage; messageId: string } | null {
     // SDK transcript format varies - handle different message types
     const type = entry.type as string;
+
+    // Extract the actual Claude message ID for deduplication
+    // SDK writes multiple JSONL lines per message (thinking, text, tool_use blocks)
+    // entry.uuid is unique per line, but entry.message.id is the actual message ID
+    const message = entry.message as Record<string, unknown> | undefined;
+    const claudeMessageId = (message?.id as string) || (entry.uuid as string) || (entry.id as string);
 
     if (type === 'user' || type === 'human') {
       const content = this.extractContent(entry);
       if (!content) return null;
       return {
-        id: (entry.uuid as string) || (entry.id as string) || `user-${Date.now()}-${Math.random()}`,
-        role: 'user',
-        content,
-        timestamp: entry.timestamp ? new Date(entry.timestamp as string) : new Date(),
+        msg: {
+          id: (entry.uuid as string) || `user-${Date.now()}-${Math.random()}`,
+          role: 'user',
+          content,
+          timestamp: entry.timestamp ? new Date(entry.timestamp as string) : new Date(),
+        },
+        messageId: claudeMessageId,
       };
     }
 
@@ -1425,11 +1447,14 @@ export class ClaudeService {
       const content = this.extractContent(entry);
       const toolCalls = this.extractToolCalls(entry);
       return {
-        id: (entry.uuid as string) || (entry.id as string) || `assistant-${Date.now()}-${Math.random()}`,
-        role: 'assistant',
-        content: content || '',
-        toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
-        timestamp: entry.timestamp ? new Date(entry.timestamp as string) : new Date(),
+        msg: {
+          id: (entry.uuid as string) || `assistant-${Date.now()}-${Math.random()}`,
+          role: 'assistant',
+          content: content || '',
+          toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
+          timestamp: entry.timestamp ? new Date(entry.timestamp as string) : new Date(),
+        },
+        messageId: claudeMessageId,
       };
     }
 
