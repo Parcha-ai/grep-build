@@ -40,13 +40,22 @@ export default function SessionList() {
     sessions.forEach(session => {
       const projectPath = session.worktreePath;
       if (!projectGroups.has(projectPath)) {
-        // Extract directory name from path for project name
-        const pathParts = projectPath.split('/');
-        const dirName = pathParts[pathParts.length - 1] || 'Unknown';
+        // Determine if this is a Claudette-managed worktree
+        const isClaudetteWorktree = projectPath.includes('.claudette-worktrees/');
+
+        let projectName: string;
+        if (isClaudetteWorktree) {
+          // For Claudette worktrees, use the AI-generated session name
+          projectName = session.name;
+        } else {
+          // For regular directories, use the directory name
+          const pathParts = projectPath.split('/');
+          projectName = pathParts[pathParts.length - 1] || 'Unknown';
+        }
 
         projectGroups.set(projectPath, {
           path: projectPath,
-          name: dirName, // Use actual directory name, not session name
+          name: projectName,
           sessions: [],
           mostRecentUpdate: new Date(session.updatedAt),
         });
