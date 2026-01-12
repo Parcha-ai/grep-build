@@ -77,6 +77,7 @@ export const IPC_CHANNELS = {
   // App channels
   APP_GET_VERSION: 'app:get-version',
   APP_OPEN_EXTERNAL: 'app:open-external',
+  APP_OPEN_PATH: 'app:open-path',
   APP_GET_PATH: 'app:get-path',
   APP_SHOW_DIALOG: 'app:show-dialog',
 

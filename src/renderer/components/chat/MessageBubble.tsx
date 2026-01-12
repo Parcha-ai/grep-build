@@ -1,5 +1,6 @@
 import React from 'react';
 import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import ToolCallCard from './ToolCallCard';
 import { SpeakerButton } from './SpeakerButton';
 import { useEditorStore } from '../../stores/editor.store';
@@ -69,6 +70,7 @@ function MessageBubble({ message, isStreaming, streamingToolCalls, isLatestMessa
                 </div>
                 <div className="prose prose-invert max-w-none font-mono text-claude-text pr-12 break-words" style={{ overflowWrap: 'anywhere' }}>
                   <ReactMarkdown
+                  remarkPlugins={[remarkGfm]}
                   components={{
                     // Custom code block rendering
                     code({ className, children, ...props }) {
@@ -160,7 +162,16 @@ function MessageBubble({ message, isStreaming, streamingToolCalls, isLatestMessa
                     // Style links
                     a({ href, children }) {
                       return (
-                        <a href={href} className="text-claude-accent underline hover:no-underline">
+                        <a
+                          href={href}
+                          onClick={(e) => {
+                            e.preventDefault();
+                            if (href) {
+                              window.electronAPI.app.openExternal(href);
+                            }
+                          }}
+                          className="text-claude-accent underline hover:no-underline cursor-pointer"
+                        >
                           {children}
                         </a>
                       );

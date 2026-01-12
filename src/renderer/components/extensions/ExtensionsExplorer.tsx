@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Terminal, Sparkles, Bot, ChevronDown, ChevronRight, Copy, ExternalLink, User, FolderGit } from 'lucide-react';
+import { Terminal, Sparkles, Bot, ChevronDown, ChevronRight, Copy, ExternalLink, User, FolderGit, Edit3 } from 'lucide-react';
 import type { Command, Skill, AgentDefinition } from '../../../shared/types';
 
 interface ExtensionsExplorerProps {
@@ -52,6 +52,34 @@ export default function ExtensionsExplorer({ sessionId, projectPath }: Extension
 
   const copyToClipboard = (text: string) => {
     navigator.clipboard.writeText(text);
+  };
+
+  const handleEditItem = async (item: Command | Skill | AgentDefinition) => {
+    const isCommand = 'content' in item;
+    const isAgent = 'systemPrompt' in item;
+
+    let filePath: string;
+
+    if (isCommand) {
+      // Commands have direct path to .md file
+      filePath = (item as Command).path;
+    } else if (isAgent) {
+      // Agents are stored as .md files in agents directory
+      // We need to construct the path
+      const agentName = item.name;
+      if (item.scope === 'user') {
+        const os = await import('os');
+        filePath = `${os.homedir()}/.claude/agents/${agentName}.md`;
+      } else {
+        filePath = `${projectPath}/.claude/agents/${agentName}.md`;
+      }
+    } else {
+      // Skills have path to directory, need to append SKILL.md
+      filePath = `${(item as Skill).path}/SKILL.md`;
+    }
+
+    // Open file in system default editor
+    window.electronAPI.app.openExternal(`file://${filePath}`);
   };
 
   const renderCommandList = () => {
@@ -173,13 +201,22 @@ export default function ExtensionsExplorer({ sessionId, projectPath }: Extension
                 </p>
               </div>
             </div>
-            <button
-              onClick={() => copyToClipboard(isCommand ? `/${selectedItem.name}` : `@agent-${selectedItem.name}`)}
-              className="p-1 hover:bg-claude-surface text-claude-text-secondary"
-              title="Copy usage"
-            >
-              <Copy size={14} />
-            </button>
+            <div className="flex items-center gap-1">
+              <button
+                onClick={() => handleEditItem(selectedItem)}
+                className="p-1 hover:bg-claude-surface text-claude-text-secondary hover:text-claude-accent"
+                title="Edit file"
+              >
+                <Edit3 size={14} />
+              </button>
+              <button
+                onClick={() => copyToClipboard(isCommand ? `/${selectedItem.name}` : `@agent-${selectedItem.name}`)}
+                className="p-1 hover:bg-claude-surface text-claude-text-secondary"
+                title="Copy usage"
+              >
+                <Copy size={14} />
+              </button>
+            </div>
           </div>
 
           {/* Description */}

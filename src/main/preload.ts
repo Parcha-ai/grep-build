@@ -237,6 +237,8 @@ const electronAPI = {
       ipcRenderer.invoke(IPC_CHANNELS.APP_GET_VERSION),
     openExternal: (url: string): Promise<void> =>
       ipcRenderer.invoke(IPC_CHANNELS.APP_OPEN_EXTERNAL, url),
+    openPath: (filePath: string): Promise<string> =>
+      ipcRenderer.invoke(IPC_CHANNELS.APP_OPEN_PATH, filePath),
     getPath: (name: string): Promise<string> =>
       ipcRenderer.invoke(IPC_CHANNELS.APP_GET_PATH, name),
     showDialog: (options: unknown): Promise<unknown> =>

@@ -34,6 +34,10 @@ export function registerSettingsHandlers(ipcMain: IpcMain): void {
     await shell.openExternal(url);
   });
 
+  ipcMain.handle(IPC_CHANNELS.APP_OPEN_PATH, async (_, filePath: string) => {
+    return await shell.openPath(filePath);
+  });
+
   ipcMain.handle(IPC_CHANNELS.APP_GET_PATH, async (_, name: string) => {
     return app.getPath(name as Parameters<typeof app.getPath>[0]);
   });
