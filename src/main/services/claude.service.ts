@@ -6,7 +6,7 @@ import Store from 'electron-store';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
-import type { ChatMessage, ToolCall, Session, QuestionRequest, QuestionResponse, Attachment } from '../../shared/types';
+import type { ChatMessage, ToolCall, Session, QuestionRequest, QuestionResponse, Attachment, ContentBlock } from '../../shared/types';
 import { BrowserWindow } from 'electron';
 import { IPC_CHANNELS } from '../../shared/constants/channels';
 import { browserService } from './browser.service';
@@ -914,6 +914,7 @@ export class ClaudeService {
 
       let fullContent = '';
       const toolCalls: ToolCall[] = [];
+      const contentBlocks: ContentBlock[] = []; // Track content blocks in order
 
       // Batching for stream events to reduce render overhead
       let textBuffer = '';
@@ -926,6 +927,15 @@ export class ClaudeService {
           fullContent += textBuffer;
           const content = textBuffer;
           textBuffer = '';
+
+          // Add or extend text block in contentBlocks
+          const lastBlock = contentBlocks[contentBlocks.length - 1];
+          if (lastBlock && lastBlock.type === 'text') {
+            lastBlock.text = (lastBlock.text || '') + content;
+          } else {
+            contentBlocks.push({ type: 'text', text: content });
+          }
+
           return { text: content };
         }
         if (thinkingBuffer) {
@@ -1005,6 +1015,8 @@ export class ClaudeService {
                       startedAt: new Date(),
                     };
                     toolCalls.push(toolCall);
+                    // Add tool_use content block to track order
+                    contentBlocks.push({ type: 'tool_use', toolCallId: toolCall.id });
                     yield { type: 'tool_use', toolCall };
                   } else {
                     // Update existing tool call with complete input from full assistant message
@@ -1074,6 +1086,8 @@ export class ClaudeService {
                       startedAt: new Date(),
                     };
                     toolCalls.push(toolCall);
+                    // Add tool_use content block to track order
+                    contentBlocks.push({ type: 'tool_use', toolCallId: toolCall.id });
                     yield { type: 'tool_use', toolCall };
                   }
                 }
@@ -1101,6 +1115,8 @@ export class ClaudeService {
                   startedAt: new Date(),
                 };
                 toolCalls.push(toolCall);
+                // Add tool_use content block to track order
+                contentBlocks.push({ type: 'tool_use', toolCallId: toolCall.id });
                 yield { type: 'tool_use', toolCall };
               }
             }
@@ -1195,11 +1211,61 @@ export class ClaudeService {
         yield { type: 'thinking_delta', content: endFlushed.thinking };
       }
 
-      // Create final message
+      // Post-process content blocks to merge fragmented text around tool calls
+      // This handles cases where Claude says "Let me" [tool] "check the file"
+      const mergedBlocks: ContentBlock[] = [];
+      for (let i = 0; i < contentBlocks.length; i++) {
+        const block = contentBlocks[i];
+        const lastMerged = mergedBlocks[mergedBlocks.length - 1];
+
+        if (block.type === 'text') {
+          // Check if this is a continuation of previous text (separated by tools)
+          // Merge if: previous text didn't end with sentence-ending punctuation
+          // and this text is short or starts with lowercase
+          const text = block.text || '';
+          const prevText = lastMerged?.type === 'text' ? (lastMerged.text || '') : '';
+
+          // Find the last text block before any intervening tools
+          let lastTextIdx = mergedBlocks.length - 1;
+          while (lastTextIdx >= 0 && mergedBlocks[lastTextIdx].type !== 'text') {
+            lastTextIdx--;
+          }
+          const lastTextBlock = lastTextIdx >= 0 ? mergedBlocks[lastTextIdx] : null;
+          const lastText = lastTextBlock?.text || '';
+
+          // Check if this looks like a continuation (doesn't start a new sentence)
+          const isShortFragment = text.length < 100;
+          const startsLowercase = /^[a-z]/.test(text.trim());
+          const prevEndsWithPunctuation = /[.!?:]\s*$/.test(lastText.trim());
+          const hasParagraphBreak = /\n\n/.test(text) || /\n\n/.test(lastText);
+
+          // Merge conditions: short fragment OR starts lowercase, AND previous didn't end sentence
+          const shouldMerge = lastTextBlock &&
+            !hasParagraphBreak &&
+            !prevEndsWithPunctuation &&
+            (isShortFragment || startsLowercase);
+
+          if (shouldMerge && lastTextBlock) {
+            // Merge with the last text block (skip intervening tool blocks in visual)
+            lastTextBlock.text = lastText + ' ' + text.trim();
+          } else if (lastMerged?.type === 'text') {
+            // Adjacent text blocks - always merge
+            lastMerged.text = prevText + text;
+          } else {
+            mergedBlocks.push({ ...block });
+          }
+        } else {
+          // tool_use block - add as-is
+          mergedBlocks.push({ ...block });
+        }
+      }
+
+      // Create final message with contentBlocks for interleaved rendering
       const message: ChatMessage = {
         id: Date.now().toString(),
         role: 'assistant',
         content: fullContent,
+        contentBlocks: mergedBlocks.length > 0 ? mergedBlocks : undefined,
         toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
         timestamp: new Date(),
       };

@@ -79,10 +79,18 @@ export interface ToolCall {
   completedAt?: Date;
 }
 
+// Content block for interleaved rendering of text and tool calls
+export interface ContentBlock {
+  type: 'text' | 'tool_use';
+  text?: string; // For text blocks
+  toolCallId?: string; // For tool_use blocks - reference to toolCalls array
+}
+
 export interface ChatMessage {
   id: string;
   role: 'user' | 'assistant' | 'system';
-  content: string;
+  content: string; // Combined text content (for backwards compat and search)
+  contentBlocks?: ContentBlock[]; // Ordered blocks for interleaved rendering
   toolCalls?: ToolCall[];
   attachments?: Attachment[];
   timestamp: Date;
