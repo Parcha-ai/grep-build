@@ -40,9 +40,13 @@ export default function SessionList() {
     sessions.forEach(session => {
       const projectPath = session.worktreePath;
       if (!projectGroups.has(projectPath)) {
+        // Extract directory name from path for project name
+        const pathParts = projectPath.split('/');
+        const dirName = pathParts[pathParts.length - 1] || 'Unknown';
+
         projectGroups.set(projectPath, {
           path: projectPath,
-          name: session.name.split(' - ')[0], // Remove date suffix
+          name: dirName, // Use actual directory name, not session name
           sessions: [],
           mostRecentUpdate: new Date(session.updatedAt),
         });
