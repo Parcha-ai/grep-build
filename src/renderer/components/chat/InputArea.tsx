@@ -356,11 +356,20 @@ export default function InputArea({ sessionId, disabled, systemInfo, isStreaming
       console.log('[InputArea] Slash detected, commandText:', commandText, 'hasSpace:', /\s/.test(commandText));
       if (!/\s/.test(commandText)) {
         console.log('[InputArea] Showing command autocomplete, query:', commandText, 'commands:', commands.length, 'skills:', skills.length);
+
+        // Calculate position relative to textarea
+        if (textareaRef.current) {
+          const rect = textareaRef.current.getBoundingClientRect();
+          setCommandPosition({
+            top: rect.top - 310, // Position above the textarea
+            left: rect.left
+          });
+        }
+
         setShowCommands(true);
         setCommandType('command');
         setCommandQuery(commandText);
         setCommandStartIndex(0);
-        setCommandPosition({ top: -310, left: 0 });
         setShowMentions(false);
         return;
       }
@@ -377,11 +386,19 @@ export default function InputArea({ sessionId, disabled, systemInfo, isStreaming
       if (isValidStart && hasNoSpaces) {
         // Check if it's @agent- pattern (for subagents)
         if (textAfterAt.startsWith('agent-')) {
+          // Calculate position relative to textarea
+          if (textareaRef.current) {
+            const rect = textareaRef.current.getBoundingClientRect();
+            setCommandPosition({
+              top: rect.top - 310, // Position above the textarea
+              left: rect.left
+            });
+          }
+
           setShowCommands(true);
           setCommandType('agent');
           setCommandQuery(textAfterAt.replace('agent-', ''));
           setCommandStartIndex(lastAtIndex);
-          setCommandPosition({ top: -310, left: 0 });
           setShowMentions(false);
           return;
         }
