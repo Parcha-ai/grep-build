@@ -328,10 +328,14 @@ export class SessionService extends EventEmitter {
               // Use transcript session ID if available, otherwise hash the transcript file name
               const sessionId = transcriptSessionId || jsonlFile.replace('.jsonl', '');
 
+              // Check if there's a custom name set by Claude
+              const customName = this.store.get(`sessionNames.${sessionId}`) as string | undefined;
+              const displayName = customName || `${path.basename(actualPath)} - ${new Date(stats.mtime).toLocaleDateString()}`;
+
               // Create session from transcript (ephemeral - not stored)
               const session: Session = {
                 id: sessionId,
-                name: `${path.basename(actualPath)} - ${new Date(stats.mtime).toLocaleDateString()}`,
+                name: displayName,
                 repoPath: actualPath,
                 worktreePath: actualPath,
                 branch,

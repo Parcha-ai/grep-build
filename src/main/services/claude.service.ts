@@ -629,6 +629,39 @@ export class ClaudeService {
       }
     );
 
+    // UpdateSessionName tool - allow Claude to set descriptive session names
+    const updateSessionNameTool = tool(
+      'UpdateSessionName',
+      'Update the current session name with a descriptive title. Call this when you understand what the session is about to help the user identify it later. Use concise, descriptive titles (3-5 words).',
+      {
+        name: z.string().describe('A concise descriptive name for this session (e.g., "Video Processing Workflow", "Entity Research Integration")'),
+      },
+      async (args) => {
+        try {
+          const { name } = args;
+          console.log('[Claude Service] Updating session name:', sessionId, '→', name);
+
+          // Store the custom name
+          this.sessionStore.set(`sessionNames.${sessionId}`, name);
+
+          return {
+            content: [{
+              type: 'text',
+              text: `Session name updated to: "${name}"`,
+            }],
+          };
+        } catch (error) {
+          return {
+            content: [{
+              type: 'text',
+              text: `Failed to update session name: ${error instanceof Error ? error.message : String(error)}`,
+            }],
+            isError: true,
+          };
+        }
+      }
+    );
+
     const mcpServer = createSdkMcpServer({
       name: 'claudette-browser',
       version: '1.0.0',
@@ -645,6 +678,7 @@ export class ClaudeService {
         browserGetNetworkRequestsTool,
         browserGetResponseBodyTool,
         browserClearLogsTool,
+        updateSessionNameTool,
       ],
     });
 
