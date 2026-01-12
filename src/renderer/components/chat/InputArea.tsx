@@ -435,8 +435,9 @@ export default function InputArea({ sessionId, disabled, systemInfo, isStreaming
     async (item: any) => {
       const currentSession = sessions.find(s => s.id === sessionId);
       const projectPath = currentSession?.worktreePath;
+      const itemType = item.itemType || commandType;
 
-      if (commandType === 'command') {
+      if (itemType === 'command') {
         // Load command content and replace the /command with it
         try {
           const content = await window.electronAPI.extensions.getCommand(item.name, projectPath);
@@ -452,7 +453,12 @@ export default function InputArea({ sessionId, disabled, systemInfo, isStreaming
         } catch (err) {
           console.error('[InputArea] Error loading command:', err);
         }
-      } else if (commandType === 'agent') {
+      } else if (itemType === 'skill') {
+        // Skills are invoked via Skill tool - just insert /skill-name as is
+        const before = message.slice(0, commandStartIndex);
+        const after = message.slice(textareaRef.current?.selectionStart || commandStartIndex);
+        setMessage(before + `/${item.name}` + after);
+      } else if (itemType === 'agent') {
         // Replace @agent-name with just the agent mention
         const before = message.slice(0, commandStartIndex);
         const after = message.slice(textareaRef.current?.selectionStart || commandStartIndex);
@@ -508,7 +514,8 @@ export default function InputArea({ sessionId, disabled, systemInfo, isStreaming
 
   const handleStopStreaming = useCallback(() => {
     if (isSending) {
-      window.electronAPI.claude.cancel(sessionId);
+      // Use store's cancelStream to preserve partial content
+      useSessionStore.getState().cancelStream(sessionId);
     }
   }, [isSending, sessionId]);
 
