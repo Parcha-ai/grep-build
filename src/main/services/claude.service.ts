@@ -62,7 +62,7 @@ export class ClaudeService {
   getAvailableModels(): Array<{ id: string; name: string; description: string }> {
     return [
       {
-        id: 'claude-opus-4-5-20250514',
+        id: 'claude-opus-4-5-20251101',
         name: 'Opus 4.5',
         description: 'Most capable model - best for complex tasks'
       },
@@ -130,7 +130,7 @@ export class ClaudeService {
             return {
               content: [{
                 type: 'text',
-                text: `Captured snapshot of ${url} but screenshot failed to capture. HTML is available:\n\n${snapshot.html.slice(0, 2000)}${snapshot.html.length > 2000 ? '...(truncated)' : ''}`,
+                text: `Captured snapshot of ${url} but screenshot failed to capture. HTML is available:\n\n${snapshot.html.slice(0, 10000)}${snapshot.html.length > 10000 ? '...(truncated)' : ''}`,
               }],
             };
           }
@@ -140,7 +140,7 @@ export class ClaudeService {
             content: [
               {
                 type: 'text',
-                text: `Captured snapshot of ${url}\n\nHTML Preview:\n${snapshot.html.slice(0, 2000)}${snapshot.html.length > 2000 ? '...(truncated)' : ''}`,
+                text: `Captured snapshot of ${url}\n\nHTML Preview:\n${snapshot.html.slice(0, 10000)}${snapshot.html.length > 10000 ? '...(truncated)' : ''}`,
               },
               {
                 type: 'image',
@@ -344,6 +344,64 @@ export class ClaudeService {
             content: [{
               type: 'text',
               text: `Failed to get page info: ${error instanceof Error ? error.message : String(error)}`,
+            }],
+            isError: true,
+          };
+        }
+      }
+    );
+
+    // BrowserGetDOM tool - get full DOM without truncation
+    const browserGetDOMTool = tool(
+      'BrowserGetDOM',
+      'Get the complete HTML DOM of the current page without truncation. Use this when you need to find elements that may not be visible in the initial snapshot preview.',
+      {
+        selector: z.string().optional().describe('Optional CSS selector to get HTML of specific element instead of whole document'),
+      },
+      async (args) => {
+        try {
+          const { selector } = args;
+          console.log('[Claude Service] Getting DOM:', selector || 'full page');
+          const result = await browserService.getDOM(sessionId);
+
+          if (!result.success || !result.html) {
+            return {
+              content: [{
+                type: 'text',
+                text: `Failed to get DOM: ${result.error || 'Unknown error'}`,
+              }],
+              isError: true,
+            };
+          }
+
+          let html = result.html;
+
+          // If selector provided, extract that element only
+          if (selector) {
+            const extractResult = await browserService.executeScript(
+              sessionId,
+              `document.querySelector(${JSON.stringify(selector)})?.outerHTML || ''`
+            );
+            if (extractResult.success && extractResult.result) {
+              html = String(extractResult.result);
+            }
+          }
+
+          // Cap at reasonable limit to avoid overwhelming Claude
+          const maxLength = 50000;
+          const truncated = html.length > maxLength;
+
+          return {
+            content: [{
+              type: 'text',
+              text: `DOM HTML${selector ? ` for ${selector}` : ''}:\n\n${html.slice(0, maxLength)}${truncated ? '\n\n...(truncated - use selector to narrow scope)' : ''}`,
+            }],
+          };
+        } catch (error) {
+          return {
+            content: [{
+              type: 'text',
+              text: `Failed to get DOM: ${error instanceof Error ? error.message : String(error)}`,
             }],
             isError: true,
           };
@@ -581,6 +639,7 @@ export class ClaudeService {
         browserTypeTool,
         browserExtractTool,
         browserGetInfoTool,
+        browserGetDOMTool,
         browserEnableDebuggingTool,
         browserGetConsoleLogsTool,
         browserGetNetworkRequestsTool,
@@ -663,7 +722,9 @@ export class ClaudeService {
 
     try {
       // Check if this session has been used before (has SDK session ID stored)
-      const sdkSessionId = this.sessionStore.get(`sessions.${sessionId}.sdkSessionId`) as string | undefined;
+      // Try new location first, then fall back to old location for backwards compatibility
+      const sdkSessionId = this.sessionStore.get(`sdkSessionMappings.${sessionId}`) as string | undefined
+        || this.sessionStore.get(`sessions.${sessionId}.sdkSessionId`) as string | undefined;
 
       // Validate and cast permission mode to SDK type
       const validModes = ['default', 'acceptEdits', 'bypassPermissions', 'plan', 'dontAsk'] as const;
@@ -860,9 +921,9 @@ export class ClaudeService {
               model?: string;
             };
 
-            // Store the SDK session ID for future resume calls
+            // Store the SDK session ID for future resume calls in separate mappings object
             if (systemMsg.session_id) {
-              this.sessionStore.set(`sessions.${sessionId}.sdkSessionId`, systemMsg.session_id);
+              this.sessionStore.set(`sdkSessionMappings.${sessionId}`, systemMsg.session_id);
             }
 
             yield {
@@ -1051,7 +1112,28 @@ export class ClaudeService {
             break;
           }
 
-          case 'result':
+          case 'result': {
+            // Result message may contain errors from the API
+            const resultMsg = msg as SDKMessage & { is_error?: boolean; result?: string };
+
+            // Check for corrupted transcript error
+            if (resultMsg.is_error && resultMsg.result?.includes('text content blocks must be non-empty')) {
+              console.error('[Claude SDK] Corrupted transcript detected - clearing SDK session ID for:', sessionId);
+              // Clear the SDK session ID so next message starts fresh
+              this.sessionStore.delete(`sessions.${sessionId}.sdkSessionId`);
+              yield {
+                type: 'error',
+                error: 'Session transcript was corrupted. Please try sending your message again - a fresh session will be started.'
+              };
+              return;
+            }
+
+            // Check for other API errors
+            if (resultMsg.is_error && resultMsg.result) {
+              yield { type: 'error', error: resultMsg.result };
+              return;
+            }
+
             // Final result message with cost info - no action needed
             // Flush any remaining buffered content
             const finalFlushed = flushBuffers();
@@ -1062,6 +1144,7 @@ export class ClaudeService {
               yield { type: 'thinking_delta', content: finalFlushed.thinking };
             }
             break;
+          }
 
           default:
             // Silently ignore unhandled message types
@@ -1135,7 +1218,9 @@ export class ClaudeService {
     const projectDir = path.join(claudeDir, projectSlug);
 
     // Get the stored SDK session ID for this session
-    const sdkSessionId = this.sessionStore.get(`sessions.${sessionId}.sdkSessionId`) as string | undefined;
+    // Try new location first, then fall back to old location for backwards compatibility
+    const sdkSessionId = this.sessionStore.get(`sdkSessionMappings.${sessionId}`) as string | undefined
+      || this.sessionStore.get(`sessions.${sessionId}.sdkSessionId`) as string | undefined;
 
     try {
       // Check if directory exists

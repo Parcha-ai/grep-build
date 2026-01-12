@@ -181,7 +181,8 @@ export class SessionService extends EventEmitter {
   private getSessions(): Session[] {
     const sessions = this.store.get('sessions') as Record<string, Session> | undefined;
     if (!sessions) return [];
-    return Object.values(sessions);
+    // Filter out stub objects that only have sdkSessionId (from old code paths)
+    return Object.values(sessions).filter(s => s.name && s.repoPath);
   }
 
   private async discoverClaudeSessions(): Promise<Session[]> {
@@ -308,37 +309,25 @@ export class SessionService extends EventEmitter {
               // Use transcript session ID if available, otherwise hash the transcript file name
               const sessionId = transcriptSessionId || jsonlFile.replace('.jsonl', '');
 
-              // Check if this session already exists in store
-              let existingSession = this.store.get(`sessions.${sessionId}`) as Session | undefined;
+              // Create session from transcript (ephemeral - not stored)
+              const session: Session = {
+                id: sessionId,
+                name: `${path.basename(actualPath)} - ${new Date(stats.mtime).toLocaleDateString()}`,
+                repoPath: actualPath,
+                worktreePath: actualPath,
+                branch,
+                status: 'running',
+                ports: { web: 3000, api: 8080, debug: 9229 },
+                setupScript: DEFAULT_SETUP_SCRIPT,
+                isDevMode: true,
+                createdAt: stats.birthtime,
+                updatedAt: stats.mtime,  // Use file modification time for sorting
+              };
 
-              if (existingSession) {
-                existingSession.branch = branch;
-                existingSession.updatedAt = stats.mtime;  // Use file modification time
-                // Ensure sdkSessionId is set for existing sessions too
-                this.store.set(`sessions.${sessionId}.sdkSessionId`, sessionId);
-                sessions.push(existingSession);
-              } else {
-                // Create new session from transcript
-                const session: Session = {
-                  id: sessionId,
-                  name: `${path.basename(actualPath)} - ${new Date(stats.mtime).toLocaleDateString()}`,
-                  repoPath: actualPath,
-                  worktreePath: actualPath,
-                  branch,
-                  status: 'running',
-                  ports: { web: 3000, api: 8080, debug: 9229 },
-                  setupScript: DEFAULT_SETUP_SCRIPT,
-                  isDevMode: true,
-                  createdAt: stats.birthtime,
-                  updatedAt: stats.mtime,  // Use file modification time for sorting
-                };
-
-                this.store.set(`sessions.${sessionId}`, session);
-                // Store the sdkSessionId so ClaudeService knows which transcript to resume
-                this.store.set(`sessions.${sessionId}.sdkSessionId`, sessionId);
-                sessions.push(session);
-                console.log('[Session Discovery] Created session:', session.name);
-              }
+              // Store ONLY the sdkSessionId mapping in a separate object
+              // Don't store the full session - discovered sessions are ephemeral
+              this.store.set(`sdkSessionMappings.${sessionId}`, sessionId);
+              sessions.push(session);
             } catch (fileError) {
               // Error reading this transcript file, skip it
               console.log('[Session Discovery] Error reading transcript:', jsonlFile, fileError);
