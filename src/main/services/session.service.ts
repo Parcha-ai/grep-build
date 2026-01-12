@@ -8,6 +8,7 @@ import simpleGit from 'simple-git';
 import { DockerService } from './docker.service';
 import { GitService } from './git.service';
 import type { Session, SessionStatus } from '../../shared/types';
+import Anthropic from '@anthropic-ai/sdk';
 
 interface SessionCreateConfig {
   name: string;
@@ -53,6 +54,49 @@ export class SessionService extends EventEmitter {
 
   private async ensureSessionsDirectory(): Promise<void> {
     await fs.mkdir(this.sessionsPath, { recursive: true });
+  }
+
+  private generateSessionNameAsync(sessionId: string, firstUserMessage: string, actualPath: string): void {
+    // Run name generation in background without blocking discovery
+    (async () => {
+      try {
+        // Get API key from settings store
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const settingsStore = new Store({ name: 'claudette-settings' }) as any;
+        const apiKey = settingsStore.get('anthropicApiKey') as string | undefined;
+
+        if (!apiKey) {
+          console.log('[Session] No API key, skipping name generation for:', sessionId);
+          return;
+        }
+
+        const anthropic = new Anthropic({ apiKey });
+
+        console.log('[Session] Generating name for:', path.basename(actualPath));
+
+        const response = await anthropic.messages.create({
+          model: 'claude-3-5-haiku-20241022',
+          max_tokens: 50,
+          messages: [{
+            role: 'user',
+            content: `Generate a concise 3-5 word descriptive title for this coding session. First message: "${firstUserMessage.slice(0, 200)}"
+
+Only return the title, nothing else.`
+          }]
+        });
+
+        const title = response.content[0]?.type === 'text' ? response.content[0].text.trim() : '';
+        if (title) {
+          this.store.set(`sessionNames.${sessionId}`, title);
+          console.log('[Session] Generated name:', path.basename(actualPath), '→', title);
+
+          // Emit event so UI can refresh
+          this.emit('sessionNameGenerated', { sessionId, name: title });
+        }
+      } catch (error) {
+        console.error('[Session] Error generating name:', error);
+      }
+    })();
   }
 
   private updateSessionStatus(session: Session, status: SessionStatus): Session {
@@ -275,16 +319,31 @@ export class SessionService extends EventEmitter {
               const content = await fs.readFile(transcriptPath, 'utf-8');
               const lines = content.split('\n').filter(l => l.trim());
 
-              // Parse lines to find cwd, sessionId, and check if transcript has content
+              // Parse lines to find cwd, sessionId, and first user message
               let sessionCwd: string | null = null;
               let transcriptSessionId: string | null = null;
+              let firstUserMessage: string | null = null;
 
               for (const line of lines.slice(0, 50)) {
                 try {
                   const parsed = JSON.parse(line);
                   if (parsed.cwd) sessionCwd = parsed.cwd;
                   if (parsed.sessionId) transcriptSessionId = parsed.sessionId;
-                  if (sessionCwd && transcriptSessionId) break;
+
+                  // Extract first user message for name generation
+                  if (!firstUserMessage && parsed.type === 'user') {
+                    const content = parsed.message?.content || parsed.content;
+                    if (typeof content === 'string') {
+                      firstUserMessage = content;
+                    } else if (Array.isArray(content)) {
+                      const textBlock = content.find((b: any) => b.type === 'text');
+                      if (textBlock?.text) {
+                        firstUserMessage = textBlock.text;
+                      }
+                    }
+                  }
+
+                  if (sessionCwd && transcriptSessionId && firstUserMessage) break;
                 } catch {
                   // Not valid JSON, skip
                 }
@@ -328,9 +387,15 @@ export class SessionService extends EventEmitter {
               // Use transcript session ID if available, otherwise hash the transcript file name
               const sessionId = transcriptSessionId || jsonlFile.replace('.jsonl', '');
 
-              // Check if there's a custom name set by Claude
+              // Check if there's a custom name set by Claude (via UpdateSessionName tool)
               const customName = this.store.get(`sessionNames.${sessionId}`) as string | undefined;
               const displayName = customName || `${path.basename(actualPath)} - ${new Date(stats.mtime).toLocaleDateString()}`;
+
+              // Queue background name generation for sessions without custom names
+              if (!customName && firstUserMessage) {
+                // Generate name asynchronously without blocking discovery
+                this.generateSessionNameAsync(sessionId, firstUserMessage, actualPath);
+              }
 
               // Create session from transcript (ephemeral - not stored)
               const session: Session = {
