@@ -92,9 +92,14 @@ export default function CommandAutocomplete({
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [filteredItems, selectedIndex, onSelect, onClose]);
 
+  console.log('[CommandAutocomplete] Rendering, filteredItems:', filteredItems.length, 'position:', position);
+
   if (filteredItems.length === 0) {
+    console.log('[CommandAutocomplete] No items to show, returning null');
     return null;
   }
+
+  console.log('[CommandAutocomplete] Showing autocomplete at:', position);
 
   return (
     <div

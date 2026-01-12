@@ -766,6 +766,7 @@ export default function InputArea({ sessionId, disabled, systemInfo, isStreaming
       )}
 
       {/* Command/Skill/Agent Autocomplete */}
+      {console.log('[InputArea] Render check - showCommands:', showCommands, 'commandQuery:', commandQuery, 'commands:', commands.length, 'skills:', skills.length)}
       {showCommands && (
         <CommandAutocomplete
           query={commandQuery}
