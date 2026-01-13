@@ -8,11 +8,12 @@ import BrowserPreview from '../preview/BrowserPreview';
 import GitExplorer from '../git/GitExplorer';
 import EditorPanel from '../editor/EditorPanel';
 import ExtensionsExplorer from '../extensions/ExtensionsExplorer';
+import SetupProgress from '../session/SetupProgress';
 import EmptyState from './EmptyState';
 import { X, GripVertical, PanelLeftClose, PanelRightClose, Columns2 } from 'lucide-react';
 
 export default function MainContent() {
-  const { activeSessionId, sessions } = useSessionStore();
+  const { activeSessionId, sessions, setupProgress } = useSessionStore();
   const {
     isTerminalPanelOpen,
     isBrowserPanelOpen,
@@ -42,7 +43,30 @@ export default function MainContent() {
     }
   }, [isTerminalPanelOpen, terminalHeight, setTerminalHeight]);
 
+  // Intercept Cmd+R to refresh browser instead of the whole app
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === 'r') {
+        // Only intercept if browser panel is open
+        if (isBrowserPanelOpen && activeSessionId) {
+          e.preventDefault();
+          e.stopPropagation();
+          // Dispatch custom event for BrowserPreview to handle
+          window.dispatchEvent(new CustomEvent('grep-browser-refresh', {
+            detail: { sessionId: activeSessionId }
+          }));
+        }
+      }
+    };
+
+    // Use capture phase to intercept before Electron's default handler
+    window.addEventListener('keydown', handleKeyDown, true);
+    return () => window.removeEventListener('keydown', handleKeyDown, true);
+  }, [isBrowserPanelOpen, activeSessionId]);
+
   const activeSession = sessions.find((s) => s.id === activeSessionId);
+  const activeSetupProgress = activeSessionId ? setupProgress[activeSessionId] : null;
+  const isSessionSetup = activeSession?.status === 'setup' || activeSetupProgress?.status === 'running';
 
   // Auto-enable browser for active session when browser panel is opened
   useEffect(() => {
@@ -174,12 +198,16 @@ export default function MainContent() {
     <div className="flex-1 flex flex-col overflow-hidden">
       {/* Main panel area */}
       <div className="flex-1 flex overflow-hidden">
-        {/* Primary content - always chat */}
+        {/* Primary content - chat or setup progress */}
         <div
           className="flex flex-col overflow-hidden min-w-0 transition-all duration-200"
           style={{ flexBasis: hasSidePanel ? flexBasis.main : '100%', flexShrink: 0, flexGrow: 0 }}
         >
-          <ChatContainer session={activeSession} />
+          {isSessionSetup ? (
+            <SetupProgress session={activeSession} progress={activeSetupProgress} />
+          ) : (
+            <ChatContainer session={activeSession} />
+          )}
         </div>
 
         {/* Resizable side panel */}

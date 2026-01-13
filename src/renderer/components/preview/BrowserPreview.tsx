@@ -513,6 +513,19 @@ export default function BrowserPreview({ session, isVisible = true }: BrowserPre
     return () => unsubscribe();
   }, [session.id]);
 
+  // Handle Cmd+R browser refresh from MainContent
+  useEffect(() => {
+    const handleRefresh = (e: CustomEvent<{ sessionId: string }>) => {
+      if (e.detail.sessionId === session.id) {
+        console.log('[BrowserPreview] Refreshing browser via Cmd+R');
+        webviewRef.current?.reload();
+      }
+    };
+
+    window.addEventListener('grep-browser-refresh', handleRefresh as EventListener);
+    return () => window.removeEventListener('grep-browser-refresh', handleRefresh as EventListener);
+  }, [session.id]);
+
   const injectInspector = async () => {
     const webview = webviewRef.current;
     if (!webview) return;
