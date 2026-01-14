@@ -1,6 +1,6 @@
-import React, { useState, useMemo, useEffect, useRef } from 'react';
-import { Terminal, FileText, Search, FolderOpen, Play, Edit2, Globe, Code, HelpCircle, ListTodo, Loader2, ChevronRight, ChevronDown, CheckCircle2, Circle, Clock, ExternalLink, Copy } from 'lucide-react';
-import Editor, { DiffEditor } from '@monaco-editor/react';
+import React, { useState, useMemo } from 'react';
+import { Terminal, FileText, Search, FolderOpen, Play, Edit2, Globe, Code, HelpCircle, ListTodo, Loader2, ChevronRight, ChevronDown, CheckCircle2, Circle, Clock, ExternalLink } from 'lucide-react';
+import { LazyMonacoEditor, LazyDiffEditor } from './LazyMonacoEditor';
 import type { ToolCall } from '../../../shared/types';
 import { useEditorStore } from '../../stores/editor.store';
 
@@ -143,7 +143,7 @@ function getLanguageFromPath(filePath: string): string {
 }
 
 // Render a file write view - shows file content being written with Monaco Editor
-function WriteView({ content, filePath }: { content: string; filePath: string }) {
+function WriteView({ content, filePath, toolCallId }: { content: string; filePath: string; toolCallId: string }) {
   const language = getLanguageFromPath(filePath);
 
   return (
@@ -153,17 +153,16 @@ function WriteView({ content, filePath }: { content: string; filePath: string })
         <ClickableFilePath filePath={filePath} label={`Writing: ${filePath.split('/').pop() || filePath}`} />
       </div>
 
-      {/* Monaco Editor for file content */}
+      {/* Monaco Editor for file content - lazy loaded */}
       <div className="border border-green-500/50 overflow-hidden" style={{ borderRadius: 0 }}>
         <div className="px-2 py-1 bg-green-900/40 text-green-400 text-xs font-bold uppercase" style={{ letterSpacing: '0.05em' }}>
           NEW FILE
         </div>
-        <Editor
+        <LazyMonacoEditor
+          editorId={`write-${toolCallId}`}
           height="300px"
           language={language}
           value={content}
-          theme="vs-dark"
-          loading={<div className="p-4 text-claude-text-secondary">Loading editor...</div>}
           options={{
             readOnly: true,
             minimap: { enabled: false },
@@ -175,34 +174,15 @@ function WriteView({ content, filePath }: { content: string; filePath: string })
             contextmenu: false,
             automaticLayout: true,
           }}
-          onMount={(editor, monaco) => {
-            // Monaco loaded successfully
-            monaco.editor.setTheme('vs-dark');
-          }}
         />
       </div>
     </div>
   );
 }
 
-// Render a diff view for Edit tool using Monaco diff editor
-function DiffView({ oldString, newString, filePath }: { oldString: string; newString: string; filePath: string }) {
+// Render a diff view for Edit tool using Monaco diff editor (lazy loaded)
+function DiffView({ oldString, newString, filePath, toolCallId }: { oldString: string; newString: string; filePath: string; toolCallId: string }) {
   const language = getLanguageFromPath(filePath);
-  const editorRef = useRef<any>(null);
-
-  useEffect(() => {
-    return () => {
-      // Cleanup: properly dispose the diff editor on unmount
-      if (editorRef.current) {
-        try {
-          editorRef.current.dispose();
-        } catch (e) {
-          // Ignore disposal errors
-        }
-        editorRef.current = null;
-      }
-    };
-  }, []);
 
   return (
     <div className="space-y-2 text-xs">
@@ -211,18 +191,17 @@ function DiffView({ oldString, newString, filePath }: { oldString: string; newSt
         <ClickableFilePath filePath={filePath} />
       </div>
 
-      {/* Monaco Diff Editor - side by side */}
+      {/* Monaco Diff Editor - side by side, lazy loaded */}
       <div className="border border-claude-border overflow-hidden" style={{ borderRadius: 0 }}>
         <div className="px-2 py-1 bg-claude-surface text-claude-text-secondary text-xs font-bold uppercase border-b border-claude-border" style={{ letterSpacing: '0.05em' }}>
           DIFF
         </div>
-        <DiffEditor
+        <LazyDiffEditor
+          editorId={`diff-${toolCallId}`}
           height="400px"
           language={language}
           original={oldString}
           modified={newString}
-          theme="vs-dark"
-          loading={<div className="p-4 text-claude-text-secondary">Loading...</div>}
           options={{
             readOnly: true,
             minimap: { enabled: false },
@@ -235,10 +214,6 @@ function DiffView({ oldString, newString, filePath }: { oldString: string; newSt
             renderSideBySide: true,
             enableSplitViewResizing: false,
             renderOverviewRuler: false,
-          }}
-          onMount={(editor, monaco) => {
-            editorRef.current = editor;
-            monaco.editor.setTheme('vs-dark');
           }}
         />
       </div>
@@ -280,12 +255,11 @@ function ExpandedContent({ toolCall }: { toolCall: ToolCall }) {
             <div className="text-claude-text-secondary mb-1 font-semibold">Content Preview:</div>
             {typeof result === 'string' && result.length > 10 ? (
               <div className="border border-claude-border overflow-hidden" style={{ borderRadius: 0 }}>
-                <Editor
+                <LazyMonacoEditor
+                  editorId={`read-${toolCall.id}`}
                   height="300px"
                   language={language}
                   value={result.slice(0, 5000)}
-                  theme="vs-dark"
-                  loading={<div className="p-4 text-claude-text-secondary">Loading...</div>}
                   options={{
                     readOnly: true,
                     minimap: { enabled: false },
@@ -372,7 +346,7 @@ function ExpandedContent({ toolCall }: { toolCall: ToolCall }) {
     }
 
     if (content) {
-      return <WriteView content={content} filePath={filePath} />;
+      return <WriteView content={content} filePath={filePath} toolCallId={toolCall.id} />;
     }
 
     // Have file path but no content yet
@@ -401,7 +375,7 @@ function ExpandedContent({ toolCall }: { toolCall: ToolCall }) {
     }
 
     if (oldString || newString) {
-      return <DiffView oldString={oldString} newString={newString} filePath={filePath} />;
+      return <DiffView oldString={oldString} newString={newString} filePath={filePath} toolCallId={toolCall.id} />;
     }
 
     // Have file path but no diff content yet

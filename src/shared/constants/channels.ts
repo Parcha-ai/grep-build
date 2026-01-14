@@ -59,6 +59,7 @@ export const IPC_CHANNELS = {
   CLAUDE_QUESTION_RESPONSE: 'claude:question-response',
   CLAUDE_COMPACTION_STATUS: 'claude:compaction-status',
   CLAUDE_COMPACTION_COMPLETE: 'claude:compaction-complete',
+  CLAUDE_PLAN_CONTENT: 'claude:plan-content',
 
   // Browser preview channels
   BROWSER_NAVIGATE: 'browser:navigate',

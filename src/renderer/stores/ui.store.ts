@@ -11,8 +11,11 @@ interface UIState {
   isBrowserPanelOpen: boolean;
   isGitPanelOpen: boolean;
   isExtensionsPanelOpen: boolean;
+  isPlanPanelOpen: boolean;
   isInspectorActive: boolean;
   isSettingsOpen: boolean;
+  isOnboardingOpen: boolean;
+  hasApiKey: boolean | null; // null = not checked yet, false = missing, true = present
   selectedElement: unknown | null;
   splitRatio: SplitRatio;
 
@@ -22,6 +25,8 @@ interface UIState {
   sessionInspectorActive: Record<string, boolean>;
   // Per-session selected element
   sessionSelectedElement: Record<string, unknown | null>;
+  // Per-session plan content (markdown)
+  sessionPlanContent: Record<string, string>;
 
   toggleSidebar: () => void;
   setSidebarWidth: (width: number) => void;
@@ -30,12 +35,18 @@ interface UIState {
   toggleBrowserPanel: () => void;
   toggleGitPanel: () => void;
   toggleExtensionsPanel: () => void;
+  togglePlanPanel: () => void;
   setInspectorActive: (active: boolean) => void;
   setSelectedElement: (element: unknown | null) => void;
   cycleSplitRatio: () => void;
   setSplitRatio: (ratio: SplitRatio) => void;
   openSettings: () => void;
   closeSettings: () => void;
+  checkApiKey: () => Promise<boolean>;
+  openOnboarding: () => void;
+  closeOnboarding: () => void;
+  setPlanContent: (sessionId: string, content: string) => void;
+  clearPlanContent: (sessionId: string) => void;
 
   // Multi-session browser methods
   enableSessionBrowser: (sessionId: string) => void;
@@ -54,8 +65,11 @@ export const useUIStore = create<UIState>((set, get) => ({
   isBrowserPanelOpen: false,
   isGitPanelOpen: false,
   isExtensionsPanelOpen: false,
+  isPlanPanelOpen: false,
   isInspectorActive: false,
   isSettingsOpen: false,
+  isOnboardingOpen: false,
+  hasApiKey: null,
   selectedElement: null,
   splitRatio: 'equal',
 
@@ -63,6 +77,7 @@ export const useUIStore = create<UIState>((set, get) => ({
   sessionBrowsersEnabled: {},
   sessionInspectorActive: {},
   sessionSelectedElement: {},
+  sessionPlanContent: {},
 
   toggleSidebar: () => set((state) => ({ isSidebarOpen: !state.isSidebarOpen })),
   setSidebarWidth: (width) => set({ sidebarWidth: width }),
@@ -71,6 +86,7 @@ export const useUIStore = create<UIState>((set, get) => ({
   toggleBrowserPanel: () => set((state) => ({ isBrowserPanelOpen: !state.isBrowserPanelOpen })),
   toggleGitPanel: () => set((state) => ({ isGitPanelOpen: !state.isGitPanelOpen })),
   toggleExtensionsPanel: () => set((state) => ({ isExtensionsPanelOpen: !state.isExtensionsPanelOpen })),
+  togglePlanPanel: () => set((state) => ({ isPlanPanelOpen: !state.isPlanPanelOpen })),
   setInspectorActive: (active) => set({ isInspectorActive: active }),
   setSelectedElement: (element) => set({ selectedElement: element }),
   cycleSplitRatio: () => set((state) => {
@@ -82,6 +98,32 @@ export const useUIStore = create<UIState>((set, get) => ({
   setSplitRatio: (ratio) => set({ splitRatio: ratio }),
   openSettings: () => set({ isSettingsOpen: true }),
   closeSettings: () => set({ isSettingsOpen: false }),
+  checkApiKey: async () => {
+    try {
+      const apiKey = await window.electronAPI?.settings?.getApiKey?.();
+      const hasKey = !!apiKey && apiKey.trim().length > 0;
+      set({ hasApiKey: hasKey });
+      return hasKey;
+    } catch (error) {
+      console.error('Failed to check API key:', error);
+      set({ hasApiKey: false });
+      return false;
+    }
+  },
+  openOnboarding: () => set({ isOnboardingOpen: true }),
+  closeOnboarding: () => set({ isOnboardingOpen: false, hasApiKey: true }),
+
+  // Plan content methods
+  setPlanContent: (sessionId: string, content: string) => set((state) => ({
+    sessionPlanContent: { ...state.sessionPlanContent, [sessionId]: content },
+    // Auto-open plan panel when content is set
+    isPlanPanelOpen: true,
+  })),
+  clearPlanContent: (sessionId: string) => set((state) => {
+    const newContent = { ...state.sessionPlanContent };
+    delete newContent[sessionId];
+    return { sessionPlanContent: newContent };
+  }),
 
   // Multi-session browser methods
   enableSessionBrowser: (sessionId: string) => set((state) => ({

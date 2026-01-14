@@ -46,6 +46,8 @@ const config: ForgeConfig = {
           { name: 'node-pty', source: path.join(__dirname, 'node_modules', 'node-pty') },
           { name: '@anthropic-ai/claude-agent-sdk', source: path.join(__dirname, 'node_modules', '@anthropic-ai', 'claude-agent-sdk'), dest: path.join(nodeModulesPath, '@anthropic-ai', 'claude-agent-sdk') },
           { name: '@anthropic-ai/sdk', source: path.join(__dirname, 'node_modules', '@anthropic-ai', 'sdk'), dest: path.join(nodeModulesPath, '@anthropic-ai', 'sdk') },
+          // Monaco editor assets for code editing
+          { name: 'monaco-editor', source: path.join(__dirname, 'node_modules', 'monaco-editor') },
         ];
 
         for (const dep of deps) {

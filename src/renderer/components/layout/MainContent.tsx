@@ -8,6 +8,7 @@ import BrowserPreview from '../preview/BrowserPreview';
 import GitExplorer from '../git/GitExplorer';
 import EditorPanel from '../editor/EditorPanel';
 import ExtensionsExplorer from '../extensions/ExtensionsExplorer';
+import PlanPanel from '../plan/PlanPanel';
 import SetupProgress from '../session/SetupProgress';
 import EmptyState from './EmptyState';
 import { X, GripVertical, PanelLeftClose, PanelRightClose, Columns2 } from 'lucide-react';
@@ -19,10 +20,12 @@ export default function MainContent() {
     isBrowserPanelOpen,
     isGitPanelOpen,
     isExtensionsPanelOpen,
+    isPlanPanelOpen,
     terminalHeight,
     toggleBrowserPanel,
     toggleGitPanel,
     toggleExtensionsPanel,
+    togglePlanPanel,
     setTerminalHeight,
     splitRatio,
     cycleSplitRatio,
@@ -192,7 +195,7 @@ export default function MainContent() {
     return <EmptyState />;
   }
 
-  const hasSidePanel = isBrowserPanelOpen || isGitPanelOpen || isEditorOpen || isExtensionsPanelOpen;
+  const hasSidePanel = isBrowserPanelOpen || isGitPanelOpen || isEditorOpen || isExtensionsPanelOpen || isPlanPanelOpen;
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
@@ -342,6 +345,18 @@ export default function MainContent() {
                       <div className="flex-1 overflow-hidden">
                         <ExtensionsExplorer sessionId={activeSession.id} projectPath={activeSession.worktreePath} />
                       </div>
+                    </div>
+                  </>
+                )}
+
+                {/* Plan panel - shown when plan mode creates a plan */}
+                {isPlanPanelOpen && !isBrowserPanelOpen && (
+                  <>
+                    {(isGitPanelOpen || isEditorOpen || isExtensionsPanelOpen) && (
+                      <div className="h-px bg-claude-border" />
+                    )}
+                    <div className={`flex flex-col overflow-hidden ${(isGitPanelOpen || isEditorOpen || isExtensionsPanelOpen) ? 'flex-1' : 'h-full'}`}>
+                      <PlanPanel />
                     </div>
                   </>
                 )}

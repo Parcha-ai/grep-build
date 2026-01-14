@@ -77,6 +77,7 @@
     "electron-squirrel-startup": "^1.0.1",
     "electron-store": "^10.1.0",
     "elevenlabs": "^0.8.2",
+    "fix-path": "^5.0.0",
     "lucide-react": "^0.460.0",
     "monaco-editor": "^0.55.1",
     "node-pty": "^1.0.0",

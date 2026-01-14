@@ -1,6 +1,12 @@
 import { app, BrowserWindow, ipcMain, protocol, session, net } from 'electron';
 import * as path from 'path';
 import { pathToFileURL } from 'url';
+
+// CRITICAL: Fix PATH for packaged macOS apps launched from Finder
+// Without this, spawned processes (like Claude Code) can't find 'node' because
+// GUI apps don't inherit the user's shell PATH
+import fixPath from 'fix-path';
+fixPath();
 import { registerAuthHandlers } from './ipc/auth.ipc';
 import { registerSessionHandlers } from './ipc/session.ipc';
 import { registerGitHandlers } from './ipc/git.ipc';
@@ -410,8 +416,8 @@ const createWindow = (): void => {
     return { action: 'deny' };
   });
 
-  // Open DevTools for debugging (always on for now)
-  mainWindow.webContents.openDevTools();
+  // Open DevTools for debugging (disabled for production builds)
+  // mainWindow.webContents.openDevTools();
 
   mainWindow.on('closed', () => {
     mainWindow = null;
@@ -446,7 +452,15 @@ app.whenReady().then(() => {
       ? path.join(__dirname, '..', '..') // .webpack/main -> project root
       : app.getAppPath();
 
-    const filePath = path.join(baseDir, 'node_modules', relativePath);
+    let filePath: string;
+    if (isDev) {
+      // Dev: files are in project root node_modules
+      filePath = path.join(baseDir, 'node_modules', relativePath);
+    } else {
+      // Packaged: Monaco copied to Resources/node_modules by postPackage hook
+      filePath = path.join(process.resourcesPath, 'node_modules', relativePath);
+    }
+
     const fileUrl = pathToFileURL(filePath).toString();
 
     console.log('[Monaco Protocol] Serving:', filePath);

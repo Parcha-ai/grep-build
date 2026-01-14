@@ -12,7 +12,7 @@ import { IPC_CHANNELS } from '../../shared/constants/channels';
 import { browserService } from './browser.service';
 
 interface StreamEvent {
-  type: 'text_delta' | 'thinking_delta' | 'tool_use' | 'tool_result' | 'message_complete' | 'error' | 'system' | 'permission_request' | 'compaction_status' | 'compaction_complete';
+  type: 'text_delta' | 'thinking_delta' | 'tool_use' | 'tool_result' | 'message_complete' | 'error' | 'system' | 'permission_request' | 'compaction_status' | 'compaction_complete' | 'plan_content';
   content?: string;
   toolCall?: ToolCall;
   result?: unknown;
@@ -31,6 +31,9 @@ interface StreamEvent {
   // Compaction fields
   compactionStatus?: CompactionStatus;
   compactionComplete?: CompactionComplete;
+  // Plan content fields
+  planContent?: string;
+  planFilePath?: string;
 }
 
 interface PendingQuestion {
@@ -913,13 +916,13 @@ You are intelligent enough to determine what URLs to test based on the project s
             'claudette-browser': this.getBrowserMcpServer(sessionId),
           },
           // Handle tool permission requests
-          canUseTool: async (toolName: string, input: any) => {
+          canUseTool: async (toolName: string, input: Record<string, unknown>, _options: any) => {
             // Handle AskUserQuestion tool
             if (toolName === 'AskUserQuestion' && input.questions) {
               try {
-                const answers = await this.askUserQuestion(sessionId, input.questions);
+                const answers = await this.askUserQuestion(sessionId, input.questions as any);
                 return {
-                  behavior: 'allow',
+                  behavior: 'allow' as const,
                   updatedInput: {
                     ...input,
                     answers,
@@ -928,14 +931,26 @@ You are intelligent enough to determine what URLs to test based on the project s
               } catch (error) {
                 console.error('[Claude Service] Error asking user question:', error);
                 return {
-                  behavior: 'deny',
+                  behavior: 'deny' as const,
                   message: error instanceof Error ? error.message : 'Failed to get user response',
                 };
               }
             }
 
-            // For other tools, use default behavior
-            return { behavior: 'allow', updatedInput: input };
+            // In plan mode, deny write operations
+            if (sdkPermissionMode === 'plan') {
+              const writeTools = ['Write', 'Edit', 'Bash', 'NotebookEdit', 'TodoWrite'];
+              if (writeTools.includes(toolName)) {
+                console.log(`[Claude Service] Plan mode - denying write tool: ${toolName}`);
+                return {
+                  behavior: 'deny' as const,
+                  message: 'In plan mode, write operations are not permitted. Please exit plan mode to make changes.',
+                };
+              }
+            }
+
+            // For other tools, allow them (SDK's permissionMode will still apply its rules)
+            return { behavior: 'allow' as const };
           },
         },
       });
@@ -1251,6 +1266,32 @@ You are intelligent enough to determine what URLs to test based on the project s
                     toolCall.result = content;
                     toolCall.completedAt = new Date();
                     yield { type: 'tool_result', toolCall, result: content };
+
+                    // Check if this is a Write tool call to a plan file
+                    if (toolCall.name === 'Write') {
+                      const filePath = toolCall.input?.file_path as string;
+                      const plansDir = path.join(os.homedir(), '.claude', 'plans');
+                      if (filePath && filePath.startsWith(plansDir) && filePath.endsWith('.md')) {
+                        // Read the plan file and emit plan_content event
+                        try {
+                          const planContent = fs.readFileSync(filePath, 'utf-8');
+                          console.log(`[Claude Service] Plan file written: ${filePath}`);
+
+                          // Emit to renderer via IPC
+                          if (this.mainWindow) {
+                            this.mainWindow.webContents.send(IPC_CHANNELS.CLAUDE_PLAN_CONTENT, {
+                              sessionId,
+                              planContent,
+                              planFilePath: filePath,
+                            });
+                          }
+
+                          yield { type: 'plan_content', sessionId, planContent, planFilePath: filePath };
+                        } catch (err) {
+                          console.error(`[Claude Service] Failed to read plan file: ${err}`);
+                        }
+                      }
+                    }
                   }
                 }
               }
@@ -1371,6 +1412,14 @@ You are intelligent enough to determine what URLs to test based on the project s
    * Get messages from SDK transcript files for a session
    */
   async getMessages(sessionId: string): Promise<ChatMessage[]> {
+    // Check if this is a teleported session (imported from claude.ai)
+    // Teleported sessions don't have local transcripts - the SDK will resume from the remote session
+    const session = this.sessionStore.get(`sessions.${sessionId}`) as Session | undefined;
+    if (session?.isTeleported) {
+      console.log('[Claude] Teleported session - no local transcript, will resume from remote:', sessionId);
+      return [];
+    }
+
     // Get the stored SDK session ID for this session
     // Try new location first, then fall back to old location for backwards compatibility
     const sdkSessionId = this.sessionStore.get(`sdkSessionMappings.${sessionId}`) as string | undefined

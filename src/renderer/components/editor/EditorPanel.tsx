@@ -1,8 +1,11 @@
 import React, { useEffect, useRef, useCallback } from 'react';
-import Editor, { OnMount, OnChange, BeforeMount } from '@monaco-editor/react';
+import Editor, { OnMount, OnChange, BeforeMount, loader } from '@monaco-editor/react';
 import * as monaco from 'monaco-editor';
 import { X, Save, FileText, Circle, Loader2 } from 'lucide-react';
 import { useEditorStore } from '../../stores/editor.store';
+
+// Track created model URIs for proper cleanup
+const createdModelUris = new Set<string>();
 
 interface EditorPanelProps {
   onClose?: () => void;
@@ -67,21 +70,74 @@ export default function EditorPanel({ onClose }: EditorPanelProps) {
     }
   }, [activeTab?.id, activeTab?.lineNumber]);
 
-  // Clean up existing models before mounting to prevent leaks
-  const handleBeforeMount: BeforeMount = useCallback((monacoInstance) => {
-    // Dispose any existing models that might cause conflicts
-    if (activeTab?.filePath) {
-      const existingModel = monacoInstance.editor.getModels().find(
-        (model: monaco.editor.ITextModel) => model.uri.path === activeTab.filePath
-      );
-      if (existingModel) {
-        existingModel.dispose();
-      }
+  // Track previous tabs to detect closed tabs and dispose their models
+  const prevTabsRef = useRef<typeof tabs>([]);
+
+  useEffect(() => {
+    const prevTabs = prevTabsRef.current;
+    const currentFilePaths = new Set(tabs.map(t => t.filePath));
+
+    // Find tabs that were closed
+    const closedTabs = prevTabs.filter(t => !currentFilePaths.has(t.filePath));
+
+    if (closedTabs.length > 0) {
+      // Dispose models for closed tabs
+      loader.init().then((monacoInstance) => {
+        closedTabs.forEach(closedTab => {
+          const models = monacoInstance.editor.getModels();
+          models.forEach((model: monaco.editor.ITextModel) => {
+            // Check if model matches the closed tab's file path
+            if (model.uri.path === closedTab.filePath || model.uri.path.endsWith(closedTab.filePath)) {
+              console.log('[EditorPanel] Disposing model for closed tab:', model.uri.toString());
+              createdModelUris.delete(model.uri.toString());
+              model.dispose();
+            }
+          });
+        });
+      }).catch(() => {});
     }
-  }, [activeTab?.filePath]);
+
+    prevTabsRef.current = tabs;
+  }, [tabs]);
+
+  // Cleanup all Monaco models when component unmounts to prevent listener leaks
+  useEffect(() => {
+    return () => {
+      // Get Monaco instance and dispose all tracked models
+      loader.init().then((monacoInstance) => {
+        const models = monacoInstance.editor.getModels();
+        models.forEach((model: monaco.editor.ITextModel) => {
+          // Only dispose models we created (tracked by URI)
+          if (createdModelUris.has(model.uri.toString())) {
+            model.dispose();
+            createdModelUris.delete(model.uri.toString());
+          }
+        });
+      }).catch(() => {
+        // Monaco not initialized, nothing to clean up
+      });
+    };
+  }, []);
+
+  // Configure Monaco before mounting
+  const handleBeforeMount: BeforeMount = useCallback((monacoInstance) => {
+    // Log model count for debugging (only if there are many)
+    const modelCount = monacoInstance.editor.getModels().length;
+    if (modelCount > 20) {
+      console.log('[EditorPanel] Model count:', modelCount);
+    }
+  }, []);
 
   const handleEditorMount: OnMount = useCallback((editor) => {
     editorRef.current = editor;
+
+    // Track the model URI for cleanup
+    const model = editor.getModel();
+    if (model) {
+      const uri = model.uri.toString();
+      createdModelUris.add(uri);
+      console.log('[EditorPanel] Tracking model:', uri, '- Total tracked:', createdModelUris.size);
+    }
 
     // Jump to line if specified
     if (activeTab?.lineNumber) {
@@ -192,7 +248,8 @@ export default function EditorPanel({ onClose }: EditorPanelProps) {
           </div>
         ) : activeTab ? (
           <Editor
-            key={activeTab.id} // Force remount when switching tabs to prevent model leaks
+            // NOTE: Do NOT use key prop here - it forces remount and causes model leaks
+            // Monaco handles model switching internally via the path prop
             height="100%"
             path={activeTab.filePath} // Monaco uses this for model management
             language={activeTab.language}
@@ -201,8 +258,8 @@ export default function EditorPanel({ onClose }: EditorPanelProps) {
             beforeMount={handleBeforeMount}
             onMount={handleEditorMount}
             onChange={handleEditorChange}
-            keepCurrentModel={false} // Dispose model on unmount to prevent leaks
-            saveViewState={true} // But preserve view state for tab switching
+            keepCurrentModel={true} // Keep models alive for tab switching (cleaner than remounting)
+            saveViewState={true} // Preserve view state for tab switching
             options={{
               fontSize: 13,
               fontFamily: 'JetBrains Mono, Menlo, Monaco, monospace',

@@ -34,6 +34,7 @@ export interface ModelInfo {
 interface SessionState {
   sessions: Session[];
   activeSessionId: string | null;
+  isLoadingSessions: boolean;
   messages: Record<string, ChatMessage[]>;
   isStreaming: Record<string, boolean>;
   streamEvents: Record<string, StreamEvent[]>; // Chronological events
@@ -113,6 +114,7 @@ interface SessionState {
 export const useSessionStore = create<SessionState>((set, get) => ({
   sessions: [],
   activeSessionId: null,
+  isLoadingSessions: true, // Start as loading
   messages: {},
   isStreaming: {},
   streamEvents: {}, // Chronological event stream
@@ -170,7 +172,10 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   },
 
   loadSessions: async () => {
-    if (!hasElectronAPI) return;
+    if (!hasElectronAPI) {
+      set({ isLoadingSessions: false });
+      return;
+    }
     try {
       const sessions = await window.electronAPI.sessions.list();
       const activeSessionId = await window.electronAPI.dev.getActiveSession();
@@ -198,6 +203,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       set({
         sessions,
         activeSessionId: validActiveSessionId,
+        isLoadingSessions: false,
       });
 
       // Persist auto-selected session
@@ -212,6 +218,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       }
     } catch (error) {
       console.error('Failed to load sessions:', error);
+      set({ isLoadingSessions: false });
     }
   },
 
@@ -692,6 +699,15 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       setPendingQuestion(request.sessionId, request);
     });
 
+    // Subscribe to plan content (when a plan file is written)
+    const unsubPlanContent = window.electronAPI.claude.onPlanContent((data) => {
+      console.log('[Session Store] Plan content received for session:', data.sessionId);
+      // Import ui.store dynamically to avoid circular dependency
+      import('./ui.store').then(({ useUIStore }) => {
+        useUIStore.getState().setPlanContent(data.sessionId, data.planContent);
+      });
+    });
+
     return () => {
       unsubChunk();
       unsubThinking();
@@ -702,6 +718,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       unsubError();
       unsubPermission();
       unsubQuestion();
+      unsubPlanContent();
     };
   },
 
@@ -960,7 +977,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     // Subscribe to compaction status changes
     const unsubscribeStatus = window.electronAPI.claude.onCompactionStatus((status) => {
       console.log('[SessionStore] Compaction status received:', status);
-      setCompactionStatus(status.sessionId, status);
+      setCompactionStatus(status.sessionId, status as CompactionStatus);
     });
 
     // Subscribe to compaction complete events

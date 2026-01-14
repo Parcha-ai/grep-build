@@ -51,7 +51,7 @@ export default function MessageList({
     return (
       <div className="h-full flex items-center justify-center text-claude-text-secondary">
         <div className="text-center">
-          <p className="text-lg mb-2">Start a conversation with Claude</p>
+          <p className="text-lg mb-2">Start a conversation</p>
           <p className="text-sm">Ask questions, request code changes, or get help debugging.</p>
         </div>
       </div>
@@ -134,12 +134,21 @@ export default function MessageList({
       {/* Loading indicator - only show when streaming but no content yet */}
       {isStreaming && !hasStreamingContent && (
         <div className="flex items-center gap-2 text-claude-text-secondary">
-          <div className="flex gap-1">
-            <div className="w-2 h-2 rounded-full bg-claude-accent animate-bounce" style={{ animationDelay: '0ms' }} />
-            <div className="w-2 h-2 rounded-full bg-claude-accent animate-bounce" style={{ animationDelay: '150ms' }} />
-            <div className="w-2 h-2 rounded-full bg-claude-accent animate-bounce" style={{ animationDelay: '300ms' }} />
+          <div className="flex gap-0.5">
+            <div
+              className="w-2 h-2 bg-claude-accent"
+              style={{ animation: 'pulse-square 1.2s ease-in-out infinite 0s' }}
+            />
+            <div
+              className="w-2 h-2 bg-claude-accent"
+              style={{ animation: 'pulse-square 1.2s ease-in-out infinite 0.4s' }}
+            />
+            <div
+              className="w-2 h-2 bg-claude-accent"
+              style={{ animation: 'pulse-square 1.2s ease-in-out infinite 0.8s' }}
+            />
           </div>
-          <span className="text-sm">Claude is thinking...</span>
+          <span className="text-sm">Grep is thinking...</span>
         </div>
       )}
     </div>

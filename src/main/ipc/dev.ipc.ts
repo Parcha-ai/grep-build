@@ -298,21 +298,54 @@ export function registerDevHandlers(ipcMain: IpcMain): void {
   });
 
   // Create a teleport session from a remote session ID
+  // NOTE: The Agent SDK's resume only works with local sessions (UUIDs).
+  // Web sessions (session_xxx format) need to be teleported first using:
+  // 1. Open Claude Code CLI: `claude`
+  // 2. Run `/teleport` and select the session
+  // 3. This downloads the session to ~/.claude/projects/
+  // 4. Then you can open that session in Grep
+  //
+  // This handler creates a placeholder session that will attempt to resume
+  // when you send the first message. If the transcript doesn't exist locally,
+  // you'll need to use the CLI teleport first.
   ipcMain.handle(IPC_CHANNELS.DEV_CREATE_TELEPORT_SESSION, async (_event, data: {
     sessionId: string;
     name: string;
+    cwd?: string;
   }) => {
     try {
-      // Use the remote session ID directly as our session ID
-      // The SDK will handle resuming from the remote session
-      const sessionId = data.sessionId;
+      const remoteSessionId = data.sessionId;
+      const workingDir = data.cwd || process.cwd();
 
-      // Create a session object that will resume the remote session
+      console.log('[Dev] Creating teleport session reference:', remoteSessionId);
+
+      // Check if this session already exists locally (was already teleported via CLI)
+      const claudeDir = path.join(os.homedir(), '.claude', 'projects');
+      const transcriptFilename = `${remoteSessionId}.jsonl`;
+      let foundLocally = false;
+
+      if (fs.existsSync(claudeDir)) {
+        const projectDirs = fs.readdirSync(claudeDir);
+        for (const projectDir of projectDirs) {
+          const transcriptPath = path.join(claudeDir, projectDir, transcriptFilename);
+          if (fs.existsSync(transcriptPath)) {
+            console.log('[Dev] Found local transcript for teleported session:', transcriptPath);
+            foundLocally = true;
+            break;
+          }
+        }
+      }
+
+      if (!foundLocally) {
+        console.log('[Dev] No local transcript found. User may need to run /teleport in Claude CLI first.');
+      }
+
+      // Create a Grep session that references the remote session
       const session: Session = {
-        id: sessionId,
+        id: remoteSessionId,
         name: data.name,
-        repoPath: process.cwd(), // Use current directory as placeholder
-        worktreePath: process.cwd(),
+        repoPath: workingDir,
+        worktreePath: workingDir,
         branch: 'main',
         status: 'running',
         ports: {
@@ -324,15 +357,14 @@ export function registerDevHandlers(ipcMain: IpcMain): void {
         updatedAt: new Date(),
         setupScript: '',
         isDevMode: true,
-        isTeleported: true, // Flag to indicate this is a teleported session
+        isTeleported: true,
       };
 
-      // Store the session with the remote session ID
-      store.set(`sessions.${sessionId}`, session);
-      // Also store the sdkSessionId mapping so it can resume properly
-      store.set(`sdkSessionMappings.${sessionId}`, sessionId);
+      // Store the session
+      store.set(`sessions.${session.id}`, session);
+      store.set(`sdkSessionMappings.${session.id}`, remoteSessionId);
 
-      console.log('[Dev] Created teleport session:', sessionId);
+      console.log('[Dev] Created teleport session:', session.id, foundLocally ? '(transcript found locally)' : '(no local transcript)');
 
       return session;
     } catch (error) {

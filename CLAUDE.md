@@ -22,6 +22,31 @@ npm run package
 npm run make
 ```
 
+## Development Workflow
+
+**CRITICAL: Always test in dev before building!**
+
+When making changes to the application:
+1. Run `npm run start` to launch the dev version
+2. Verify the changes work correctly in the dev build
+3. Get explicit user confirmation that everything is working
+4. Only build the production app when the user explicitly requests it with `/build`
+
+Never build a production version (`npm run make`) without:
+- First testing in dev mode
+- Confirming with the user that dev version works
+- Receiving explicit instruction to build (e.g., `/build` command)
+
+## Slash Commands
+
+### /build
+Build the production application. This command:
+1. Kills any running dev/electron processes
+2. Runs `npm run make` to create the distributable
+3. Opens the built application from `out/Grep Build-darwin-arm64/Grep Build.app`
+
+Usage: User says `/build` when ready to create a production build after dev testing is complete.
+
 ## Architecture
 
 ### Process Architecture

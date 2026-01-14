@@ -174,6 +174,12 @@ const electronAPI = {
       ipcRenderer.on(IPC_CHANNELS.CLAUDE_COMPACTION_COMPLETE, handler);
       return () => ipcRenderer.removeListener(IPC_CHANNELS.CLAUDE_COMPACTION_COMPLETE, handler);
     },
+    // Plan content listener (when plan file is written)
+    onPlanContent: (callback: (data: { sessionId: string; planContent: string; planFilePath: string }) => void) => {
+      const handler = (_: IpcRendererEvent, data: { sessionId: string; planContent: string; planFilePath: string }) => callback(data);
+      ipcRenderer.on(IPC_CHANNELS.CLAUDE_PLAN_CONTENT, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.CLAUDE_PLAN_CONTENT, handler);
+    },
   },
 
   // Browser Preview

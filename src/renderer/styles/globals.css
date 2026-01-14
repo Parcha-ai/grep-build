@@ -92,6 +92,15 @@ code, pre {
   50% { opacity: 0.5; }
 }
 
+@keyframes pulse-square {
+  0%, 100% {
+    opacity: 0.3;
+  }
+  33% {
+    opacity: 1;
+  }
+}
+
 .animate-fade-in {
   animation: fadeIn 0.2s ease-out;
 }

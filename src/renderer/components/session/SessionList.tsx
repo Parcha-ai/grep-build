@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { ChevronRight, ChevronDown, Folder, Plus, Zap } from 'lucide-react';
+import { ChevronRight, ChevronDown, Folder, Plus, Zap, Loader2, Search } from 'lucide-react';
 import { useSessionStore } from '../../stores/session.store';
 import SessionCard from './SessionCard';
 import NewSessionDialog from './NewSessionDialog';
@@ -13,7 +13,7 @@ interface ProjectGroup {
 }
 
 export default function SessionList() {
-  const { sessions, activeSessionId, setActiveSession } = useSessionStore();
+  const { sessions, activeSessionId, setActiveSession, isLoadingSessions } = useSessionStore();
   const [expandedProjects, setExpandedProjects] = useState<Set<string>>(new Set());
   const [newSessionDialogOpen, setNewSessionDialogOpen] = useState(false);
   const [newSessionInitialPath, setNewSessionInitialPath] = useState<string>('');
@@ -128,6 +128,24 @@ export default function SessionList() {
     }
     setExpandedProjects(newExpanded);
   };
+
+  // Show loading state while scanning for sessions
+  if (isLoadingSessions) {
+    return (
+      <div className="p-6 flex flex-col items-center justify-center text-claude-text-secondary">
+        <div className="w-12 h-12 flex items-center justify-center mb-3 bg-claude-surface" style={{ borderRadius: 0 }}>
+          <Search size={20} className="text-claude-accent animate-pulse" />
+        </div>
+        <div className="text-[10px] font-bold uppercase tracking-wider mb-1">
+          SCANNING SESSIONS
+        </div>
+        <div className="flex items-center gap-2 text-[10px]">
+          <Loader2 size={10} className="animate-spin" />
+          <span>Discovering Claude Code transcripts...</span>
+        </div>
+      </div>
+    );
+  }
 
   if (sessions.length === 0) {
     return (

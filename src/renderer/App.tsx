@@ -9,9 +9,10 @@ import MainContent from './components/layout/MainContent';
 import StatusBar from './components/layout/StatusBar';
 import LoginScreen from './components/auth/LoginScreen';
 import SettingsDialog from './components/settings/SettingsDialog';
+import ApiKeyOnboarding from './components/onboarding/ApiKeyOnboarding';
 import QuickSearch from './components/editor/QuickSearch';
 import SessionSwitcher from './components/session/SessionSwitcher';
-import { Terminal, Globe, PanelRight, Settings, PanelLeftClose, Monitor, AlertTriangle, Package } from 'lucide-react';
+import { Terminal, Globe, PanelRight, Settings, PanelLeftClose, Monitor, AlertTriangle, Package, FileText } from 'lucide-react';
 
 // Check if we're running in Electron (has electronAPI) or browser preview mode
 const isElectron = typeof window !== 'undefined' && !!window.electronAPI;
@@ -124,12 +125,17 @@ function ElectronApp() {
     isTerminalPanelOpen,
     isBrowserPanelOpen,
     isExtensionsPanelOpen,
+    isPlanPanelOpen,
     toggleSidebar,
     toggleTerminalPanel,
     toggleBrowserPanel,
     toggleExtensionsPanel,
+    togglePlanPanel,
     cycleSplitRatio,
     openSettings,
+    checkApiKey,
+    openOnboarding,
+    hasApiKey,
   } = useUIStore();
   const { toggleQuickSearch } = useEditorStore();
   const [isInitialized, setIsInitialized] = useState(false);
@@ -140,10 +146,17 @@ function ElectronApp() {
       initializeTTSListeners();
 
       await checkAuth();
+
+      // Check for API key and show onboarding if missing
+      const hasKey = await checkApiKey();
+      if (!hasKey) {
+        openOnboarding();
+      }
+
       setIsInitialized(true);
     };
     init();
-  }, [checkAuth]);
+  }, [checkAuth, checkApiKey, openOnboarding]);
 
   // Global keyboard shortcut for Quick Search (Cmd+K)
   useEffect(() => {
@@ -247,6 +260,15 @@ function ElectronApp() {
             <Package size={14} />
           </button>
           <button
+            onClick={togglePlanPanel}
+            className={`p-1 transition-colors hover:text-claude-text ${
+              isPlanPanelOpen ? 'text-claude-text' : 'text-claude-text-secondary'
+            }`}
+            title="Toggle Plan"
+          >
+            <FileText size={14} />
+          </button>
+          <button
             onClick={cycleSplitRatio}
             className="p-1 text-claude-text-secondary hover:text-claude-text transition-colors"
             title="Cycle Split Layout"
@@ -277,6 +299,9 @@ function ElectronApp() {
 
       {/* Settings Dialog */}
       <SettingsDialog />
+
+      {/* API Key Onboarding */}
+      <ApiKeyOnboarding />
 
       {/* Quick Search (Cmd+K) */}
       <QuickSearch />
