@@ -10,6 +10,7 @@ import type { ChatMessage, ToolCall, Session, QuestionRequest, QuestionResponse,
 import { BrowserWindow } from 'electron';
 import { IPC_CHANNELS } from '../../shared/constants/channels';
 import { browserService } from './browser.service';
+import { documentService } from './document.service';
 
 interface StreamEvent {
   type: 'text_delta' | 'thinking_delta' | 'tool_use' | 'tool_result' | 'message_complete' | 'error' | 'system' | 'permission_request' | 'compaction_status' | 'compaction_complete' | 'plan_content';
@@ -668,6 +669,224 @@ export class ClaudeService {
       }
     );
 
+    // DocumentCreate tool - create DOCX, XLSX, or presentation files
+    const documentCreateTool = tool(
+      'DocumentCreate',
+      'Create a new document (Word, Excel spreadsheet, or HTML slide presentation). Use this to generate office documents for reports, data exports, or presentations.',
+      {
+        type: z.enum(['docx', 'xlsx', 'slides']).describe('Document type: "docx" for Word, "xlsx" for Excel, "slides" for reveal.js presentation'),
+        path: z.string().describe('Full file path where to save the document'),
+        title: z.string().optional().describe('Document title (used for DOCX title or presentation title)'),
+        content: z.any().describe('Document content - structure depends on type. For docx: array of {type, text, level?, rows?, items?}. For xlsx: {sheets: [{name, data: 2D array}]}. For slides: {slides: [{title?, content, notes?, background?, transition?}]}'),
+      },
+      async (args) => {
+        try {
+          const { type, path: docPath, title, content } = args;
+          console.log('[Claude Service] Creating document:', type, docPath);
+
+          let resultPath: string;
+
+          switch (type) {
+            case 'docx':
+              resultPath = await documentService.createDocx({
+                path: docPath,
+                title: title,
+                content: content as any,
+              });
+              break;
+            case 'xlsx':
+              resultPath = await documentService.createXlsx({
+                path: docPath,
+                sheets: content?.sheets || [{ name: 'Sheet1', data: content?.data || [[]] }],
+              });
+              break;
+            case 'slides':
+              resultPath = await documentService.createPresentation({
+                path: docPath,
+                title: title || 'Presentation',
+                theme: content?.theme,
+                slides: content?.slides || [],
+              });
+              break;
+            default:
+              return {
+                content: [{ type: 'text', text: `Unsupported document type: ${type}` }],
+                isError: true,
+              };
+          }
+
+          return {
+            content: [{
+              type: 'text',
+              text: `Created ${type.toUpperCase()} document at: ${resultPath}`,
+            }],
+          };
+        } catch (error) {
+          console.error('[Claude Service] DocumentCreate error:', error);
+          return {
+            content: [{
+              type: 'text',
+              text: `Failed to create document: ${error instanceof Error ? error.message : String(error)}`,
+            }],
+            isError: true,
+          };
+        }
+      }
+    );
+
+    // DocumentRead tool - read document content
+    const documentReadTool = tool(
+      'DocumentRead',
+      'Read the content of a document (Word or Excel). Returns the text content or spreadsheet data.',
+      {
+        path: z.string().describe('Full file path of the document to read'),
+      },
+      async (args) => {
+        try {
+          const { path: docPath } = args;
+          console.log('[Claude Service] Reading document:', docPath);
+
+          const docType = documentService.getDocumentType(docPath);
+
+          switch (docType) {
+            case 'xlsx': {
+              const data = await documentService.readXlsx(docPath);
+              let summary = '';
+              for (const sheet of data.sheets) {
+                summary += `\n## Sheet: ${sheet.name}\n`;
+                if (sheet.data.length > 0) {
+                  const maxRows = Math.min(sheet.data.length, 50);
+                  for (let i = 0; i < maxRows; i++) {
+                    const row = sheet.data[i];
+                    if (row && row.length > 0) {
+                      summary += row.map(cell => cell?.value ?? '').join('\t') + '\n';
+                    }
+                  }
+                  if (sheet.data.length > maxRows) {
+                    summary += `\n... and ${sheet.data.length - maxRows} more rows`;
+                  }
+                }
+              }
+              return {
+                content: [{
+                  type: 'text',
+                  text: `Spreadsheet content from ${docPath}:${summary}`,
+                }],
+              };
+            }
+            case 'docx': {
+              const rendered = await documentService.renderDocx(docPath);
+              const textContent = rendered.html
+                .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
+                .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
+                .replace(/<[^>]+>/g, '\n')
+                .replace(/\n\s*\n/g, '\n\n')
+                .trim()
+                .slice(0, 10000);
+              return {
+                content: [{
+                  type: 'text',
+                  text: `Word document content from ${docPath}:\n\n${textContent}${textContent.length >= 10000 ? '\n...(truncated)' : ''}`,
+                }],
+              };
+            }
+            default:
+              return {
+                content: [{
+                  type: 'text',
+                  text: `Cannot read document type: ${docType}. Supported types: docx, xlsx`,
+                }],
+                isError: true,
+              };
+          }
+        } catch (error) {
+          console.error('[Claude Service] DocumentRead error:', error);
+          return {
+            content: [{
+              type: 'text',
+              text: `Failed to read document: ${error instanceof Error ? error.message : String(error)}`,
+            }],
+            isError: true,
+          };
+        }
+      }
+    );
+
+    // DocumentEdit tool - edit Excel cells
+    const documentEditTool = tool(
+      'DocumentEdit',
+      'Edit cells in an Excel spreadsheet. Can update values or formulas in specific cells.',
+      {
+        path: z.string().describe('Full file path of the Excel file to edit'),
+        updates: z.array(z.object({
+          sheet: z.union([z.string(), z.number()]).describe('Sheet name or index (0-based)'),
+          cell: z.string().describe('Cell reference (e.g., "A1", "B2", "C10")'),
+          value: z.union([z.string(), z.number(), z.boolean(), z.null()]).optional().describe('New cell value'),
+          formula: z.string().optional().describe('Excel formula (without leading =)'),
+        })).describe('Array of cell updates'),
+      },
+      async (args) => {
+        try {
+          const { path: docPath, updates } = args;
+          console.log('[Claude Service] Editing document:', docPath, updates.length, 'updates');
+
+          await documentService.updateXlsxCells(docPath, updates as any);
+
+          return {
+            content: [{
+              type: 'text',
+              text: `Updated ${updates.length} cell(s) in ${docPath}`,
+            }],
+          };
+        } catch (error) {
+          console.error('[Claude Service] DocumentEdit error:', error);
+          return {
+            content: [{
+              type: 'text',
+              text: `Failed to edit document: ${error instanceof Error ? error.message : String(error)}`,
+            }],
+            isError: true,
+          };
+        }
+      }
+    );
+
+    // DocumentPreview tool - preview document in browser panel
+    const documentPreviewTool = tool(
+      'DocumentPreview',
+      'Preview a document (Word, Excel, or presentation) in the browser panel. Converts the document to HTML and displays it.',
+      {
+        path: z.string().describe('Full file path of the document to preview'),
+      },
+      async (args) => {
+        try {
+          const { path: docPath } = args;
+          console.log('[Claude Service] Previewing document:', docPath);
+
+          const content = await documentService.renderDocument(docPath);
+          const previewPath = await documentService.saveForPreview(content, docPath);
+          const fileUrl = `file://${previewPath}`;
+          await browserService.navigate(sessionId, fileUrl);
+
+          return {
+            content: [{
+              type: 'text',
+              text: `Previewing ${docPath} in browser panel`,
+            }],
+          };
+        } catch (error) {
+          console.error('[Claude Service] DocumentPreview error:', error);
+          return {
+            content: [{
+              type: 'text',
+              text: `Failed to preview document: ${error instanceof Error ? error.message : String(error)}`,
+            }],
+            isError: true,
+          };
+        }
+      }
+    );
+
     const mcpServer = createSdkMcpServer({
       name: 'claudette-browser',
       version: '1.0.0',
@@ -685,6 +904,11 @@ export class ClaudeService {
         browserGetResponseBodyTool,
         browserClearLogsTool,
         updateSessionNameTool,
+        // Document tools
+        documentCreateTool,
+        documentReadTool,
+        documentEditTool,
+        documentPreviewTool,
       ],
     });
 

@@ -9,6 +9,10 @@ import {
   X,
   Trash2,
   Bot,
+  FileText,
+  FileSpreadsheet,
+  Presentation,
+  File,
 } from 'lucide-react';
 import { useUIStore } from '../../stores/ui.store';
 import { useSessionStore } from '../../stores/session.store';
@@ -20,6 +24,59 @@ interface AutomationIndicator {
   y?: number;
   selector?: string;
   text?: string;
+}
+
+// Helper to detect document types from file URLs
+function getDocumentInfo(url: string): { isFile: boolean; filename: string; docType: 'docx' | 'xlsx' | 'slides' | 'web' | 'other'; displayName: string } {
+  if (!url.startsWith('file://')) {
+    return { isFile: false, filename: '', docType: 'web', displayName: '' };
+  }
+
+  const filePath = url.replace('file://', '');
+  const filename = filePath.split('/').pop() || filePath;
+  const ext = filename.split('.').pop()?.toLowerCase() || '';
+
+  let docType: 'docx' | 'xlsx' | 'slides' | 'web' | 'other' = 'other';
+  let displayName = filename;
+
+  // Check if this is a preview file from our document service
+  if (filename.startsWith('preview-') && ext === 'html') {
+    const match = filename.match(/preview-\d+-(.+)\.html$/);
+    if (match) {
+      const originalName = match[1];
+      displayName = originalName;
+      if (originalName.toLowerCase().includes('docx') || originalName.toLowerCase().includes('doc')) {
+        docType = 'docx';
+      } else if (originalName.toLowerCase().includes('xlsx') || originalName.toLowerCase().includes('xls')) {
+        docType = 'xlsx';
+      } else if (originalName.toLowerCase().includes('slide') || originalName.toLowerCase().includes('presentation')) {
+        docType = 'slides';
+      } else {
+        docType = 'other';
+      }
+    }
+  } else {
+    if (['docx', 'doc'].includes(ext)) docType = 'docx';
+    else if (['xlsx', 'xls', 'csv'].includes(ext)) docType = 'xlsx';
+    else if (['html', 'htm'].includes(ext) && (filename.includes('slide') || filename.includes('presentation') || filename.includes('reveal'))) docType = 'slides';
+    else if (['html', 'htm'].includes(ext)) docType = 'web';
+  }
+
+  return { isFile: true, filename, docType, displayName };
+}
+
+// Icon component for document type
+function DocumentIcon({ docType, className }: { docType: string; className?: string }) {
+  switch (docType) {
+    case 'docx':
+      return <FileText className={className} />;
+    case 'xlsx':
+      return <FileSpreadsheet className={className} />;
+    case 'slides':
+      return <Presentation className={className} />;
+    default:
+      return <File className={className} />;
+  }
 }
 
 interface BrowserPreviewProps {
@@ -907,12 +964,32 @@ export default function BrowserPreview({ session, isVisible = true }: BrowserPre
 
         {/* URL bar */}
         <form onSubmit={handleUrlSubmit} className="flex-1">
-          <input
-            type="text"
-            value={inputUrl}
-            onChange={(e) => setInputUrl(e.target.value)}
-            className="w-full px-3 py-1 bg-claude-bg border border-claude-border rounded text-sm focus:outline-none focus:border-claude-accent font-mono"
-          />
+          {(() => {
+            const docInfo = getDocumentInfo(url);
+            if (docInfo.isFile && docInfo.docType !== 'web') {
+              // Show document-style URL bar
+              return (
+                <div className="w-full px-3 py-1 bg-claude-bg border border-claude-border rounded text-sm flex items-center gap-2">
+                  <DocumentIcon docType={docInfo.docType} className="w-4 h-4 text-claude-text-secondary flex-shrink-0" />
+                  <span className="truncate text-claude-text" title={url}>
+                    {docInfo.displayName}
+                  </span>
+                  <span className="text-claude-text-secondary text-xs uppercase flex-shrink-0 px-2 py-0.5 bg-claude-surface rounded">
+                    {docInfo.docType === 'docx' ? 'Word' : docInfo.docType === 'xlsx' ? 'Excel' : docInfo.docType === 'slides' ? 'Slides' : 'Document'}
+                  </span>
+                </div>
+              );
+            }
+            // Regular URL input
+            return (
+              <input
+                type="text"
+                value={inputUrl}
+                onChange={(e) => setInputUrl(e.target.value)}
+                className="w-full px-3 py-1 bg-claude-bg border border-claude-border rounded text-sm focus:outline-none focus:border-claude-accent font-mono"
+              />
+            );
+          })()}
         </form>
 
         {/* Actions */}
