@@ -15,6 +15,7 @@ export interface Session {
   isDevMode?: boolean; // True for local dev sessions (no Docker)
   isTeleported?: boolean; // True for sessions imported from claude.ai/code
   lastBrowserUrl?: string; // Last URL visited in browser preview
+  model?: string; // Selected Claude model for this session
 }
 
 export type SessionStatus = 'creating' | 'starting' | 'setup' | 'running' | 'stopping' | 'stopped' | 'error';

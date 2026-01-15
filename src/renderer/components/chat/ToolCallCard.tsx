@@ -9,6 +9,7 @@ interface ToolCallCardProps {
   isLatest?: boolean; // If true, expand by default
   isLatestToolCall?: boolean; // Alias for isLatest
   isStreaming?: boolean; // If currently streaming
+  defaultCollapsed?: boolean; // If true, start collapsed (for old messages to improve performance)
 }
 
 interface TodoItem {
@@ -142,8 +143,72 @@ function getLanguageFromPath(filePath: string): string {
   return langMap[ext] || 'plaintext';
 }
 
+// Helper to detect if file is an image or video
+function getMediaType(filePath: string): 'image' | 'video' | null {
+  const ext = filePath.split('.').pop()?.toLowerCase() || '';
+  const imageExts = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'ico', 'bmp'];
+  const videoExts = ['mp4', 'webm', 'mov', 'avi', 'mkv'];
+  if (imageExts.includes(ext)) return 'image';
+  if (videoExts.includes(ext)) return 'video';
+  return null;
+}
+
+// Helper to detect base64 image data in content
+function extractBase64Image(content: string): { type: string; data: string } | null {
+  // Check for data URL format: data:image/xxx;base64,...
+  const dataUrlMatch = content.match(/^data:(image\/[a-z+]+);base64,(.+)$/i);
+  if (dataUrlMatch) {
+    return { type: dataUrlMatch[1], data: dataUrlMatch[2] };
+  }
+
+  // Check for raw base64 that looks like an image (PNG/JPEG magic bytes)
+  // PNG starts with iVBOR, JPEG starts with /9j/
+  if (content.startsWith('iVBOR') || content.startsWith('/9j/')) {
+    const type = content.startsWith('iVBOR') ? 'image/png' : 'image/jpeg';
+    return { type, data: content };
+  }
+
+  return null;
+}
+
+// Rich media preview component
+function MediaPreview({ src, type, alt }: { src: string; type: 'image' | 'video'; alt?: string }) {
+  const [isZoomed, setIsZoomed] = React.useState(false);
+
+  if (type === 'video') {
+    return (
+      <div className="border border-claude-border overflow-hidden" style={{ borderRadius: 0 }}>
+        <video
+          src={src}
+          controls
+          className="max-w-full max-h-96"
+          style={{ display: 'block' }}
+        />
+      </div>
+    );
+  }
+
+  return (
+    <div className="border border-claude-border overflow-hidden relative" style={{ borderRadius: 0 }}>
+      <img
+        src={src}
+        alt={alt || 'Preview'}
+        className={`max-w-full cursor-pointer transition-all ${isZoomed ? 'max-h-none' : 'max-h-96'}`}
+        style={{ display: 'block' }}
+        onClick={() => setIsZoomed(!isZoomed)}
+        title={isZoomed ? 'Click to shrink' : 'Click to expand'}
+      />
+      {!isZoomed && (
+        <div className="absolute bottom-1 right-1 text-[10px] bg-black/60 text-white px-1.5 py-0.5">
+          Click to expand
+        </div>
+      )}
+    </div>
+  );
+}
+
 // Render a file write view - shows file content being written with Monaco Editor
-function WriteView({ content, filePath, toolCallId }: { content: string; filePath: string; toolCallId: string }) {
+function WriteView({ content, filePath, toolCallId, priority = false }: { content: string; filePath: string; toolCallId: string; priority?: boolean }) {
   const language = getLanguageFromPath(filePath);
 
   return (
@@ -163,6 +228,7 @@ function WriteView({ content, filePath, toolCallId }: { content: string; filePat
           height="300px"
           language={language}
           value={content}
+          priority={priority}
           options={{
             readOnly: true,
             minimap: { enabled: false },
@@ -181,7 +247,7 @@ function WriteView({ content, filePath, toolCallId }: { content: string; filePat
 }
 
 // Render a diff view for Edit tool using Monaco diff editor (lazy loaded)
-function DiffView({ oldString, newString, filePath, toolCallId }: { oldString: string; newString: string; filePath: string; toolCallId: string }) {
+function DiffView({ oldString, newString, filePath, toolCallId, priority = false }: { oldString: string; newString: string; filePath: string; toolCallId: string; priority?: boolean }) {
   const language = getLanguageFromPath(filePath);
 
   return (
@@ -202,6 +268,7 @@ function DiffView({ oldString, newString, filePath, toolCallId }: { oldString: s
           language={language}
           original={oldString}
           modified={newString}
+          priority={priority}
           options={{
             readOnly: true,
             minimap: { enabled: false },
@@ -222,15 +289,16 @@ function DiffView({ oldString, newString, filePath, toolCallId }: { oldString: s
 }
 
 // Render expanded content based on tool type
-function ExpandedContent({ toolCall }: { toolCall: ToolCall }) {
+function ExpandedContent({ toolCall, priority = false }: { toolCall: ToolCall; priority?: boolean }) {
   const { name, input, result } = toolCall;
   const isRunning = toolCall.status === 'running' || toolCall.status === 'pending';
 
-  // Special rendering for Read tool - show clickable file path with Monaco preview
+  // Special rendering for Read tool - show clickable file path with Monaco preview or media
   if (name === 'Read') {
     const filePath = (input.file_path as string) || '';
     const lineNumber = (input.offset as number) || undefined;
     const language = getLanguageFromPath(filePath);
+    const mediaType = getMediaType(filePath);
 
     // Show loading state if no file path yet
     if (!filePath) {
@@ -238,6 +306,24 @@ function ExpandedContent({ toolCall }: { toolCall: ToolCall }) {
         <div className="flex items-center gap-2 text-xs text-claude-text-secondary">
           <Loader2 size={12} className="animate-spin" />
           <span>Loading file path...</span>
+        </div>
+      );
+    }
+
+    // Handle image/video files
+    if (mediaType && result !== undefined && typeof result === 'string') {
+      // Try to extract base64 data or use the result directly
+      const base64Data = extractBase64Image(result);
+      const src = base64Data
+        ? `data:${base64Data.type};base64,${base64Data.data}`
+        : result.startsWith('data:') ? result : `file://${filePath}`;
+
+      return (
+        <div className="space-y-2 text-xs">
+          <div className="font-semibold">
+            <ClickableFilePath filePath={filePath} />
+          </div>
+          <MediaPreview src={src} type={mediaType} alt={filePath.split('/').pop()} />
         </div>
       );
     }
@@ -260,6 +346,7 @@ function ExpandedContent({ toolCall }: { toolCall: ToolCall }) {
                   height="300px"
                   language={language}
                   value={result.slice(0, 5000)}
+                  priority={priority}
                   options={{
                     readOnly: true,
                     minimap: { enabled: false },
@@ -346,7 +433,7 @@ function ExpandedContent({ toolCall }: { toolCall: ToolCall }) {
     }
 
     if (content) {
-      return <WriteView content={content} filePath={filePath} toolCallId={toolCall.id} />;
+      return <WriteView content={content} filePath={filePath} toolCallId={toolCall.id} priority={priority} />;
     }
 
     // Have file path but no content yet
@@ -375,7 +462,7 @@ function ExpandedContent({ toolCall }: { toolCall: ToolCall }) {
     }
 
     if (oldString || newString) {
-      return <DiffView oldString={oldString} newString={newString} filePath={filePath} toolCallId={toolCall.id} />;
+      return <DiffView oldString={oldString} newString={newString} filePath={filePath} toolCallId={toolCall.id} priority={priority} />;
     }
 
     // Have file path but no diff content yet
@@ -423,6 +510,26 @@ function ExpandedContent({ toolCall }: { toolCall: ToolCall }) {
     ? Object.keys(input).length > 0
     : input !== null && input !== undefined && String(input).trim() !== '';
 
+  // Check if result contains base64 image data (string or object with screenshot field)
+  const resultStr = typeof result === 'string' ? result : '';
+  const base64Image = extractBase64Image(resultStr);
+
+  // Also check for screenshot field in object results (common for browser/MCP tools)
+  let screenshotFromObject: string | null = null;
+  if (!base64Image && typeof result === 'object' && result !== null) {
+    const resultObj = result as Record<string, unknown>;
+    // Look for common screenshot field names
+    const screenshotField = resultObj.screenshot || resultObj.image || resultObj.imageData;
+    if (typeof screenshotField === 'string') {
+      const extracted = extractBase64Image(screenshotField);
+      if (extracted) {
+        screenshotFromObject = `data:${extracted.type};base64,${extracted.data}`;
+      } else if (screenshotField.startsWith('data:image')) {
+        screenshotFromObject = screenshotField;
+      }
+    }
+  }
+
   // For other tools, show input and result
   return (
     <div className="space-y-2 text-xs">
@@ -440,18 +547,51 @@ function ExpandedContent({ toolCall }: { toolCall: ToolCall }) {
       {result !== undefined && (
         <div>
           <div className="text-claude-text-secondary mb-1 font-semibold">Result:</div>
-          <pre className="whitespace-pre-wrap text-claude-text bg-claude-bg/50 p-2 overflow-x-auto max-h-60 overflow-y-auto">
-            {typeof result === 'object' ? JSON.stringify(result, null, 2) : String(result)}
-          </pre>
+          {base64Image ? (
+            <MediaPreview
+              src={`data:${base64Image.type};base64,${base64Image.data}`}
+              type="image"
+              alt="Tool result"
+            />
+          ) : screenshotFromObject ? (
+            <div className="space-y-2">
+              <MediaPreview src={screenshotFromObject} type="image" alt="Screenshot" />
+              {/* Show other fields from the object result */}
+              {typeof result === 'object' && Object.keys(result as Record<string, unknown>).filter(k => !['screenshot', 'image', 'imageData'].includes(k)).length > 0 && (
+                <pre className="whitespace-pre-wrap text-claude-text bg-claude-bg/50 p-2 overflow-x-auto max-h-40 overflow-y-auto text-[11px]">
+                  {JSON.stringify(
+                    Object.fromEntries(
+                      Object.entries(result as Record<string, unknown>).filter(([k]) => !['screenshot', 'image', 'imageData'].includes(k))
+                    ),
+                    null,
+                    2
+                  )}
+                </pre>
+              )}
+            </div>
+          ) : (
+            <pre className="whitespace-pre-wrap text-claude-text bg-claude-bg/50 p-2 overflow-x-auto max-h-60 overflow-y-auto">
+              {typeof result === 'object' ? JSON.stringify(result, null, 2) : String(result)}
+            </pre>
+          )}
         </div>
       )}
     </div>
   );
 }
 
-export default function ToolCallCard({ toolCall, isLatest = false, isLatestToolCall = false }: ToolCallCardProps) {
-  // Always expanded by default - user can collapse manually if desired
-  const [isExpanded, setIsExpanded] = useState(true);
+export default function ToolCallCard({ toolCall, isLatest = false, isLatestToolCall = false, defaultCollapsed = false }: ToolCallCardProps) {
+  // Start collapsed for old messages (performance optimization) - otherwise expanded by default
+  const [isExpanded, setIsExpanded] = useState(!defaultCollapsed);
+  // Track if content has ever been rendered (to prevent Monaco disposal errors on collapse)
+  const [hasBeenExpanded, setHasBeenExpanded] = useState(!defaultCollapsed);
+
+  // Update hasBeenExpanded when first expanded
+  React.useEffect(() => {
+    if (isExpanded && !hasBeenExpanded) {
+      setHasBeenExpanded(true);
+    }
+  }, [isExpanded, hasBeenExpanded]);
 
   // Keep isLatest/isLatestToolCall for potential future use but don't auto-collapse
   const _shouldExpand = isLatest || isLatestToolCall; // eslint-disable-line @typescript-eslint/no-unused-vars
@@ -523,10 +663,17 @@ export default function ToolCallCard({ toolCall, isLatest = false, isLatestToolC
         )}
       </button>
 
-      {/* Expanded content */}
-      {isExpanded && (
-        <div className="ml-6 mt-1 p-2 bg-claude-surface/30 border-l-2 border-current" style={{ borderColor: config.color.replace('text-', '') }}>
-          <ExpandedContent toolCall={toolCall} />
+      {/* Expanded content - once rendered, hide with CSS to prevent Monaco disposal errors */}
+      {hasBeenExpanded && (
+        <div
+          className="ml-6 mt-1 p-2 bg-claude-surface/30 border-l-2 border-current"
+          style={{
+            borderColor: config.color.replace('text-', ''),
+            display: isExpanded ? 'block' : 'none',
+          }}
+        >
+          {/* Priority loading for recent/active tool calls */}
+          <ExpandedContent toolCall={toolCall} priority={isLatest || isLatestToolCall || isRunning} />
         </div>
       )}
     </div>

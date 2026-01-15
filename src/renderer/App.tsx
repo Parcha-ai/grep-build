@@ -158,18 +158,35 @@ function ElectronApp() {
     init();
   }, [checkAuth, checkApiKey, openOnboarding]);
 
-  // Global keyboard shortcut for Quick Search (Cmd+K)
+  // Global keyboard shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      // Cmd+K: Quick Search
       if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
         e.preventDefault();
         toggleQuickSearch();
+        return;
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [toggleQuickSearch]);
+
+  // CMD+R handler - intercepted by main process, sent via IPC
+  useEffect(() => {
+    const unsubscribe = window.electronAPI.app.onCmdRPressed(() => {
+      if (isBrowserPanelOpen) {
+        // Dispatch custom event for BrowserPreview to handle
+        window.dispatchEvent(new CustomEvent('browser-refresh'));
+      }
+      // If browser panel is closed, do nothing (no app refresh)
+    });
+
+    return () => {
+      unsubscribe();
+    };
+  }, [isBrowserPanelOpen]);
 
   useEffect(() => {
     // Load sessions when authenticated OR in dev mode

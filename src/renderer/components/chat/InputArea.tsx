@@ -137,10 +137,17 @@ export default function InputArea({ sessionId, disabled, systemInfo, isStreaming
   const [escapeKeyCount, setEscapeKeyCount] = useState(0);
   const [escapeTimeout, setEscapeTimeout] = useState<NodeJS.Timeout | null>(null);
   const [showEscapeWarning, setShowEscapeWarning] = useState(false);
+
+  // Message history state
+  const [messageHistory, setMessageHistory] = useState<string[]>([]);
+  const [showHistory, setShowHistory] = useState(false);
+  const [historyIndex, setHistoryIndex] = useState(-1);
+  const historyDropdownRef = useRef<HTMLDivElement>(null);
+
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
-  const { sendMessage, isStreaming, permissionMode, cyclePermissionMode, thinkingMode, cycleThinkingMode, currentToolCalls, messages, sessions, messageQueue, selectedModel, setSelectedModel, availableModels, loadAvailableModels } = useSessionStore();
-  const { selectedElement, setSelectedElement, setInspectorActive, toggleBrowserPanel } = useUIStore();
+  const { sendMessage, interruptAndSend, isStreaming, permissionMode, cyclePermissionMode, thinkingMode, cycleThinkingMode, currentToolCalls, messages, sessions, messageQueue, selectedModel, setSelectedModel, availableModels, loadAvailableModels } = useSessionStore();
+  const { selectedElement, setSelectedElement, sessionInspectorActive, setSessionInspectorActive, toggleBrowserPanel } = useUIStore();
   const { settings: audioSettings, setAudioMode } = useAudioStore();
 
   // Command/Skill/Agent autocomplete state
@@ -168,7 +175,7 @@ export default function InputArea({ sessionId, disabled, systemInfo, isStreaming
   // Model selector state
   const [showModelDropdown, setShowModelDropdown] = useState(false);
   const modelDropdownRef = useRef<HTMLDivElement>(null);
-  const currentModel = selectedModel[sessionId] || 'claude-sonnet-4-5-20250929';
+  const currentModel = selectedModel[sessionId] || 'claude-opus-4-5-20251101';
 
   // Get current model display name
   const currentModelInfo = useMemo(() => {
@@ -182,6 +189,32 @@ export default function InputArea({ sessionId, disabled, systemInfo, isStreaming
       loadAvailableModels();
     }
   }, []);
+
+  // Load message history from localStorage on mount
+  useEffect(() => {
+    try {
+      const stored = localStorage.getItem(`grep-history-${sessionId}`);
+      if (stored) {
+        setMessageHistory(JSON.parse(stored));
+      }
+    } catch {
+      // Ignore parse errors
+    }
+  }, [sessionId]);
+
+  // Close history dropdown on outside click
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (historyDropdownRef.current && !historyDropdownRef.current.contains(event.target as Node)) {
+        setShowHistory(false);
+        setHistoryIndex(-1);
+      }
+    };
+    if (showHistory) {
+      document.addEventListener('mousedown', handleClickOutside);
+    }
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [showHistory]);
 
   // Close model dropdown on outside click
   useEffect(() => {
@@ -493,10 +526,43 @@ export default function InputArea({ sessionId, disabled, systemInfo, isStreaming
     [message, commandStartIndex, commandType, sessionId, sessions]
   );
 
+  // Save message to history
+  const saveToHistory = useCallback((msg: string) => {
+    if (!msg.trim()) return;
+
+    setMessageHistory(prev => {
+      // Don't add duplicates of the last entry
+      if (prev.length > 0 && prev[0] === msg) return prev;
+
+      // Add to front, limit to 50 entries
+      const newHistory = [msg, ...prev.filter(h => h !== msg)].slice(0, 50);
+
+      // Persist to localStorage
+      try {
+        localStorage.setItem(`grep-history-${sessionId}`, JSON.stringify(newHistory));
+      } catch {
+        // Ignore storage errors
+      }
+
+      return newHistory;
+    });
+  }, [sessionId]);
+
+  // Select a history item
+  const selectHistoryItem = useCallback((item: string) => {
+    setMessage(item);
+    setShowHistory(false);
+    setHistoryIndex(-1);
+    textareaRef.current?.focus();
+  }, []);
+
   const handleSubmit = async () => {
     if (!message.trim() && attachments.length === 0) return;
     if (disabled) return;
     // Note: We don't block on isSending - the store handles queueing if already streaming
+
+    // Save to history before sending
+    saveToHistory(message.trim());
 
     // Deactivate audio mode when typing manually
     setAudioMode(sessionId, false);
@@ -545,10 +611,93 @@ export default function InputArea({ sessionId, disabled, systemInfo, isStreaming
       return; // Let autocomplete components handle these
     }
 
+    // Handle history navigation
+    if (showHistory && messageHistory.length > 0) {
+      if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        setHistoryIndex(prev => Math.min(prev + 1, messageHistory.length - 1));
+        return;
+      }
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        setHistoryIndex(prev => {
+          if (prev <= 0) {
+            setShowHistory(false);
+            return -1;
+          }
+          return prev - 1;
+        });
+        return;
+      }
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        if (historyIndex >= 0 && historyIndex < messageHistory.length) {
+          selectHistoryItem(messageHistory[historyIndex]);
+        }
+        return;
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        setShowHistory(false);
+        setHistoryIndex(-1);
+        return;
+      }
+    }
+
+    // ArrowUp at start of input or empty input shows history
+    if (e.key === 'ArrowUp' && messageHistory.length > 0) {
+      const textarea = textareaRef.current;
+      const cursorAtStart = !textarea || textarea.selectionStart === 0;
+      const inputEmpty = !message.trim();
+
+      if (cursorAtStart || inputEmpty) {
+        e.preventDefault();
+        setShowHistory(true);
+        setHistoryIndex(0);
+        return;
+      }
+    }
+
     // Shift+Tab to cycle permission modes
     if (e.key === 'Tab' && e.shiftKey) {
       e.preventDefault();
       cyclePermissionMode(sessionId);
+      return;
+    }
+
+    // CMD+Enter: Force send - interrupt agent if streaming and send immediately
+    if (e.key === 'Enter' && e.metaKey) {
+      e.preventDefault();
+      if (!message.trim() && attachments.length === 0) return;
+      if (disabled) return;
+
+      // Save to history before sending
+      saveToHistory(message.trim());
+
+      // Deactivate audio mode when typing manually
+      setAudioMode(sessionId, false);
+
+      // Build message with file context
+      let fullMessage = message.trim();
+      const fileMentions = attachments.filter((a) => a.type === 'mention');
+      if (fileMentions.length > 0) {
+        const fileContext = fileMentions.map((m) => `@${m.name}`).join(', ');
+        if (fullMessage) {
+          fullMessage = `[Files: ${fileContext}]\n\n${fullMessage}`;
+        } else {
+          fullMessage = `Looking at: ${fileContext}`;
+        }
+      }
+
+      const otherAttachments = attachments.filter((a) => a.type !== 'mention');
+      const attachmentsToSend = otherAttachments.length > 0 ? [...otherAttachments] : undefined;
+
+      // Clear input immediately
+      setMessage('');
+      setAttachments([]);
+
+      // Use interruptAndSend which properly cancels stream then sends
+      interruptAndSend(sessionId, fullMessage, attachmentsToSend);
       return;
     }
 
@@ -700,9 +849,17 @@ export default function InputArea({ sessionId, disabled, systemInfo, isStreaming
     }
   };
 
+  // Get inspector state for this session
+  const inspectorActive = sessionInspectorActive[sessionId] || false;
+
   const handleInspectElement = () => {
-    setInspectorActive(true);
-    toggleBrowserPanel(); // Open browser panel if not already open
+    // Toggle inspector - if already active, turn it off
+    if (inspectorActive) {
+      setSessionInspectorActive(sessionId, false);
+    } else {
+      setSessionInspectorActive(sessionId, true);
+      toggleBrowserPanel(); // Open browser panel if not already open
+    }
   };
 
   const handleAtButtonClick = () => {
@@ -792,6 +949,33 @@ export default function InputArea({ sessionId, disabled, systemInfo, isStreaming
         />
       )}
 
+      {/* Message History Dropdown */}
+      {showHistory && messageHistory.length > 0 && (
+        <div
+          ref={historyDropdownRef}
+          className="absolute bottom-full left-0 right-0 mb-1 max-h-64 overflow-y-auto bg-claude-surface border border-claude-border shadow-lg z-50"
+          style={{ borderRadius: 0 }}
+        >
+          <div className="px-3 py-1.5 text-xs text-claude-text-secondary font-mono border-b border-claude-border flex items-center justify-between">
+            <span>HISTORY</span>
+            <span className="text-[10px]">↑↓ navigate • Enter select • Esc close</span>
+          </div>
+          {messageHistory.map((item, index) => (
+            <button
+              key={index}
+              onClick={() => selectHistoryItem(item)}
+              className={`w-full text-left px-3 py-2 font-mono text-sm transition-colors ${
+                index === historyIndex
+                  ? 'bg-claude-accent/20 text-claude-text'
+                  : 'text-claude-text-secondary hover:bg-claude-bg hover:text-claude-text'
+              }`}
+            >
+              <div className="truncate">{item}</div>
+            </button>
+          ))}
+        </div>
+      )}
+
       {/* Attachments - brutalist badges */}
       {attachments.length > 0 && (
         <div className="flex flex-wrap gap-1.5 mb-2">
@@ -872,10 +1056,12 @@ export default function InputArea({ sessionId, disabled, systemInfo, isStreaming
           </button>
           <button
             onClick={handleInspectElement}
-            disabled={disabled || isSending}
-            className="p-1 transition-colors hover:bg-claude-bg disabled:opacity-40 disabled:cursor-not-allowed text-claude-text-secondary"
+            disabled={disabled}
+            className={`p-1 transition-colors hover:bg-claude-bg disabled:opacity-40 disabled:cursor-not-allowed ${
+              inspectorActive ? 'text-claude-accent' : 'text-claude-text-secondary'
+            }`}
             style={{ borderRadius: 0 }}
-            title="Inspect element"
+            title={inspectorActive ? 'Cancel inspector (click again)' : 'Inspect element'}
           >
             <Target size={14} />
           </button>
@@ -1004,7 +1190,11 @@ export default function InputArea({ sessionId, disabled, systemInfo, isStreaming
           <>
             <span>@ FILE</span>
             <span>ENTER SEND</span>
+            <span>⌘↵ FORCE</span>
           </>
+        )}
+        {isStreamingProp && (
+          <span className="text-amber-400">⌘↵ INTERRUPT</span>
         )}
 
         {/* Subagent status or Task progress */}

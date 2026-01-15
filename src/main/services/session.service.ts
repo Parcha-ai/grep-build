@@ -236,7 +236,21 @@ Only return the title, nothing else.`
     const sessionMap = new Map<string, Session>();
 
     storedSessions.forEach(s => sessionMap.set(s.id, s));
-    claudeSessions.forEach(s => sessionMap.set(s.id, s));  // Override with discovered sessions
+    // Merge discovered sessions with stored ones, preserving user settings like model selection
+    claudeSessions.forEach(s => {
+      const existing = sessionMap.get(s.id);
+      if (existing) {
+        // Merge: discovered session data + preserved user settings from stored session
+        sessionMap.set(s.id, {
+          ...s,
+          // Preserve user-set properties from stored session
+          model: existing.model,
+          lastBrowserUrl: existing.lastBrowserUrl,
+        });
+      } else {
+        sessionMap.set(s.id, s);
+      }
+    });
 
     // Sort by createdAt (newest first) for stable ordering
     const allSessions = Array.from(sessionMap.values());

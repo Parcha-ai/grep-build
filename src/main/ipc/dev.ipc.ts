@@ -5,7 +5,9 @@ import Store from 'electron-store';
 import simpleGit from 'simple-git';
 import type { Session } from '../../shared/types';
 import fs from 'fs/promises';
+import fsSync from 'fs';
 import path from 'path';
+import os from 'os';
 import { exec } from 'child_process';
 import { promisify } from 'util';
 
@@ -141,6 +143,36 @@ export function registerDevHandlers(ipcMain: IpcMain): void {
       return { isGit: true, branch };
     } catch (error) {
       return { isGit: false, error: error instanceof Error ? error.message : 'Failed to check git repo' };
+    }
+  });
+
+  // Get branches from a repo path (for branch selection dropdown)
+  ipcMain.handle(IPC_CHANNELS.DEV_GET_BRANCHES, async (_event, repoPath: string) => {
+    try {
+      const git = simpleGit(repoPath);
+      const isGit = await git.checkIsRepo();
+
+      if (!isGit) {
+        return { success: false, branches: [], error: 'Not a git repository' };
+      }
+
+      // Get all local branches
+      const branchSummary = await git.branchLocal();
+      const branches = branchSummary.all.map(name => ({
+        name,
+        current: name === branchSummary.current,
+      }));
+
+      // Sort: current branch first, then alphabetically
+      branches.sort((a, b) => {
+        if (a.current && !b.current) return -1;
+        if (!a.current && b.current) return 1;
+        return a.name.localeCompare(b.name);
+      });
+
+      return { success: true, branches, currentBranch: branchSummary.current };
+    } catch (error) {
+      return { success: false, branches: [], error: error instanceof Error ? error.message : 'Failed to get branches' };
     }
   });
 
@@ -324,11 +356,11 @@ export function registerDevHandlers(ipcMain: IpcMain): void {
       const transcriptFilename = `${remoteSessionId}.jsonl`;
       let foundLocally = false;
 
-      if (fs.existsSync(claudeDir)) {
-        const projectDirs = fs.readdirSync(claudeDir);
+      if (fsSync.existsSync(claudeDir)) {
+        const projectDirs = fsSync.readdirSync(claudeDir);
         for (const projectDir of projectDirs) {
           const transcriptPath = path.join(claudeDir, projectDir, transcriptFilename);
-          if (fs.existsSync(transcriptPath)) {
+          if (fsSync.existsSync(transcriptPath)) {
             console.log('[Dev] Found local transcript for teleported session:', transcriptPath);
             foundLocally = true;
             break;

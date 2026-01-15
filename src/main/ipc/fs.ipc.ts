@@ -1,11 +1,8 @@
 import { IpcMain } from 'electron';
 import { IPC_CHANNELS } from '../../shared/constants/channels';
-import Store from 'electron-store';
 import * as fs from 'fs/promises';
 import * as path from 'path';
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const sessionStore: any = new Store({ name: 'claudette-sessions' });
+import { sessionService } from './session.ipc';
 
 export interface FileEntry {
   name: string;
@@ -98,7 +95,7 @@ async function listFilesRecursive(
 export function registerFsHandlers(ipcMain: IpcMain): void {
   // List files in session working directory
   ipcMain.handle(IPC_CHANNELS.FS_LIST_FILES, async (_event, sessionId: string, query?: string) => {
-    const session = sessionStore.get(`sessions.${sessionId}`) as { worktreePath?: string } | undefined;
+    const session = await sessionService.getSession(sessionId);
     if (!session?.worktreePath) {
       return [];
     }
@@ -140,7 +137,7 @@ export function registerFsHandlers(ipcMain: IpcMain): void {
 
   // Search files by content (basic grep-like)
   ipcMain.handle(IPC_CHANNELS.FS_SEARCH_FILES, async (_event, sessionId: string, searchTerm: string) => {
-    const session = sessionStore.get(`sessions.${sessionId}`) as { worktreePath?: string } | undefined;
+    const session = await sessionService.getSession(sessionId);
     if (!session?.worktreePath) {
       return [];
     }
@@ -169,7 +166,7 @@ export function registerFsHandlers(ipcMain: IpcMain): void {
 
   // Search for symbols (functions, classes, methods, etc.)
   ipcMain.handle(IPC_CHANNELS.FS_SEARCH_SYMBOLS, async (_event, sessionId: string, query: string) => {
-    const session = sessionStore.get(`sessions.${sessionId}`) as { worktreePath?: string } | undefined;
+    const session = await sessionService.getSession(sessionId);
     if (!session?.worktreePath || !query?.trim()) {
       return [];
     }

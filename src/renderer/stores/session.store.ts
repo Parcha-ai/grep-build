@@ -145,9 +145,17 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           )
         : state.sessions;
 
+      // Restore the session's model selection from persisted session data
+      const session = sessionId ? state.sessions.find(s => s.id === sessionId) : null;
+      const restoredModel = (session?.model && sessionId) ? { [sessionId]: session.model } : {};
+
       return {
         activeSessionId: sessionId,
-        sessions: updatedSessions
+        sessions: updatedSessions,
+        selectedModel: {
+          ...state.selectedModel,
+          ...restoredModel,
+        },
       };
     });
 
@@ -200,10 +208,19 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         console.log('[SessionStore] Auto-selected session:', validActiveSessionId);
       }
 
+      // Restore the model for the active session
+      const activeSession = validActiveSessionId
+        ? sessions.find(s => s.id === validActiveSessionId)
+        : null;
+      const restoredModel = activeSession?.model
+        ? { [validActiveSessionId!]: activeSession.model }
+        : {};
+
       set({
         sessions,
         activeSessionId: validActiveSessionId,
         isLoadingSessions: false,
+        selectedModel: restoredModel,
       });
 
       // Persist auto-selected session
@@ -526,6 +543,10 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         [sessionId]: model,
       },
     }));
+    // Persist the model selection to the session
+    if (hasElectronAPI) {
+      window.electronAPI.sessions.update(sessionId, { model });
+    }
   },
 
   loadAvailableModels: async () => {
@@ -541,7 +562,12 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   sendMessage: async (sessionId, message, attachments) => {
     if (!hasElectronAPI) return;
     const state = get();
+    const currentIsStreaming = state.isStreaming[sessionId];
+    const currentQueueLength = (state.messageQueue[sessionId] || []).length;
 
+    console.log(`[SessionStore] sendMessage called for session ${sessionId}`);
+    console.log(`[SessionStore] Current isStreaming: ${currentIsStreaming}, Queue length: ${currentQueueLength}`);
+    console.log(`[SessionStore] Message preview: "${message.slice(0, 80)}..."`);
     console.log('[SessionStore] sendMessage called with attachments:', attachments?.length || 0);
     if (attachments) {
       attachments.forEach((a: any, i: number) => {
@@ -661,7 +687,10 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     });
 
     const unsubEnd = window.electronAPI.claude.onStreamEnd(({ sessionId, message }) => {
+      const currentState = get();
+      const queueLength = (currentState.messageQueue[sessionId] || []).length;
       console.log(`[SessionStore] onStreamEnd received for ${sessionId}. Message length: ${message.content?.length || 0}`);
+      console.log(`[SessionStore] onStreamEnd - Queue has ${queueLength} messages waiting`);
       setStreaming(sessionId, false);
       addMessage(sessionId, message);
 
@@ -687,9 +716,15 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
     // Subscribe to permission requests
     const unsubPermission = window.electronAPI.claude.onPermissionRequest((request) => {
-      console.log('[Session Store] Permission request received:', request.toolName);
+      console.log('[Session Store] Permission request received:', request.toolName, 'sessionId:', request.sessionId);
+      console.log('[Session Store] Full permission request:', JSON.stringify(request, null, 2));
       const { setPendingPermission } = get();
       setPendingPermission(request.sessionId, request);
+      // Verify it was set
+      setTimeout(() => {
+        const state = get();
+        console.log('[Session Store] pendingPermission after set:', state.pendingPermission);
+      }, 100);
     });
 
     // Subscribe to question requests

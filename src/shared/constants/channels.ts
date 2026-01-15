@@ -83,12 +83,14 @@ export const IPC_CHANNELS = {
   APP_OPEN_PATH: 'app:open-path',
   APP_GET_PATH: 'app:get-path',
   APP_SHOW_DIALOG: 'app:show-dialog',
+  APP_CMD_R_PRESSED: 'app:cmd-r-pressed',
 
   // Dev mode channels
   DEV_OPEN_LOCAL_REPO: 'dev:open-local-repo',
   DEV_CREATE_SESSION: 'dev:create-session',
   DEV_CREATE_TELEPORT_SESSION: 'dev:create-teleport-session',
   DEV_CHECK_GIT_REPO: 'dev:check-git-repo',
+  DEV_GET_BRANCHES: 'dev:get-branches',
   DEV_CHECK_WORKTREE_SETUP: 'dev:check-worktree-setup',
   DEV_SAVE_WORKTREE_SCRIPT: 'dev:save-worktree-script',
   DEV_SAVE_WORKTREE_INSTRUCTIONS: 'dev:save-worktree-instructions',

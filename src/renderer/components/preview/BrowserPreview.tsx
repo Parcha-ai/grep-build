@@ -1,4 +1,4 @@
-import React, { useRef, useState, useEffect } from 'react';
+import React, { useRef, useState, useEffect, useCallback } from 'react';
 import {
   ArrowLeft,
   ArrowRight,
@@ -16,7 +16,7 @@ import {
 } from 'lucide-react';
 import { useUIStore } from '../../stores/ui.store';
 import { useSessionStore } from '../../stores/session.store';
-import type { Session, DOMElementContext } from '../../../shared/types';
+import type { Session } from '../../../shared/types';
 
 interface AutomationIndicator {
   type: 'click' | 'type' | 'navigate' | 'snapshot';
@@ -135,6 +135,11 @@ export default function BrowserPreview({ session, isVisible = true }: BrowserPre
   const [isLoading, setIsLoading] = useState(false);
   const [canGoBack, setCanGoBack] = useState(false);
   const [canGoForward, setCanGoForward] = useState(false);
+  const [webviewReady, setWebviewReady] = useState(false);
+  // Track user-initiated navigation to avoid reloading on website URL changes
+  const pendingUserNavigation = useRef<string | null>(null);
+  // Initial URL for webview src - only used once, then loadURL is used for navigation
+  const initialUrl = useRef<string>(url);
 
   // Automation visual feedback state
   const [isAutomationActive, setIsAutomationActive] = useState(false);
@@ -145,14 +150,19 @@ export default function BrowserPreview({ session, isVisible = true }: BrowserPre
   const {
     sessionInspectorActive,
     setSessionInspectorActive,
-    sessionSelectedElement,
     setSessionSelectedElement,
   } = useUIStore();
 
   // Get this session's inspector state
   const isInspectorActive = sessionInspectorActive[session.id] || false;
-  const setInspectorActive = (active: boolean) => setSessionInspectorActive(session.id, active);
-  const setSelectedElement = (element: unknown | null) => setSessionSelectedElement(session.id, element);
+  const setInspectorActive = useCallback(
+    (active: boolean) => setSessionInspectorActive(session.id, active),
+    [session.id, setSessionInspectorActive]
+  );
+  const setSelectedElement = useCallback(
+    (element: unknown | null) => setSessionSelectedElement(session.id, element),
+    [session.id, setSessionSelectedElement]
+  );
 
   // Initialize URL on mount (each BrowserPreview is now dedicated to one session)
   useEffect(() => {
@@ -163,12 +173,33 @@ export default function BrowserPreview({ session, isVisible = true }: BrowserPre
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []); // Only run once on mount - session won't change for this instance
 
+  // Navigate webview only for user-initiated navigation (not website URL changes)
+  useEffect(() => {
+    const webview = webviewRef.current;
+    const targetUrl = pendingUserNavigation.current;
+
+    // Only proceed if there's a pending user navigation
+    if (!webview || !targetUrl || !webviewReady) return;
+
+    try {
+      console.log('[BrowserPreview] User navigation pending, calling loadURL with:', targetUrl);
+      webview.loadURL(targetUrl);
+      // Clear the pending navigation
+      pendingUserNavigation.current = null;
+    } catch (e) {
+      console.log('[BrowserPreview] Webview not ready for navigation yet');
+    }
+  }, [url, webviewReady]);
+
   // Register webview with main process for CDP access
   useEffect(() => {
     const webview = webviewRef.current;
     if (!webview) return;
 
     const handleDomReady = () => {
+      // Mark webview as ready for navigation
+      setWebviewReady(true);
+
       // Get webContentsId and register with main process for CDP
       const webContentsId = (webview as any).getWebContentsId?.();
       if (webContentsId) {
@@ -207,7 +238,8 @@ export default function BrowserPreview({ session, isVisible = true }: BrowserPre
       setCanGoForward(webview.canGoForward());
     };
     const handleDidNavigate = (e: Electron.DidNavigateEvent) => {
-      console.log('[BrowserPreview] Navigated to:', e.url);
+      console.log('[BrowserPreview] handleDidNavigate fired with e.url:', e.url);
+      console.log('[BrowserPreview] handleDidNavigate - setting url and inputUrl to:', e.url);
       setUrl(e.url);
       setInputUrl(e.url);
       // Save the URL to session so it persists across reloads
@@ -236,13 +268,6 @@ export default function BrowserPreview({ session, isVisible = true }: BrowserPre
     };
   }, []);
 
-  // Handle inspector mode
-  useEffect(() => {
-    if (isInspectorActive && webviewRef.current) {
-      injectInspector();
-    }
-  }, [isInspectorActive]);
-
   // Handle navigation requests from main process (e.g., from BrowserSnapshot tool)
   useEffect(() => {
     const unsubscribe = window.electronAPI.browser.onNavigate((data: { sessionId: string; url: string }) => {
@@ -259,6 +284,20 @@ export default function BrowserPreview({ session, isVisible = true }: BrowserPre
       }
     };
   }, [session.id]);
+
+  // Handle CMD+R browser refresh (custom event from App.tsx)
+  useEffect(() => {
+    const handleBrowserRefresh = () => {
+      const webview = webviewRef.current;
+      if (webview && isVisible) {
+        console.log('[BrowserPreview] CMD+R refresh triggered');
+        webview.reload();
+      }
+    };
+
+    window.addEventListener('browser-refresh', handleBrowserRefresh);
+    return () => window.removeEventListener('browser-refresh', handleBrowserRefresh);
+  }, [isVisible]);
 
   // Handle automation events from main process (CDP-based automation visual feedback)
   useEffect(() => {
@@ -565,9 +604,10 @@ export default function BrowserPreview({ session, isVisible = true }: BrowserPre
     return () => window.removeEventListener('grep-browser-refresh', handleRefresh as EventListener);
   }, [session.id]);
 
-  const injectInspector = async () => {
+  const injectInspector = useCallback(async () => {
     const webview = webviewRef.current;
     if (!webview) return;
+    console.log('[BrowserPreview] injectInspector called');
 
     // Listen for console messages (our communication channel)
     const handleConsoleMessage = async (event: Electron.ConsoleMessageEvent) => {
@@ -850,7 +890,42 @@ export default function BrowserPreview({ session, isVisible = true }: BrowserPre
     } catch (error) {
       console.error('[BrowserPreview] Failed to inject inspector:', error);
     }
-  };
+  }, [setSelectedElement, setInspectorActive]);
+
+  // Handle inspector mode - inject when active, cleanup when inactive
+  useEffect(() => {
+    const webview = webviewRef.current;
+    console.log('[BrowserPreview] Inspector effect running, isInspectorActive:', isInspectorActive, 'webview:', !!webview);
+
+    if (isInspectorActive && webview) {
+      console.log('[BrowserPreview] Calling injectInspector...');
+      injectInspector();
+    } else if (!isInspectorActive && webview) {
+      // Cleanup when inspector is disabled
+      if ((webview as any)._inspectorCleanup) {
+        (webview as any)._inspectorCleanup();
+        delete (webview as any)._inspectorCleanup;
+      }
+      // Remove inspector elements from page
+      try {
+        webview.executeJavaScript(`
+          document.body.style.cursor = '';
+          document.getElementById('grep-inspector')?.remove();
+          document.getElementById('grep-inspector-tooltip')?.remove();
+        `).catch(() => {}); // Ignore promise rejection if page not loaded
+      } catch {
+        // Ignore synchronous error if webview not ready
+      }
+    }
+
+    // Cleanup on unmount
+    return () => {
+      if (webview && (webview as any)._inspectorCleanup) {
+        (webview as any)._inspectorCleanup();
+        delete (webview as any)._inspectorCleanup;
+      }
+    };
+  }, [isInspectorActive, injectInspector]);
 
   const cancelInspector = async () => {
     setInspectorActive(false);
@@ -863,18 +938,26 @@ export default function BrowserPreview({ session, isVisible = true }: BrowserPre
       }
 
       // Remove inspector elements from page
-      await webview.executeJavaScript(`
-        document.body.style.cursor = '';
-        document.getElementById('grep-inspector')?.remove();
-        document.getElementById('grep-inspector-tooltip')?.remove();
-      `);
+      try {
+        await webview.executeJavaScript(`
+          document.body.style.cursor = '';
+          document.getElementById('grep-inspector')?.remove();
+          document.getElementById('grep-inspector-tooltip')?.remove();
+        `);
+      } catch {
+        // Ignore errors if webview not ready
+      }
     }
   };
 
   const navigate = (targetUrl: string) => {
+    console.log('[BrowserPreview] navigate() called with:', targetUrl);
     if (!targetUrl.startsWith('http')) {
       targetUrl = 'http://' + targetUrl;
     }
+    console.log('[BrowserPreview] navigate() setting URL to:', targetUrl);
+    // Mark this as a user-initiated navigation so the useEffect will call loadURL
+    pendingUserNavigation.current = targetUrl;
     setUrl(targetUrl);
     setInputUrl(targetUrl);
   };
@@ -994,7 +1077,7 @@ export default function BrowserPreview({ session, isVisible = true }: BrowserPre
 
         {/* Actions */}
         <button
-          onClick={() => setInspectorActive(true)}
+          onClick={() => setInspectorActive(!isInspectorActive)}
           className={`p-1.5 rounded transition-colors ${
             isInspectorActive
               ? 'text-white'
@@ -1048,7 +1131,7 @@ export default function BrowserPreview({ session, isVisible = true }: BrowserPre
         <webview
           key={session.id}
           ref={webviewRef}
-          src={url}
+          src={initialUrl.current}
           className="absolute inset-0 w-full h-full"
           partition={`persist:browser-${session.id}`}
         />

@@ -128,7 +128,10 @@ export function registerClaudeHandlers(ipcMain: IpcMain): void {
               break;
 
             case 'permission_request':
-              mainWindow.webContents.send(IPC_CHANNELS.CLAUDE_PERMISSION_REQUEST, event);
+              mainWindow.webContents.send(IPC_CHANNELS.CLAUDE_PERMISSION_REQUEST, {
+                ...event,
+                sessionId,
+              });
               break;
 
             case 'message_complete':

@@ -65,6 +65,7 @@ export default function MessageList({
           key={message.id}
           message={message}
           isLatestMessage={!hasStreamingContent && index === sortedMessages.length - 1}
+          isOldMessage={index < sortedMessages.length - 10}
         />
       ))}
 

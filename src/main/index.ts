@@ -19,6 +19,7 @@ import { registerAudioHandlers } from './ipc/audio.ipc';
 import { registerRealtimeHandlers } from './ipc/realtime.ipc';
 import { registerExtensionHandlers } from './ipc/extension.ipc';
 import { registerBrowserHandlers } from './ipc/browser.ipc';
+import { IPC_CHANNELS } from '../shared/constants/channels';
 
 // Global error handlers to prevent crashes from broken pipes and other uncaught errors
 process.on('uncaughtException', (error: Error) => {
@@ -134,6 +135,17 @@ const createWindow = (): void => {
 
   mainWindow.webContents.on('did-fail-load', (event, errorCode, errorDescription) => {
     console.error('[Main] Renderer failed to load:', errorCode, errorDescription);
+  });
+
+  // Intercept CMD+R to prevent app refresh when browser panel might be open
+  // This fires before Electron's default menu accelerators
+  mainWindow.webContents.on('before-input-event', (event, input) => {
+    if (input.type === 'keyDown' && input.key === 'r' && input.meta && !input.shift && !input.alt) {
+      // Prevent Electron's default CMD+R reload
+      event.preventDefault();
+      // Send to renderer to handle (will refresh browser if open, or do nothing)
+      mainWindow?.webContents.send(IPC_CHANNELS.APP_CMD_R_PRESSED);
+    }
   });
 
   // Set Content Security Policy
@@ -462,8 +474,6 @@ app.whenReady().then(() => {
     }
 
     const fileUrl = pathToFileURL(filePath).toString();
-
-    console.log('[Monaco Protocol] Serving:', filePath);
     return net.fetch(fileUrl, { bypassCustomProtocolHandlers: true });
   });
 });

@@ -674,7 +674,7 @@ export class ClaudeService {
       'DocumentCreate',
       'Create a new document (Word, Excel spreadsheet, or HTML slide presentation). Use this to generate office documents for reports, data exports, or presentations.',
       {
-        type: z.enum(['docx', 'xlsx', 'slides']).describe('Document type: "docx" for Word, "xlsx" for Excel, "slides" for reveal.js presentation'),
+        type: z.string().describe('Document type - must be one of: "docx" for Word, "xlsx" for Excel, "slides" for reveal.js presentation'),
         path: z.string().describe('Full file path where to save the document'),
         title: z.string().optional().describe('Document title (used for DOCX title or presentation title)'),
         content: z.any().describe('Document content - structure depends on type. For docx: array of {type, text, level?, rows?, items?}. For xlsx: {sheets: [{name, data: 2D array}]}. For slides: {slides: [{title?, content, notes?, background?, transition?}]}'),
@@ -819,9 +819,9 @@ export class ClaudeService {
       {
         path: z.string().describe('Full file path of the Excel file to edit'),
         updates: z.array(z.object({
-          sheet: z.union([z.string(), z.number()]).describe('Sheet name or index (0-based)'),
+          sheet: z.string().or(z.number()).describe('Sheet name or index (0-based)'),
           cell: z.string().describe('Cell reference (e.g., "A1", "B2", "C10")'),
-          value: z.union([z.string(), z.number(), z.boolean(), z.null()]).optional().describe('New cell value'),
+          value: z.string().or(z.number()).or(z.boolean()).or(z.null()).optional().describe('New cell value'),
           formula: z.string().optional().describe('Excel formula (without leading =)'),
         })).describe('Array of cell updates'),
       },
@@ -1093,8 +1093,8 @@ export class ClaudeService {
           permissionMode: sdkPermissionMode,
           ...(requiresDangerFlag ? { allowDangerouslySkipPermissions: true } : {}),
           includePartialMessages: true,
-          // Use selected model or default to Claude Sonnet 4.5
-          model: model || 'claude-sonnet-4-5-20250929',
+          // Use selected model or default to Claude Opus 4.5
+          model: model || 'claude-opus-4-5-20251101',
           ...(maxThinkingTokens ? { maxThinkingTokens } : {}),
           // Use Claude Code's system prompt preset with Grep Build agent context
           systemPrompt: {
@@ -1174,7 +1174,8 @@ You are intelligent enough to determine what URLs to test based on the project s
             }
 
             // For other tools, allow them (SDK's permissionMode will still apply its rules)
-            return { behavior: 'allow' as const };
+            // Must include updatedInput when allowing - SDK requires it
+            return { behavior: 'allow' as const, updatedInput: input };
           },
         },
       });
@@ -1245,7 +1246,7 @@ You are intelligent enough to determine what URLs to test based on the project s
 
               // Determine if Smart Compact is needed
               // Smart Compact: if using Opus or other models without extended context, we note it
-              const currentModel = model || 'claude-sonnet-4-5-20250929';
+              const currentModel = model || 'claude-opus-4-5-20251101';
               const isOpus = currentModel.includes('opus');
               const needsSmartCompact = isOpus && isCompacting;
 
@@ -1283,7 +1284,7 @@ You are intelligent enough to determine what URLs to test based on the project s
                 preTokens: systemMsg.compact_metadata.pre_tokens,
                 smartCompact: {
                   modelSwitched: (model || '').includes('opus'),
-                  restoredModel: model || 'claude-sonnet-4-5-20250929',
+                  restoredModel: model || 'claude-opus-4-5-20251101',
                 },
               };
 

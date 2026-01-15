@@ -17,6 +17,7 @@ interface MessageBubbleProps {
   isStreaming?: boolean;
   streamingToolCalls?: ToolCall[];
   isLatestMessage?: boolean; // True only for the most recent message in the conversation
+  isOldMessage?: boolean; // True for messages older than 10 from the end - collapse tool cards by default
 }
 
 // Extracted component for rendering text content blocks with markdown
@@ -220,7 +221,7 @@ function TextContentBlock({
   );
 }
 
-function MessageBubble({ message, isStreaming, streamingToolCalls, isLatestMessage = false }: MessageBubbleProps) {
+function MessageBubble({ message, isStreaming, streamingToolCalls, isLatestMessage = false, isOldMessage = false }: MessageBubbleProps) {
   const isUser = message.role === 'user';
   const openFile = useEditorStore((state) => state.openFile);
   const { toggleBrowserPanel, isBrowserPanelOpen } = useUIStore();
@@ -265,6 +266,7 @@ function MessageBubble({ message, isStreaming, streamingToolCalls, isLatestMessa
                         toolCall={toolCall}
                         isLatestToolCall={isLatestMessage && blockIndex === message.contentBlocks!.length - 1 && block.type === 'tool_use'}
                         isStreaming={isStreaming}
+                        defaultCollapsed={isOldMessage}
                       />
                     );
                   }
@@ -297,6 +299,7 @@ function MessageBubble({ message, isStreaming, streamingToolCalls, isLatestMessa
                     toolCall={toolCall}
                     isLatestToolCall={isLatestMessage && index === toolCalls.length - 1}
                     isStreaming={isStreaming}
+                    defaultCollapsed={isOldMessage}
                   />
                 ))}
 

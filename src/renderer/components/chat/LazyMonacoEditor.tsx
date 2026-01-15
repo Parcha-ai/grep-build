@@ -3,6 +3,9 @@ import Editor, { DiffEditor, loader, OnMount } from '@monaco-editor/react';
 import type { EditorProps, DiffEditorProps } from '@monaco-editor/react';
 import { Code, Loader2 } from 'lucide-react';
 
+// Monaco TextModel disposal error suppression is handled in monaco-config.ts
+// which runs earlier in the application lifecycle
+
 // Track all lazy editor instances for cleanup
 const lazyEditorModels = new Set<string>();
 
@@ -19,6 +22,8 @@ interface LazyMonacoEditorProps extends Omit<EditorProps, 'loading'> {
   unloadMargin?: number;
   // Unique identifier for this editor instance (for model cleanup)
   editorId?: string;
+  // If true, render immediately without waiting for visibility (for recent/active panels)
+  priority?: boolean;
 }
 
 export function LazyMonacoEditor({
@@ -27,11 +32,13 @@ export function LazyMonacoEditor({
   height = '300px',
   value,
   language,
+  priority = false,
   ...props
 }: LazyMonacoEditorProps) {
   const containerRef = useRef<HTMLDivElement>(null);
-  const [isVisible, setIsVisible] = useState(false);
-  const [hasBeenVisible, setHasBeenVisible] = useState(false);
+  // Priority panels start visible immediately - no lazy loading delay
+  const [isVisible, setIsVisible] = useState(priority);
+  const [hasBeenVisible, setHasBeenVisible] = useState(priority);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -149,6 +156,8 @@ export function LazyMonacoEditor({
 interface LazyDiffEditorProps extends Omit<DiffEditorProps, 'loading'> {
   unloadMargin?: number;
   editorId?: string;
+  // If true, render immediately without waiting for visibility (for recent/active panels)
+  priority?: boolean;
 }
 
 export function LazyDiffEditor({
@@ -158,13 +167,15 @@ export function LazyDiffEditor({
   original,
   modified,
   language,
+  priority = false,
   ...props
 }: LazyDiffEditorProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const editorRef = useRef<any>(null);
-  const [isVisible, setIsVisible] = useState(false);
-  const [hasBeenVisible, setHasBeenVisible] = useState(false);
+  // Priority panels start visible immediately - no lazy loading delay
+  const [isVisible, setIsVisible] = useState(priority);
+  const [hasBeenVisible, setHasBeenVisible] = useState(priority);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -191,17 +202,11 @@ export function LazyDiffEditor({
     };
   }, [unloadMargin]);
 
-  // Cleanup on unmount
+  // Cleanup on unmount - just clear ref, let @monaco-editor/react handle disposal
+  // DO NOT manually dispose models - it causes race condition errors
   useEffect(() => {
     return () => {
-      if (editorRef.current) {
-        try {
-          editorRef.current.dispose();
-        } catch (e) {
-          // Ignore disposal errors
-        }
-        editorRef.current = null;
-      }
+      editorRef.current = null;
       if (editorId) {
         lazyEditorModels.delete(editorId);
       }
@@ -228,7 +233,9 @@ export function LazyDiffEditor({
     ? parseInt(height.replace('px', ''), 10) || 400
     : height;
 
-  if (!isVisible) {
+  // Don't render editor until first visible (lazy load)
+  // But once rendered, keep it mounted and just hide with CSS to avoid disposal errors
+  if (!hasBeenVisible) {
     return (
       <div
         ref={containerRef}
@@ -239,41 +246,53 @@ export function LazyDiffEditor({
           minHeight: numericHeight,
         }}
       >
-        {hasBeenVisible ? (
-          <div className="text-claude-text-secondary text-xs font-mono flex items-center gap-2">
-            <Code size={14} />
-            <span>Scroll to view diff</span>
-          </div>
-        ) : (
-          <div className="text-claude-text-secondary text-xs font-mono flex items-center gap-2">
-            <Loader2 size={14} className="animate-spin" />
-            <span>Loading diff editor...</span>
-          </div>
-        )}
+        <div className="text-claude-text-secondary text-xs font-mono flex items-center gap-2">
+          <Loader2 size={14} className="animate-spin" />
+          <span>Loading diff editor...</span>
+        </div>
       </div>
     );
   }
 
+  // Once mounted, keep the editor alive but hide when not visible
+  // This prevents the Monaco disposal race condition errors
   return (
     <div ref={containerRef}>
-      <DiffEditor
-        height={height}
-        original={original}
-        modified={modified}
-        language={language}
-        theme="vs-dark"
-        loading={
-          <div
-            className="bg-claude-bg flex items-center justify-center text-claude-text-secondary text-xs"
-            style={{ height: numericHeight }}
-          >
-            <Loader2 size={14} className="animate-spin mr-2" />
-            Loading diff editor...
+      {!isVisible && (
+        <div
+          className="bg-claude-bg border border-claude-border flex items-center justify-center"
+          style={{
+            height: numericHeight,
+            borderRadius: 0,
+            minHeight: numericHeight,
+          }}
+        >
+          <div className="text-claude-text-secondary text-xs font-mono flex items-center gap-2">
+            <Code size={14} />
+            <span>Scroll to view diff</span>
           </div>
-        }
-        {...props}
-        onMount={handleMount}
-      />
+        </div>
+      )}
+      <div style={{ display: isVisible ? 'block' : 'none' }}>
+        <DiffEditor
+          height={height}
+          original={original}
+          modified={modified}
+          language={language}
+          theme="vs-dark"
+          loading={
+            <div
+              className="bg-claude-bg flex items-center justify-center text-claude-text-secondary text-xs"
+              style={{ height: numericHeight }}
+            >
+              <Loader2 size={14} className="animate-spin mr-2" />
+              Loading diff editor...
+            </div>
+          }
+          {...props}
+          onMount={handleMount}
+        />
+      </div>
     </div>
   );
 }

@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
-import { X, Search, Loader2, GitBranch, Lock, Globe, Folder, Github, Zap } from 'lucide-react';
+import { X, Search, Loader2, GitBranch, Lock, Globe, Folder, Github, Zap, ChevronDown } from 'lucide-react';
 import { useAuthStore } from '../../stores/auth.store';
 import { useSessionStore } from '../../stores/session.store';
 
@@ -29,6 +29,8 @@ export default function NewSessionDialog({ isOpen, onClose, initialPath, initial
   const [worktreeInstructions, setWorktreeInstructions] = useState('');
   const [hasExistingSetup, setHasExistingSetup] = useState(false);
   const [teleportSessionId, setTeleportSessionId] = useState('');
+  const [availableBranches, setAvailableBranches] = useState<Array<{ name: string; current: boolean }>>([]);
+  const [isBranchDropdownOpen, setIsBranchDropdownOpen] = useState(false);
 
   // Initialize with initialPath if provided
   React.useEffect(() => {
@@ -37,11 +39,19 @@ export default function NewSessionDialog({ isOpen, onClose, initialPath, initial
       setSessionName(initialName || initialPath.split('/').pop() || 'New Session');
       setStep('config');
 
-      // Check if it's a git repo
+      // Check if it's a git repo and get branches
       window.electronAPI.dev.checkGitRepo(initialPath).then(result => {
         setIsGitRepo(result.isGit);
         if (result.branch) {
           setBranch(result.branch);
+        }
+        // Fetch branches if it's a git repo
+        if (result.isGit) {
+          window.electronAPI.dev.getBranches(initialPath).then(branchResult => {
+            if (branchResult.success) {
+              setAvailableBranches(branchResult.branches);
+            }
+          });
         }
       });
 
@@ -83,6 +93,16 @@ export default function NewSessionDialog({ isOpen, onClose, initialPath, initial
       setBranch(result.branch || 'main');
       setIsGitRepo(result.isGit || false);
       setStep('config');
+
+      // Fetch branches if it's a git repo
+      if (result.isGit) {
+        const branchResult = await window.electronAPI.dev.getBranches(result.repoPath);
+        if (branchResult.success) {
+          setAvailableBranches(branchResult.branches);
+        }
+      } else {
+        setAvailableBranches([]);
+      }
 
       // Check for existing worktree setup
       const setupResult = await window.electronAPI.dev.checkWorktreeSetup(result.repoPath);
@@ -195,6 +215,8 @@ export default function NewSessionDialog({ isOpen, onClose, initialPath, initial
     setBranch('');
     setCreateWorktree(false);
     setIsGitRepo(false);
+    setAvailableBranches([]);
+    setIsBranchDropdownOpen(false);
     onClose();
   };
 
@@ -446,14 +468,55 @@ export default function NewSessionDialog({ isOpen, onClose, initialPath, initial
                     >
                       BRANCH
                     </label>
-                    <input
-                      type="text"
-                      value={branch}
-                      onChange={(e) => setBranch(e.target.value)}
-                      placeholder="main"
-                      className="w-full px-3 py-2 text-sm font-mono focus:outline-none focus:border-claude-accent bg-claude-bg border border-claude-border text-claude-text"
-                      style={{ borderRadius: 0 }}
-                    />
+                    {/* Branch dropdown for git repos with branches, text input otherwise */}
+                    {isGitRepo && availableBranches.length > 0 ? (
+                      <div className="relative">
+                        <button
+                          type="button"
+                          onClick={() => setIsBranchDropdownOpen(!isBranchDropdownOpen)}
+                          className="w-full px-3 py-2 text-sm font-mono text-left flex items-center justify-between focus:outline-none focus:border-claude-accent bg-claude-bg border border-claude-border text-claude-text"
+                          style={{ borderRadius: 0 }}
+                        >
+                          <span className="flex items-center gap-2">
+                            <GitBranch size={14} className="text-claude-text-secondary" />
+                            {branch || 'Select branch'}
+                          </span>
+                          <ChevronDown size={14} className={`text-claude-text-secondary transition-transform ${isBranchDropdownOpen ? 'rotate-180' : ''}`} />
+                        </button>
+                        {isBranchDropdownOpen && (
+                          <div className="absolute z-50 w-full mt-1 bg-claude-surface border border-claude-border shadow-lg max-h-48 overflow-y-auto">
+                            {availableBranches.map((b) => (
+                              <button
+                                key={b.name}
+                                type="button"
+                                onClick={() => {
+                                  setBranch(b.name);
+                                  setIsBranchDropdownOpen(false);
+                                }}
+                                className={`w-full px-3 py-2 text-left text-sm font-mono flex items-center gap-2 hover:bg-claude-bg transition-colors ${
+                                  branch === b.name ? 'bg-claude-accent/20 text-claude-accent' : 'text-claude-text'
+                                }`}
+                              >
+                                <GitBranch size={12} className={b.current ? 'text-green-400' : 'text-claude-text-secondary'} />
+                                <span className="truncate">{b.name}</span>
+                                {b.current && (
+                                  <span className="ml-auto text-[9px] text-green-400 font-bold">CURRENT</span>
+                                )}
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      <input
+                        type="text"
+                        value={branch}
+                        onChange={(e) => setBranch(e.target.value)}
+                        placeholder="main"
+                        className="w-full px-3 py-2 text-sm font-mono focus:outline-none focus:border-claude-accent bg-claude-bg border border-claude-border text-claude-text"
+                        style={{ borderRadius: 0 }}
+                      />
+                    )}
                   </div>
 
                   <div

@@ -5,6 +5,9 @@ import { getMainWindow } from '../index';
 
 const sessionService = new SessionService();
 
+// Export sessionService for use by other IPC handlers that need session data
+export { sessionService };
+
 export function registerSessionHandlers(ipcMain: IpcMain): void {
   // Subscribe to session status changes
   sessionService.on('statusChanged', (session) => {

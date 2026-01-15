@@ -11,7 +11,13 @@ import { FuseV1Options, FuseVersion } from '@electron/fuses';
 import { mainConfig } from './webpack.main.config';
 import { rendererConfig } from './webpack.renderer.config';
 
+// Get version for output directory
+const packageJson = require('./package.json');
+const version = packageJson.version || '0.0.0';
+
 const config: ForgeConfig = {
+  // Output to versioned folder
+  outDir: `./out/v${version}`,
   packagerConfig: {
     asar: true,
     name: 'Grep Build',

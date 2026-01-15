@@ -261,6 +261,13 @@ const electronAPI = {
       ipcRenderer.invoke(IPC_CHANNELS.APP_GET_PATH, name),
     showDialog: (options: unknown): Promise<unknown> =>
       ipcRenderer.invoke(IPC_CHANNELS.APP_SHOW_DIALOG, options),
+    onCmdRPressed: (callback: () => void) => {
+      const handler = () => callback();
+      ipcRenderer.on(IPC_CHANNELS.APP_CMD_R_PRESSED, handler);
+      return () => {
+        ipcRenderer.removeListener(IPC_CHANNELS.APP_CMD_R_PRESSED, handler);
+      };
+    },
   },
 
   // Docker
@@ -293,6 +300,12 @@ const electronAPI = {
       branch?: string;
       error?: string;
     }> => ipcRenderer.invoke(IPC_CHANNELS.DEV_CHECK_GIT_REPO, repoPath),
+    getBranches: (repoPath: string): Promise<{
+      success: boolean;
+      branches: Array<{ name: string; current: boolean }>;
+      currentBranch?: string;
+      error?: string;
+    }> => ipcRenderer.invoke(IPC_CHANNELS.DEV_GET_BRANCHES, repoPath),
     createSession: (data: {
       name: string;
       repoPath: string;
