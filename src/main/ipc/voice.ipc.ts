@@ -168,4 +168,28 @@ export function registerVoiceHandlers(ipcMain: IpcMain): void {
       return { success: false, error: errorMessage };
     }
   });
+
+  // Update agent prompt via ElevenLabs API
+  ipcMain.handle(IPC_CHANNELS.VOICE_UPDATE_AGENT_PROMPT, async (_, data: { agentId: string; prompt: string }) => {
+    try {
+      console.log('[Voice IPC] Updating agent prompt for:', data.agentId);
+      await voiceService.updateAgentPrompt(data.agentId, data.prompt);
+      return { success: true };
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      console.error('[Voice IPC] Update agent prompt error:', errorMessage);
+      return { success: false, error: errorMessage };
+    }
+  });
+
+  // Send user activity signal to prevent timeout prompts
+  ipcMain.handle(IPC_CHANNELS.VOICE_USER_ACTIVITY, async () => {
+    try {
+      voiceService.sendUserActivity();
+      return { success: true };
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      return { success: false, error: errorMessage };
+    }
+  });
 }

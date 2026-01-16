@@ -1019,70 +1019,75 @@ export default function InputArea({ sessionId, disabled, systemInfo, isStreaming
       )}
 
       {/* Input row - CLI style */}
-      <div className="flex items-center gap-2">
+      <div className={`flex items-center gap-2 transition-all duration-300 ${
+        isVoiceModeActive
+          ? 'ring-2 ring-claude-accent/40 ring-inset shadow-[0_0_12px_rgba(179,136,255,0.25)] rounded-sm'
+          : ''
+      }`}>
         {/* Permission mode selector - clickable prompt indicator */}
-        <button
-          onClick={() => cyclePermissionMode(sessionId)}
-          disabled={disabled || isSending}
-          className={`font-bold text-base select-none transition-colors hover:opacity-80 disabled:opacity-40 ${modeConfig.color}`}
-          title={`${modeConfig.description} (click to change)`}
-        >
-          {modeConfig.prompt}
-        </button>
+        {!isVoiceModeActive && (
+          <button
+            onClick={() => cyclePermissionMode(sessionId)}
+            disabled={disabled || isSending}
+            className={`font-bold text-base select-none transition-colors hover:opacity-80 disabled:opacity-40 ${modeConfig.color}`}
+            title={`${modeConfig.description} (click to change)`}
+          >
+            {modeConfig.prompt}
+          </button>
+        )}
 
         {/* Voice Mode UI or Textarea */}
         <div className="flex-1 relative">
           {isVoiceModeActive ? (
-            /* Voice Mode Active - Show animated display */
+            /* Voice Mode Active - Grep Purple themed display */
             <div className="flex items-center gap-3 py-1 min-h-[24px]">
-              {/* Voice visualization bars */}
+              {/* Voice visualization bars - Grep Purple */}
               <div className="flex items-center gap-0.5 h-5">
                 {[...Array(5)].map((_, i) => (
                   <div
                     key={i}
-                    className={`w-1 bg-green-500 rounded-full transition-all duration-150 ${
-                      voiceState?.isSpeaking
-                        ? 'animate-pulse'
-                        : ''
-                    }`}
+                    className="w-1 bg-claude-accent rounded-full transition-all duration-150"
                     style={{
                       height: voiceState?.isSpeaking
-                        ? `${Math.random() * 16 + 4}px`
+                        ? `${8 + Math.sin(Date.now() / 200 + i) * 8}px`
                         : '4px',
+                      opacity: voiceState?.isSpeaking ? 1 : 0.5,
                       animationDelay: `${i * 100}ms`,
                     }}
                   />
                 ))}
               </div>
 
-              {/* Transcript or status display */}
+              {/* Agent response display - primary focus */}
               <div className="flex-1 overflow-hidden">
-                {voiceState?.transcript ? (
-                  <span className="font-mono text-base text-claude-text truncate block">
-                    {voiceState.transcript}
-                  </span>
-                ) : voiceState?.agentResponse ? (
-                  <span className="font-mono text-base text-blue-400 truncate block italic">
+                {voiceState?.agentResponse ? (
+                  <span className="font-mono text-base text-claude-accent truncate block">
                     {voiceState.agentResponse}
                   </span>
                 ) : voiceState?.isSpeaking ? (
-                  <span className="font-mono text-base text-blue-400 animate-pulse">
-                    AI is speaking...
+                  <span className="font-mono text-base text-claude-accent animate-pulse">
+                    Speaking...
                   </span>
                 ) : (
-                  <span className="font-mono text-base text-claude-text-secondary">
-                    Voice mode active — speak to interact
+                  <span className="font-mono text-base text-claude-text-secondary italic">
+                    Listening...
                   </span>
                 )}
               </div>
 
-              {/* Voice status indicator */}
+              {/* Voice status indicator - Grep Purple */}
               <div className="flex items-center gap-1.5 text-xs font-mono">
-                {voiceState?.isSpeaking ? (
-                  <span className="text-blue-400 uppercase">SPEAKING</span>
-                ) : (
-                  <span className="text-green-400 uppercase">LISTENING</span>
-                )}
+                <span className="flex h-2 w-2">
+                  <span className={`animate-ping absolute inline-flex h-2 w-2 rounded-full opacity-75 ${
+                    voiceState?.isSpeaking ? 'bg-claude-accent' : 'bg-claude-accent/50'
+                  }`} />
+                  <span className={`relative inline-flex rounded-full h-2 w-2 ${
+                    voiceState?.isSpeaking ? 'bg-claude-accent' : 'bg-claude-accent/70'
+                  }`} />
+                </span>
+                <span className="text-claude-accent uppercase">
+                  {voiceState?.isSpeaking ? 'SPEAKING' : 'VOICE'}
+                </span>
               </div>
             </div>
           ) : (

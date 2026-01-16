@@ -156,6 +156,8 @@ export const IPC_CHANNELS = {
   VOICE_ERROR: 'voice:error',
   VOICE_TOOL_CALL: 'voice:tool-call',
   VOICE_TOOL_RESULT: 'voice:tool-result',
+  VOICE_UPDATE_AGENT_PROMPT: 'voice:update-agent-prompt',
+  VOICE_USER_ACTIVITY: 'voice:user-activity',
 } as const;
 
 export type IPCChannel = typeof IPC_CHANNELS[keyof typeof IPC_CHANNELS];

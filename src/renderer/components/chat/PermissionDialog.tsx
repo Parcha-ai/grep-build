@@ -10,10 +10,11 @@ interface PermissionDialogProps {
 
 export default function PermissionDialog({ request, onApprove, onDeny }: PermissionDialogProps) {
   const formatInput = () => {
+    const input = request.toolInput || {};
     if (request.toolName === 'Bash') {
-      return request.toolInput.command as string || '';
+      return (input.command as string) || JSON.stringify(input, null, 2);
     }
-    return JSON.stringify(request.toolInput, null, 2);
+    return JSON.stringify(input, null, 2);
   };
 
   return (

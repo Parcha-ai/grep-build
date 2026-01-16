@@ -63,11 +63,8 @@ class ChunkBatcher {
 }
 
 export function registerClaudeHandlers(ipcMain: IpcMain): void {
-  // Set the main window reference for the Claude service
-  const mainWindow = getMainWindow();
-  if (mainWindow) {
-    claudeService.setMainWindow(mainWindow);
-  }
+  // NOTE: mainWindow reference is set directly in index.ts after window creation
+  // Don't try to set it here as the window doesn't exist yet during IPC registration
 
   // Handler to get available models
   ipcMain.handle(IPC_CHANNELS.CLAUDE_GET_MODELS, async () => {

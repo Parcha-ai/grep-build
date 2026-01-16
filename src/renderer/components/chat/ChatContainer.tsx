@@ -152,27 +152,6 @@ export default function ChatContainer({ session }: ChatContainerProps) {
           currentToolCalls={streamingToolCalls}
         />
 
-        {/* Permission request - inline at end of chat */}
-        {currentPermissionRequest && (
-          <div className="px-4 py-2">
-            <PermissionDialog
-              request={currentPermissionRequest}
-              onApprove={(modifiedInput) => approvePermission(session.id, modifiedInput)}
-              onDeny={() => denyPermission(session.id)}
-            />
-          </div>
-        )}
-
-        {/* Question request - inline at end of chat */}
-        {currentQuestionRequest && (
-          <div className="px-4 py-2">
-            <QuestionDialog
-              request={currentQuestionRequest}
-              onAnswer={(answers) => answerQuestion(session.id, answers)}
-            />
-          </div>
-        )}
-
         <div ref={messagesEndRef} />
 
         {/* Floating action button to scroll to bottom - brutalist terminal style */}
@@ -205,6 +184,27 @@ export default function ChatContainer({ session }: ChatContainerProps) {
       {/* Smart Compact / Compaction status bar */}
       {currentCompactionStatus && currentCompactionStatus.isCompacting && (
         <CompactionBar status={currentCompactionStatus} />
+      )}
+
+      {/* Permission request - prominent above input */}
+      {currentPermissionRequest && (
+        <div className="border-t border-claude-border px-4 py-3 bg-claude-surface">
+          <PermissionDialog
+            request={currentPermissionRequest}
+            onApprove={(modifiedInput) => approvePermission(session.id, modifiedInput)}
+            onDeny={() => denyPermission(session.id)}
+          />
+        </div>
+      )}
+
+      {/* Question request - prominent above input */}
+      {currentQuestionRequest && (
+        <div className="border-t border-claude-border px-4 py-3 bg-claude-surface">
+          <QuestionDialog
+            request={currentQuestionRequest}
+            onAnswer={(answers) => answerQuestion(session.id, answers)}
+          />
+        </div>
       )}
 
       {/* Input */}

@@ -21,6 +21,7 @@ import { registerVoiceHandlers } from './ipc/voice.ipc';
 import { registerExtensionHandlers } from './ipc/extension.ipc';
 import { registerBrowserHandlers } from './ipc/browser.ipc';
 import { IPC_CHANNELS } from '../shared/constants/channels';
+import { claudeService } from './ipc/claude.ipc';
 
 // Global error handlers to prevent crashes from broken pipes and other uncaught errors
 process.on('uncaughtException', (error: Error) => {
@@ -107,6 +108,11 @@ const createWindow = (): void => {
       webviewTag: true,
     },
   });
+
+  // Set the main window reference IMMEDIATELY after creation
+  // This ensures Claude service can send permission requests at any time
+  claudeService.setMainWindow(mainWindow);
+  console.log('[Main] Main window reference set for Claude service');
 
   // Show window when ready to prevent blank screen
   mainWindow.once('ready-to-show', () => {

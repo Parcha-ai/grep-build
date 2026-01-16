@@ -258,16 +258,23 @@ export const useAudioStore = create<AudioState>((set, get) => ({
 
   triggerAutoPlayTTS: async (sessionId, messageId, text) => {
     if (!hasElectronAPI) return;
-    const { settings, startTTS, setTTSError, audioModeActive } = get();
+    const { settings, startTTS, setTTSError, audioModeActive, voiceModeStates } = get();
 
     console.log('[TTS] triggerAutoPlayTTS called:', {
       sessionId,
       messageId,
       textLength: text?.length,
       audioModeActive: audioModeActive[sessionId],
+      voiceModeConnected: voiceModeStates[sessionId]?.isConnected,
       hasSettings: !!settings,
       hasVoiceSettings: !!settings?.voiceSettings,
     });
+
+    // Skip if ElevenLabs voice mode is connected - it handles its own audio output
+    if (voiceModeStates[sessionId]?.isConnected) {
+      console.log('[TTS] Skipping: ElevenLabs voice mode is connected, it will handle audio');
+      return;
+    }
 
     // Only auto-play if audio mode is active for this session
     if (!audioModeActive[sessionId]) {

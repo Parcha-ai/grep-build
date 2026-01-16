@@ -968,9 +968,9 @@ export class ClaudeService {
           sessionId,
           requestId,
           toolName,
-          input,
+          toolInput: input,  // Use toolInput to match PermissionRequest type
         };
-        console.log('[Claude Service] Sending permission request to renderer:', toolName);
+        console.log('[Claude Service] Sending permission request to renderer:', toolName, 'input:', JSON.stringify(input));
         this.mainWindow.webContents.send(IPC_CHANNELS.CLAUDE_PERMISSION_REQUEST, request);
       } else {
         reject(new Error('Main window not available'));

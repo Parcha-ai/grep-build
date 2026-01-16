@@ -80,9 +80,10 @@ export const MicrophoneButton: React.FC<MicrophoneButtonProps> = ({
   const session = useSessionStore((state) => state.sessions.find(s => s.id === sessionId));
   const isStreaming = useSessionStore((state) => !!state.isStreaming[sessionId]);
 
-  // Subscribe to thinking content for incremental updates
+  // Subscribe to thinking content and assistant text for incremental updates
   // Use stable references for empty values to prevent infinite re-renders
   const currentThinkingContent = useSessionStore((state) => state.currentThinkingContent[sessionId] || '');
+  const currentStreamContent = useSessionStore((state) => state.currentStreamContent[sessionId] || '');
   const currentToolCalls = useSessionStore((state) => state.currentToolCalls[sessionId] || EMPTY_TOOL_CALLS);
 
   // Generate context summary for ElevenLabs agent
@@ -110,20 +111,19 @@ ${messageSummary || 'No messages yet'}`;
     disconnect,
     startRecording,
     updateContext,
+    speak,
   } = useVoiceConversation({
     agentId,
     sessionId,
+    // No systemPrompt - use agent's main prompt configured via ElevenLabs API
+    // This allows us to update the prompt via API without code changes
     onTranscript: (text, isFinal) => {
-      // Update store with transcript
+      // Update store with transcript for display
       setVoiceModeTranscript(sessionId, text);
-
-      // When final, send DIRECTLY to Grep and notify ElevenLabs
+      // Note: We no longer send directly to Grep here.
+      // ElevenLabs agent decides when to call the execute_grep_command tool.
       if (isFinal && text.trim()) {
-        // Send directly to Grep/Agent SDK
-        onTranscriptionComplete?.(text);
-
-        // Notify ElevenLabs that task was submitted (so it can say "On it")
-        updateContext(`User request submitted to Grep: "${text.trim()}"\nStatus: Processing request...`);
+        console.log('[MicrophoneButton] Final transcript received, waiting for tool call:', text.slice(0, 50));
       }
     },
     onClaudeResponse: (text) => {
@@ -134,6 +134,81 @@ ${messageSummary || 'No messages yet'}`;
     onError: (error) => {
       console.error('[MicrophoneButton] Voice error:', error);
       setVoiceModeError(sessionId, error);
+    },
+    // Handle tool calls from ElevenLabs agent
+    onToolCall: async (toolCall) => {
+      console.log('[MicrophoneButton] Tool call received:', toolCall.toolName, toolCall.parameters);
+
+      if (toolCall.toolName === 'execute_grep_command') {
+        const instruction = toolCall.parameters.instruction as string;
+        if (instruction) {
+          console.log('[MicrophoneButton] Executing Grep command:', instruction.slice(0, 100));
+
+          // Send to Grep/Agent SDK
+          onTranscriptionComplete?.(instruction);
+
+          // Return a clear "in progress" response
+          return `TASK SUBMITTED. Grep is now working on: "${instruction.slice(0, 50)}...". Call get_task_status every 5-10 seconds to check progress and announce what Grep is doing.`;
+        }
+        return 'No instruction provided';
+      }
+
+      // Status polling tool - agent calls this to get latest updates
+      if (toolCall.toolName === 'get_task_status') {
+        const currentState = useSessionStore.getState();
+        const sessionIsStreaming = currentState.isStreaming[sessionId];
+        const thinking = currentState.currentThinkingContent[sessionId] || '';
+        const streamContent = currentState.currentStreamContent[sessionId] || '';
+        const toolCalls = currentState.currentToolCalls[sessionId] || [];
+        const sessionMessages = currentState.messages[sessionId] || [];
+
+        // Get latest tool call for context
+        const latestToolCall = toolCalls.length > 0 ? toolCalls[toolCalls.length - 1] : null;
+        let currentAction = 'Processing';
+        if (latestToolCall) {
+          const toolName = latestToolCall.name?.toLowerCase() || '';
+          if (toolName.includes('read')) currentAction = `Reading ${latestToolCall.input?.file_path || 'a file'}`;
+          else if (toolName.includes('write')) currentAction = `Writing to ${latestToolCall.input?.file_path || 'a file'}`;
+          else if (toolName.includes('edit')) currentAction = `Editing ${latestToolCall.input?.file_path || 'a file'}`;
+          else if (toolName.includes('bash')) currentAction = 'Running a command';
+          else if (toolName.includes('glob') || toolName.includes('grep')) currentAction = 'Searching the codebase';
+          else if (toolName.includes('task')) currentAction = 'Working with a sub-agent';
+          else currentAction = `Using ${toolName}`;
+        }
+
+        // Extract latest thinking sentence
+        const thinkingSentences = thinking.split(/[.!?]\s+/).filter(s => s.trim().length > 10);
+        const latestThinking = thinkingSentences.length > 0 ? thinkingSentences[thinkingSentences.length - 1].slice(0, 100) : '';
+
+        if (sessionIsStreaming) {
+          return JSON.stringify({
+            status: 'working',
+            currentAction: currentAction,
+            latestThought: latestThinking,
+            toolCallCount: toolCalls.length,
+            message: `Grep is currently ${currentAction.toLowerCase()}. ${latestThinking ? `Thinking: "${latestThinking}..."` : ''}`
+          });
+        } else {
+          // Task complete - get last assistant message
+          const lastMessage = sessionMessages[sessionMessages.length - 1];
+          let completionSummary = 'Task completed';
+          if (lastMessage?.role === 'assistant' && typeof lastMessage.content === 'string') {
+            // Extract first meaningful sentence
+            const content = lastMessage.content;
+            const firstSentence = content.split(/[.!?]\s+/)[0]?.slice(0, 150) || 'Task completed';
+            completionSummary = firstSentence;
+          }
+
+          return JSON.stringify({
+            status: 'complete',
+            currentAction: 'Finished',
+            completionSummary: completionSummary,
+            message: `Done! ${completionSummary}`
+          });
+        }
+      }
+
+      return `Unknown tool: ${toolCall.toolName}`;
     },
   });
 
@@ -208,68 +283,10 @@ ${messageSummary || 'No messages yet'}`;
     return firstLine.length < content.length ? firstLine + '...' : firstLine;
   }, []);
 
-  // Helper to extract meaningful updates from thinking content
-  const summarizeThinkingForVoice = useCallback((thinkingContent: string, toolCalls: typeof currentToolCalls): string | null => {
-    // Extract the last meaningful portion of thinking
-    const lines = thinkingContent.split('\n').filter(l => l.trim());
-    if (lines.length === 0) return null;
-
-    // Check for tool calls in progress
-    if (toolCalls.length > 0) {
-      const lastTool = toolCalls[toolCalls.length - 1];
-      const toolName = lastTool.name?.toLowerCase() || '';
-
-      // Map tool names to voice-friendly descriptions
-      if (toolName.includes('read')) {
-        const file = lastTool.input?.file_path || lastTool.input?.path || 'a file';
-        return `Reading ${typeof file === 'string' ? file.split('/').pop() : 'file'}`;
-      }
-      if (toolName.includes('write')) {
-        const file = lastTool.input?.file_path || lastTool.input?.path || 'a file';
-        return `Writing to ${typeof file === 'string' ? file.split('/').pop() : 'file'}`;
-      }
-      if (toolName.includes('edit')) {
-        const file = lastTool.input?.file_path || 'a file';
-        return `Editing ${typeof file === 'string' ? file.split('/').pop() : 'file'}`;
-      }
-      if (toolName.includes('bash') || toolName.includes('command')) {
-        return 'Running a command';
-      }
-      if (toolName.includes('glob') || toolName.includes('grep') || toolName.includes('search')) {
-        return 'Searching the codebase';
-      }
-      if (toolName.includes('task') || toolName.includes('agent')) {
-        return 'Spawning a sub-agent';
-      }
-
-      return `Using ${toolName}`;
-    }
-
-    // Look for patterns in thinking text (last 500 chars to keep it recent)
-    const recentThinking = thinkingContent.slice(-500);
-
-    // Common thinking patterns
-    if (recentThinking.includes('let me') || recentThinking.includes("Let me")) {
-      const match = recentThinking.match(/[Ll]et me ([^.!?\n]{10,50})/);
-      if (match) return match[1].trim();
-    }
-    if (recentThinking.includes('I\'ll') || recentThinking.includes("I will")) {
-      const match = recentThinking.match(/I(?:'ll| will) ([^.!?\n]{10,50})/);
-      if (match) return match[1].trim();
-    }
-    if (recentThinking.includes('Looking') || recentThinking.includes('looking')) {
-      return 'Analyzing the code';
-    }
-    if (recentThinking.includes('need to') || recentThinking.includes('Need to')) {
-      const match = recentThinking.match(/[Nn]eed to ([^.!?\n]{10,50})/);
-      if (match) return match[1].trim();
-    }
-
-    return null;
-  }, []);
-
   // Send context updates when messages change (Grep responded)
   const prevMessagesLengthRef = useRef(messages.length);
+  const prevStreamingRef = useRef(isStreaming);
+
   useEffect(() => {
     // Only send update if messages actually changed (not on initial render)
     if (hookConnected && messages.length > 0 && messages.length !== prevMessagesLengthRef.current) {
@@ -279,7 +296,18 @@ ${messageSummary || 'No messages yet'}`;
       if (lastMessage?.role === 'assistant') {
         const summary = summarizeForVoice(lastMessage.content);
         console.log('[MicrophoneButton] Grep responded, sending progress update:', summary);
-        updateContext(`Grep update: ${summary}\nStatus: ${isStreaming ? 'Still working...' : 'Ready for next request'}`);
+
+        // If streaming just ended, this is the COMPLETION - announce it clearly
+        if (!isStreaming && prevStreamingRef.current) {
+          console.log('[MicrophoneButton] Streaming ended, announcing completion:', summary);
+          // Send clear completion context update
+          updateContext(`TASK COMPLETE: ${summary}\nGrep has finished. Ready for next request.`);
+          // Proactively speak the completion with "Done" prefix
+          speak(`Done. ${summary}`);
+        } else {
+          // Still streaming - just a progress update
+          updateContext(`Grep progress: ${summary}\nStatus: Still working...`);
+        }
       } else {
         // User message - just update context
         console.log('[MicrophoneButton] Messages changed, sending context update');
@@ -289,36 +317,44 @@ ${messageSummary || 'No messages yet'}`;
       }
     }
     prevMessagesLengthRef.current = messages.length;
+    prevStreamingRef.current = isStreaming;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hookConnected, messages.length, isStreaming, summarizeForVoice]);
+  }, [hookConnected, messages.length, isStreaming, summarizeForVoice, speak]);
 
-  // Track last sent thinking summary to avoid duplicates
-  const lastSentThinkingRef = useRef<string | null>(null);
+  // User activity signal ref for preventing "are you there?" prompts
+  const activityIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
-  // Debounced function to send thinking updates
-  const sendThinkingUpdate = useDebouncedCallback((thinking: string, tools: typeof currentToolCalls) => {
-    if (!hookConnected || !isStreaming) return;
-
-    const summary = summarizeThinkingForVoice(thinking, tools);
-    if (summary && summary !== lastSentThinkingRef.current) {
-      console.log('[MicrophoneButton] Sending thinking update:', summary);
-      lastSentThinkingRef.current = summary;
-      updateContext(`Grep progress: ${summary}`);
-    }
-  }, 1500); // Debounce to 1.5s to avoid spamming ElevenLabs
-
-  // Send incremental thinking updates while streaming
+  // Send user activity signals while streaming to prevent "are you there?" prompts
   useEffect(() => {
-    if (hookConnected && isStreaming && (currentThinkingContent || currentToolCalls.length > 0)) {
-      sendThinkingUpdate(currentThinkingContent, currentToolCalls);
+    if (hookConnected && isStreaming) {
+      // Send activity signal immediately when streaming starts
+      window.electronAPI.voice.sendUserActivity();
+      console.log('[MicrophoneButton] Sent initial user activity signal');
+
+      // Send activity signal every 15 seconds while working
+      activityIntervalRef.current = setInterval(() => {
+        window.electronAPI.voice.sendUserActivity();
+        console.log('[MicrophoneButton] Sent periodic user activity signal');
+      }, 15000);
+    } else {
+      // Clear interval when not streaming
+      if (activityIntervalRef.current) {
+        clearInterval(activityIntervalRef.current);
+        activityIntervalRef.current = null;
+      }
     }
 
-    // Reset tracking when streaming ends
-    if (!isStreaming) {
-      lastSentThinkingRef.current = null;
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hookConnected, isStreaming, currentThinkingContent, currentToolCalls.length]);
+    return () => {
+      if (activityIntervalRef.current) {
+        clearInterval(activityIntervalRef.current);
+        activityIntervalRef.current = null;
+      }
+    };
+  }, [hookConnected, isStreaming]);
+
+  // NOTE: Push-based speech updates removed in favor of polling model.
+  // The ElevenLabs agent now calls get_task_status tool to poll for updates.
+  // This is more reliable than trying to push verbatim speech to the agent.
 
   const handleClick = useCallback(async () => {
     if (isConnected) {

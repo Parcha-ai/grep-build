@@ -548,6 +548,10 @@ const electronAPI = {
     },
     sendToolResult: (data: { toolCallId: string; result: string; isError?: boolean }): Promise<{ success: boolean; error?: string }> =>
       ipcRenderer.invoke(IPC_CHANNELS.VOICE_TOOL_RESULT, data),
+    updateAgentPrompt: (data: { agentId: string; prompt: string }): Promise<{ success: boolean; error?: string }> =>
+      ipcRenderer.invoke(IPC_CHANNELS.VOICE_UPDATE_AGENT_PROMPT, data),
+    sendUserActivity: (): Promise<{ success: boolean; error?: string }> =>
+      ipcRenderer.invoke(IPC_CHANNELS.VOICE_USER_ACTIVITY),
   },
 };
 

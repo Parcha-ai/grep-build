@@ -117,6 +117,46 @@ export class ElevenLabsVoiceService extends EventEmitter {
   }
 
   /**
+   * Update the agent's system prompt via the ElevenLabs API
+   */
+  async updateAgentPrompt(agentId: string, prompt: string): Promise<void> {
+    const apiKey = this.getApiKey();
+    if (!apiKey) {
+      throw new Error('ElevenLabs API key not configured');
+    }
+
+    console.log('[ElevenLabsVoice] Updating agent prompt for:', agentId);
+
+    const response = await fetch(
+      `https://api.elevenlabs.io/v1/convai/agents/${agentId}`,
+      {
+        method: 'PATCH',
+        headers: {
+          'xi-api-key': apiKey,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          conversation_config: {
+            agent: {
+              prompt: {
+                prompt: prompt,
+              },
+            },
+          },
+        }),
+      }
+    );
+
+    if (!response.ok) {
+      const error = await response.text();
+      console.error('[ElevenLabsVoice] Failed to update agent prompt:', error);
+      throw new Error(`Failed to update agent prompt: ${error}`);
+    }
+
+    console.log('[ElevenLabsVoice] Agent prompt updated successfully');
+  }
+
+  /**
    * Get a signed URL for WebSocket connection (for private agents)
    */
   private async getSignedUrl(agentId: string): Promise<string> {
@@ -357,8 +397,9 @@ export class ElevenLabsVoiceService extends EventEmitter {
   }
 
   /**
-   * Send text for the agent to speak (TTS)
-   * This is useful for injecting Claude's responses
+   * Send text for the agent to speak (status announcement)
+   * Uses user_message with [STATUS] prefix to trigger verbatim speech.
+   * The agent's prompt must include instructions to speak [STATUS] messages verbatim.
    */
   sendTextForTTS(text: string): void {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
@@ -366,10 +407,25 @@ export class ElevenLabsVoiceService extends EventEmitter {
       return;
     }
 
+    // Use [STATUS] prefix - agent prompt should recognize this and speak verbatim
+    const formattedText = `[STATUS] ${text}`;
+    console.log('[ElevenLabsVoice] Sending status announcement:', formattedText);
+
     this.sendMessage({
-      type: 'text_input',
-      text: text,
+      type: 'user_message',  // Correct type per ElevenLabs spec
+      text: formattedText,
     });
+  }
+
+  /**
+   * Send user activity signal to reset turn timeout timer
+   * Prevents "are you there?" prompts during extended work periods
+   */
+  sendUserActivity(): void {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      return;
+    }
+    this.sendMessage({ type: 'user_activity' });
   }
 
   /**
