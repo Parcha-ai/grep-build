@@ -95,11 +95,13 @@ export const SpeakerButton: React.FC<SpeakerButtonProps> = ({
         console.error('Failed to play audio:', error);
         setTTSError(messageId, error instanceof Error ? error.message : 'Playback failed');
         playedRef.current = false;
+        // Also stop the TTS state so user can retry
+        stopTTS(messageId);
       }
     };
 
     playAudio();
-  }, [audioChunks.length, isPlaying, progress, messageId, setTTSError]);
+  }, [audioChunks.length, isPlaying, progress, messageId, setTTSError, stopTTS]);
 
   // Reset played ref when playback stops
   useEffect(() => {

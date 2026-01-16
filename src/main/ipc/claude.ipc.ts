@@ -174,9 +174,8 @@ export function registerClaudeHandlers(ipcMain: IpcMain): void {
 
   // Handle permission responses from user
   ipcMain.handle(IPC_CHANNELS.CLAUDE_PERMISSION_RESPONSE, async (_, response: { requestId: string; approved: boolean; modifiedInput?: Record<string, unknown> }) => {
-    // For now, just log it - full implementation would need to continue the query
-    console.log('[Claude IPC] Permission response:', response);
-    // TODO: Implement permission approval flow - may need to store pending queries and resume them
+    console.log('[Claude IPC] Permission response received:', response.requestId, 'approved:', response.approved);
+    claudeService.handlePermissionResponse(response);
   });
 
   // Handle question responses from user

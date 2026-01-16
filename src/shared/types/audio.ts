@@ -43,11 +43,13 @@ export interface VoiceSettings {
 export interface AudioSettings {
   elevenLabsApiKey?: string;
   openAiApiKey?: string;
+  elevenLabsAgentId?: string; // ElevenLabs Conversational AI agent ID for voice mode
   selectedVoice: string;
   voiceSettings: VoiceSettings;
   autoPlayResponses: boolean;
   transcriptionLanguage: string;
   voiceTriggerWord: string; // Word that triggers auto-submit when speaking
+  voiceModeEnabled?: boolean; // Enable the new voice conversation mode
 }
 
 // Default settings
@@ -63,4 +65,6 @@ export const DEFAULT_AUDIO_SETTINGS: AudioSettings = {
   autoPlayResponses: false,
   transcriptionLanguage: 'en',
   voiceTriggerWord: 'please', // Default trigger word
+  elevenLabsAgentId: 'agent_8101kf1x665ve49b9zy8jbtvhq12', // Default Grep voice agent
+  voiceModeEnabled: true, // Enable voice mode by default
 };

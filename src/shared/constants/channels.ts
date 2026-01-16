@@ -138,6 +138,24 @@ export const IPC_CHANNELS = {
   EXTENSION_SCAN_SKILLS: 'extension:scan-skills',
   EXTENSION_SCAN_AGENTS: 'extension:scan-agents',
   EXTENSION_GET_COMMAND: 'extension:get-command',
+
+  // Voice mode channels (ElevenLabs Conversational AI)
+  VOICE_CONNECT: 'voice:connect',
+  VOICE_DISCONNECT: 'voice:disconnect',
+  VOICE_SEND_AUDIO: 'voice:send-audio',
+  VOICE_SEND_TEXT: 'voice:send-text',
+  VOICE_END_INPUT: 'voice:end-input',
+  VOICE_CONTEXT_UPDATE: 'voice:context-update',
+  VOICE_CONNECTED: 'voice:connected',
+  VOICE_DISCONNECTED: 'voice:disconnected',
+  VOICE_RECONNECTING: 'voice:reconnecting',
+  VOICE_USER_TRANSCRIPT: 'voice:user-transcript',
+  VOICE_AGENT_RESPONSE: 'voice:agent-response',
+  VOICE_AUDIO_CHUNK: 'voice:audio-chunk',
+  VOICE_INTERRUPTION: 'voice:interruption',
+  VOICE_ERROR: 'voice:error',
+  VOICE_TOOL_CALL: 'voice:tool-call',
+  VOICE_TOOL_RESULT: 'voice:tool-result',
 } as const;
 
 export type IPCChannel = typeof IPC_CHANNELS[keyof typeof IPC_CHANNELS];

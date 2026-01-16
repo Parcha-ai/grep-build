@@ -18,6 +18,8 @@ export default function SettingsDialog() {
 
   const [selectedVoice, setSelectedVoice] = useState('');
   const [voiceTriggerWord, setVoiceTriggerWord] = useState('please');
+  const [elevenLabsAgentId, setElevenLabsAgentId] = useState('');
+  const [voiceModeEnabled, setVoiceModeEnabled] = useState(false);
 
   const [isSaving, setIsSaving] = useState(false);
   const [saveStatus, setSaveStatus] = useState<'idle' | 'success' | 'error'>('idle');
@@ -56,6 +58,8 @@ export default function SettingsDialog() {
     if (audioSettings) {
       setSelectedVoice(audioSettings.selectedVoice || '');
       setVoiceTriggerWord(audioSettings.voiceTriggerWord || 'please');
+      setElevenLabsAgentId(audioSettings.elevenLabsAgentId || '');
+      setVoiceModeEnabled(audioSettings.voiceModeEnabled || false);
     }
   }, [audioSettings]);
 
@@ -77,11 +81,13 @@ export default function SettingsDialog() {
         window.electronAPI.audio.setOpenAiKey(openaiApiKey),
       ]);
 
-      // Save audio settings (voice selection and trigger word)
+      // Save audio settings (voice selection, trigger word, agent ID, voice mode)
       if (audioSettings) {
         await updateSettings({
           selectedVoice,
           voiceTriggerWord,
+          elevenLabsAgentId,
+          voiceModeEnabled,
           voiceSettings: {
             ...audioSettings.voiceSettings,
             voiceId: selectedVoice,
@@ -296,6 +302,69 @@ export default function SettingsDialog() {
               />
               <p className="text-[10px] font-mono text-claude-text-secondary">
                 Say this word at the end of your message to auto-submit (e.g., "please", "send", "over")
+              </p>
+            </div>
+          </div>
+
+          {/* Voice Conversation Mode Section */}
+          <div className="space-y-4 pt-4 border-t border-claude-border">
+            <h3 className="text-xs font-mono text-claude-text uppercase tracking-wider">
+              Voice Conversation Mode (Experimental)
+            </h3>
+
+            {/* Voice Mode Toggle */}
+            <div className="flex items-center justify-between">
+              <div>
+                <label className="block text-xs font-mono text-claude-text-secondary uppercase tracking-wider">
+                  Enable Voice Conversation
+                </label>
+                <p className="text-[10px] font-mono text-claude-text-secondary mt-1">
+                  Hands-free speech-to-speech conversations with Claude
+                </p>
+              </div>
+              <button
+                onClick={() => setVoiceModeEnabled(!voiceModeEnabled)}
+                disabled={isLoading}
+                className={`relative inline-flex h-6 w-11 items-center transition-colors ${
+                  voiceModeEnabled ? 'bg-claude-accent' : 'bg-claude-border'
+                } disabled:opacity-50`}
+                style={{ borderRadius: 0 }}
+              >
+                <span
+                  className={`inline-block h-4 w-4 transform bg-white transition-transform ${
+                    voiceModeEnabled ? 'translate-x-6' : 'translate-x-1'
+                  }`}
+                />
+              </button>
+            </div>
+
+            {/* ElevenLabs Agent ID */}
+            <div className="space-y-2">
+              <label className="block text-xs font-mono text-claude-text-secondary uppercase tracking-wider">
+                ElevenLabs Agent ID
+              </label>
+              <input
+                type="text"
+                value={elevenLabsAgentId}
+                onChange={(e) => setElevenLabsAgentId(e.target.value.trim())}
+                placeholder="Enter ElevenLabs Conversational AI agent ID"
+                disabled={isLoading || !voiceModeEnabled}
+                className="w-full px-3 py-2 bg-claude-bg border border-claude-border text-claude-text font-mono text-sm placeholder:text-claude-text-secondary focus:outline-none focus:border-claude-accent disabled:opacity-50"
+                style={{ borderRadius: 0 }}
+              />
+              <p className="text-[10px] font-mono text-claude-text-secondary">
+                Create a Conversational AI agent at{' '}
+                <a
+                  href="#"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    window.electronAPI.app?.openExternal?.('https://elevenlabs.io/conversational-ai');
+                  }}
+                  className="text-claude-accent hover:underline"
+                >
+                  elevenlabs.io/conversational-ai
+                </a>
+                {' '}and paste the agent ID here.
               </p>
             </div>
           </div>

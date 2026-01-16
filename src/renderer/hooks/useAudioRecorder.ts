@@ -228,7 +228,17 @@ export const useAudioRecorder = ({
 
         // Send to main process as number array
         const audioArray = Array.from(int16Data);
-        await window.electronAPI.realtime.sendAudio(audioArray);
+        try {
+          const result = await window.electronAPI.realtime.sendAudio(audioArray);
+          if (result && !result.success) {
+            console.warn('[AudioRecorder] Failed to send audio chunk:', result.error);
+            // Mark as disconnected to stop further sends
+            isConnectedRef.current = false;
+          }
+        } catch (e) {
+          console.error('[AudioRecorder] Error sending audio:', e);
+          isConnectedRef.current = false;
+        }
       };
 
       // Connect the audio graph
@@ -243,10 +253,32 @@ export const useAudioRecorder = ({
 
       console.log('[AudioRecorder] Recording started');
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : 'Failed to start recording';
+      // Provide specific error messages for common issues
+      let errorMessage: string;
+      if (error instanceof Error) {
+        if (error.name === 'NotAllowedError') {
+          errorMessage = 'Microphone access denied. Please allow microphone access in your browser/OS settings.';
+        } else if (error.message.includes('API key')) {
+          errorMessage = 'Voice API key not configured. Please check Settings.';
+        } else {
+          errorMessage = error.message;
+        }
+      } else {
+        errorMessage = 'Failed to start recording';
+      }
       console.error('[AudioRecorder] Start error:', error);
       setRecordingError(sessionId, errorMessage);
       onError?.(errorMessage);
+
+      // Clean up WebSocket connection if it was established
+      if (isConnectedRef.current) {
+        try {
+          await window.electronAPI.realtime.disconnect();
+        } catch (e) {
+          console.error('[AudioRecorder] Failed to disconnect after error:', e);
+        }
+        isConnectedRef.current = false;
+      }
       cleanupListeners();
     }
   }, [

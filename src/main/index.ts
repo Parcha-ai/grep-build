@@ -17,6 +17,7 @@ import { registerDevHandlers } from './ipc/dev.ipc';
 import { registerFsHandlers } from './ipc/fs.ipc';
 import { registerAudioHandlers } from './ipc/audio.ipc';
 import { registerRealtimeHandlers } from './ipc/realtime.ipc';
+import { registerVoiceHandlers } from './ipc/voice.ipc';
 import { registerExtensionHandlers } from './ipc/extension.ipc';
 import { registerBrowserHandlers } from './ipc/browser.ipc';
 import { IPC_CHANNELS } from '../shared/constants/channels';
@@ -490,6 +491,7 @@ function registerIPCHandlers(): void {
   registerFsHandlers(ipcMain);
   registerAudioHandlers(ipcMain);
   registerRealtimeHandlers(ipcMain);
+  registerVoiceHandlers(ipcMain);
   registerExtensionHandlers(ipcMain);
   registerBrowserHandlers(ipcMain);
 }

@@ -23,6 +23,16 @@ interface TTSState {
   error: string | null;
 }
 
+// Per-session voice mode state (ElevenLabs Conversational AI)
+export interface VoiceModeState {
+  isConnected: boolean;
+  isConnecting: boolean;
+  isSpeaking: boolean;
+  transcript: string;
+  agentResponse: string;
+  error: string | null;
+}
+
 interface AudioState {
   // Per-session recording state
   recordingStates: Record<string, RecordingState>;
@@ -30,12 +40,25 @@ interface AudioState {
   // Per-message TTS state
   ttsStates: Record<string, TTSState>;
 
+  // Per-session voice mode state (ElevenLabs)
+  voiceModeStates: Record<string, VoiceModeState>;
+
   // Audio mode - per session (tracks if last input was via voice)
   audioModeActive: Record<string, boolean>;
 
   // Global audio settings
   settings: AudioSettings | null;
   availableVoices: Array<{ voice_id: string; name: string }>;
+
+  // Voice mode actions
+  setVoiceModeConnecting: (sessionId: string) => void;
+  setVoiceModeConnected: (sessionId: string) => void;
+  setVoiceModeDisconnected: (sessionId: string) => void;
+  setVoiceModeSpeaking: (sessionId: string, speaking: boolean) => void;
+  setVoiceModeTranscript: (sessionId: string, transcript: string) => void;
+  setVoiceModeAgentResponse: (sessionId: string, response: string) => void;
+  setVoiceModeError: (sessionId: string, error: string | null) => void;
+  getVoiceModeState: (sessionId: string) => VoiceModeState | undefined;
 
   // Audio mode actions
   setAudioMode: (sessionId: string, active: boolean) => void;
@@ -87,6 +110,15 @@ const defaultTTSState: TTSState = {
   error: null,
 };
 
+const defaultVoiceModeState: VoiceModeState = {
+  isConnected: false,
+  isConnecting: false,
+  isSpeaking: false,
+  transcript: '',
+  agentResponse: '',
+  error: null,
+};
+
 // Store cleanup functions for TTS listeners on window to survive HMR
 declare global {
   interface Window {
@@ -130,9 +162,87 @@ export function initializeTTSListeners() {
 export const useAudioStore = create<AudioState>((set, get) => ({
   recordingStates: {},
   ttsStates: {},
+  voiceModeStates: {},
   audioModeActive: {},
   settings: null,
   availableVoices: [],
+
+  // Voice mode actions
+  setVoiceModeConnecting: (sessionId) => set((state) => ({
+    voiceModeStates: {
+      ...state.voiceModeStates,
+      [sessionId]: {
+        ...defaultVoiceModeState,
+        isConnecting: true,
+      },
+    },
+  })),
+
+  setVoiceModeConnected: (sessionId) => set((state) => ({
+    voiceModeStates: {
+      ...state.voiceModeStates,
+      [sessionId]: {
+        ...(state.voiceModeStates[sessionId] || defaultVoiceModeState),
+        isConnected: true,
+        isConnecting: false,
+        error: null,
+      },
+    },
+  })),
+
+  setVoiceModeDisconnected: (sessionId) => set((state) => ({
+    voiceModeStates: {
+      ...state.voiceModeStates,
+      [sessionId]: {
+        ...defaultVoiceModeState,
+      },
+    },
+  })),
+
+  setVoiceModeSpeaking: (sessionId, speaking) => set((state) => ({
+    voiceModeStates: {
+      ...state.voiceModeStates,
+      [sessionId]: {
+        ...(state.voiceModeStates[sessionId] || defaultVoiceModeState),
+        isSpeaking: speaking,
+      },
+    },
+  })),
+
+  setVoiceModeTranscript: (sessionId, transcript) => set((state) => ({
+    voiceModeStates: {
+      ...state.voiceModeStates,
+      [sessionId]: {
+        ...(state.voiceModeStates[sessionId] || defaultVoiceModeState),
+        transcript,
+      },
+    },
+  })),
+
+  setVoiceModeAgentResponse: (sessionId, response) => set((state) => ({
+    voiceModeStates: {
+      ...state.voiceModeStates,
+      [sessionId]: {
+        ...(state.voiceModeStates[sessionId] || defaultVoiceModeState),
+        agentResponse: response,
+      },
+    },
+  })),
+
+  setVoiceModeError: (sessionId, error) => set((state) => ({
+    voiceModeStates: {
+      ...state.voiceModeStates,
+      [sessionId]: {
+        ...(state.voiceModeStates[sessionId] || defaultVoiceModeState),
+        error,
+        isConnecting: false,
+      },
+    },
+  })),
+
+  getVoiceModeState: (sessionId) => {
+    return get().voiceModeStates[sessionId];
+  },
 
   // Audio mode actions
   setAudioMode: (sessionId, active) => set((state) => ({

@@ -3,7 +3,7 @@ import { useAuthStore } from './stores/auth.store';
 import { useSessionStore } from './stores/session.store';
 import { useUIStore } from './stores/ui.store';
 import { useEditorStore } from './stores/editor.store';
-import { initializeTTSListeners } from './stores/audio.store';
+import { initializeTTSListeners, useAudioStore } from './stores/audio.store';
 import Sidebar from './components/layout/Sidebar';
 import MainContent from './components/layout/MainContent';
 import StatusBar from './components/layout/StatusBar';
@@ -138,12 +138,16 @@ function ElectronApp() {
     hasApiKey,
   } = useUIStore();
   const { toggleQuickSearch } = useEditorStore();
+  const { loadSettings: loadAudioSettings } = useAudioStore();
   const [isInitialized, setIsInitialized] = useState(false);
 
   useEffect(() => {
     const init = async () => {
       // Initialize global TTS event listeners (only once)
       initializeTTSListeners();
+
+      // Load audio settings for voice features
+      await loadAudioSettings();
 
       await checkAuth();
 
@@ -156,7 +160,7 @@ function ElectronApp() {
       setIsInitialized(true);
     };
     init();
-  }, [checkAuth, checkApiKey, openOnboarding]);
+  }, [checkAuth, checkApiKey, openOnboarding, loadAudioSettings]);
 
   // Global keyboard shortcuts
   useEffect(() => {

@@ -486,6 +486,69 @@ const electronAPI = {
     getCommand: (commandName: string, projectPath?: string) =>
       ipcRenderer.invoke(IPC_CHANNELS.EXTENSION_GET_COMMAND, commandName, projectPath),
   },
+
+  // Voice mode (ElevenLabs Conversational AI)
+  voice: {
+    connect: (config: { agentId: string; systemPrompt?: string; sessionContext?: Record<string, unknown> }): Promise<{ success: boolean; error?: string }> =>
+      ipcRenderer.invoke(IPC_CHANNELS.VOICE_CONNECT, config),
+    disconnect: (): Promise<{ success: boolean; error?: string }> =>
+      ipcRenderer.invoke(IPC_CHANNELS.VOICE_DISCONNECT),
+    sendAudio: (audioData: number[]): Promise<{ success: boolean; error?: string }> =>
+      ipcRenderer.invoke(IPC_CHANNELS.VOICE_SEND_AUDIO, audioData),
+    sendText: (text: string): Promise<{ success: boolean; error?: string }> =>
+      ipcRenderer.invoke(IPC_CHANNELS.VOICE_SEND_TEXT, text),
+    endInput: (): Promise<{ success: boolean; error?: string }> =>
+      ipcRenderer.invoke(IPC_CHANNELS.VOICE_END_INPUT),
+    sendContextUpdate: (context: string): Promise<{ success: boolean; error?: string }> =>
+      ipcRenderer.invoke(IPC_CHANNELS.VOICE_CONTEXT_UPDATE, context),
+    onConnected: (callback: () => void) => {
+      const handler = () => callback();
+      ipcRenderer.on(IPC_CHANNELS.VOICE_CONNECTED, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.VOICE_CONNECTED, handler);
+    },
+    onDisconnected: (callback: () => void) => {
+      const handler = () => callback();
+      ipcRenderer.on(IPC_CHANNELS.VOICE_DISCONNECTED, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.VOICE_DISCONNECTED, handler);
+    },
+    onReconnecting: (callback: (data: { attempt: number; maxAttempts: number }) => void) => {
+      const handler = (_: IpcRendererEvent, data: { attempt: number; maxAttempts: number }) => callback(data);
+      ipcRenderer.on(IPC_CHANNELS.VOICE_RECONNECTING, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.VOICE_RECONNECTING, handler);
+    },
+    onUserTranscript: (callback: (data: { text: string; isFinal: boolean }) => void) => {
+      const handler = (_: IpcRendererEvent, data: { text: string; isFinal: boolean }) => callback(data);
+      ipcRenderer.on(IPC_CHANNELS.VOICE_USER_TRANSCRIPT, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.VOICE_USER_TRANSCRIPT, handler);
+    },
+    onAgentResponse: (callback: (text: string) => void) => {
+      const handler = (_: IpcRendererEvent, text: string) => callback(text);
+      ipcRenderer.on(IPC_CHANNELS.VOICE_AGENT_RESPONSE, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.VOICE_AGENT_RESPONSE, handler);
+    },
+    onAudioChunk: (callback: (data: { data: number[]; eventId: number }) => void) => {
+      const handler = (_: IpcRendererEvent, data: { data: number[]; eventId: number }) => callback(data);
+      ipcRenderer.on(IPC_CHANNELS.VOICE_AUDIO_CHUNK, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.VOICE_AUDIO_CHUNK, handler);
+    },
+    onInterruption: (callback: (reason: string) => void) => {
+      const handler = (_: IpcRendererEvent, reason: string) => callback(reason);
+      ipcRenderer.on(IPC_CHANNELS.VOICE_INTERRUPTION, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.VOICE_INTERRUPTION, handler);
+    },
+    onError: (callback: (error: string) => void) => {
+      const handler = (_: IpcRendererEvent, error: string) => callback(error);
+      ipcRenderer.on(IPC_CHANNELS.VOICE_ERROR, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.VOICE_ERROR, handler);
+    },
+    onToolCall: (callback: (data: { toolCallId: string; toolName: string; parameters: Record<string, unknown> }) => void) => {
+      const handler = (_: IpcRendererEvent, data: { toolCallId: string; toolName: string; parameters: Record<string, unknown> }) => callback(data);
+      ipcRenderer.on(IPC_CHANNELS.VOICE_TOOL_CALL, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.VOICE_TOOL_CALL, handler);
+    },
+    sendToolResult: (data: { toolCallId: string; result: string; isError?: boolean }): Promise<{ success: boolean; error?: string }> =>
+      ipcRenderer.invoke(IPC_CHANNELS.VOICE_TOOL_RESULT, data),
+  },
 };
 
 // Expose the API to the renderer process

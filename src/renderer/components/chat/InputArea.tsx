@@ -148,7 +148,11 @@ export default function InputArea({ sessionId, disabled, systemInfo, isStreaming
   const containerRef = useRef<HTMLDivElement>(null);
   const { sendMessage, interruptAndSend, isStreaming, permissionMode, cyclePermissionMode, thinkingMode, cycleThinkingMode, currentToolCalls, messages, sessions, messageQueue, selectedModel, setSelectedModel, availableModels, loadAvailableModels } = useSessionStore();
   const { selectedElement, setSelectedElement, sessionInspectorActive, setSessionInspectorActive, toggleBrowserPanel } = useUIStore();
-  const { settings: audioSettings, setAudioMode } = useAudioStore();
+  const { settings: audioSettings, setAudioMode, voiceModeStates } = useAudioStore();
+
+  // Voice mode state for this session
+  const voiceState = voiceModeStates[sessionId];
+  const isVoiceModeActive = voiceState?.isConnected || false;
 
   // Command/Skill/Agent autocomplete state
   const [showCommands, setShowCommands] = useState(false);
@@ -1026,21 +1030,77 @@ export default function InputArea({ sessionId, disabled, systemInfo, isStreaming
           {modeConfig.prompt}
         </button>
 
-        {/* Textarea - clean CLI look with recording indicator */}
+        {/* Voice Mode UI or Textarea */}
         <div className="flex-1 relative">
-          <textarea
-            ref={textareaRef}
-            value={message}
-            onChange={handleInputChange}
-            onKeyDown={handleKeyDown}
-            onPaste={handlePaste}
-            placeholder={disabled ? 'session inactive...' : isSending ? `type to queue message${hasQueuedMessages ? ` (${queuedMessages.length} queued)` : ''}...` : 'type here... (@ to mention, paste images)'}
-            disabled={disabled}
-            className={`w-full py-0 resize-none focus:outline-none disabled:opacity-40 disabled:cursor-not-allowed min-h-[24px] max-h-[200px] font-mono bg-transparent text-base text-claude-text placeholder:text-claude-text-secondary leading-6 caret-claude-accent ${
-              useAudioStore.getState().recordingStates[sessionId]?.isRecording ? 'border-l-2 border-red-500 pl-2' : ''
-            } ${isSending ? 'opacity-60' : ''}`}
-            rows={1}
-          />
+          {isVoiceModeActive ? (
+            /* Voice Mode Active - Show animated display */
+            <div className="flex items-center gap-3 py-1 min-h-[24px]">
+              {/* Voice visualization bars */}
+              <div className="flex items-center gap-0.5 h-5">
+                {[...Array(5)].map((_, i) => (
+                  <div
+                    key={i}
+                    className={`w-1 bg-green-500 rounded-full transition-all duration-150 ${
+                      voiceState?.isSpeaking
+                        ? 'animate-pulse'
+                        : ''
+                    }`}
+                    style={{
+                      height: voiceState?.isSpeaking
+                        ? `${Math.random() * 16 + 4}px`
+                        : '4px',
+                      animationDelay: `${i * 100}ms`,
+                    }}
+                  />
+                ))}
+              </div>
+
+              {/* Transcript or status display */}
+              <div className="flex-1 overflow-hidden">
+                {voiceState?.transcript ? (
+                  <span className="font-mono text-base text-claude-text truncate block">
+                    {voiceState.transcript}
+                  </span>
+                ) : voiceState?.agentResponse ? (
+                  <span className="font-mono text-base text-blue-400 truncate block italic">
+                    {voiceState.agentResponse}
+                  </span>
+                ) : voiceState?.isSpeaking ? (
+                  <span className="font-mono text-base text-blue-400 animate-pulse">
+                    AI is speaking...
+                  </span>
+                ) : (
+                  <span className="font-mono text-base text-claude-text-secondary">
+                    Voice mode active — speak to interact
+                  </span>
+                )}
+              </div>
+
+              {/* Voice status indicator */}
+              <div className="flex items-center gap-1.5 text-xs font-mono">
+                {voiceState?.isSpeaking ? (
+                  <span className="text-blue-400 uppercase">SPEAKING</span>
+                ) : (
+                  <span className="text-green-400 uppercase">LISTENING</span>
+                )}
+              </div>
+            </div>
+          ) : (
+            /* Regular Textarea */
+            <textarea
+              ref={textareaRef}
+              value={message}
+              onChange={handleInputChange}
+              onKeyDown={handleKeyDown}
+              onPaste={handlePaste}
+              placeholder={disabled ? 'session inactive...' : isSending ? `type to queue message${hasQueuedMessages ? ` (${queuedMessages.length} queued)` : ''}...` : 'type here... (@ to mention, paste images)'}
+              disabled={disabled}
+              className={`w-full py-0 resize-none focus:outline-none disabled:opacity-40 disabled:cursor-not-allowed min-h-[24px] max-h-[200px] font-mono bg-transparent text-base text-claude-text placeholder:text-claude-text-secondary leading-6 caret-claude-accent ${
+                useAudioStore.getState().recordingStates[sessionId]?.isRecording ? 'border-l-2 border-red-500 pl-2' : ''
+              } ${isSending ? 'opacity-60' : ''}`}
+              rows={1}
+            />
+          )}
         </div>
 
         {/* Compact attachment buttons */}
@@ -1082,10 +1142,36 @@ export default function InputArea({ sessionId, disabled, systemInfo, isStreaming
               setMessage(text);
             }}
             onTranscriptionComplete={async (text) => {
-              console.log('[InputArea] onTranscriptionComplete called with:', text);
+              console.log('[InputArea] onTranscriptionComplete called with:', text, 'voiceModeActive:', isVoiceModeActive);
 
+              // In voice mode (ElevenLabs), send directly without trigger word
+              // This enables the hybrid flow where transcripts go straight to Grep
+              if (isVoiceModeActive && !disabled && !isSending && text.trim()) {
+                console.log('[InputArea] Voice mode active - sending directly to Grep');
+
+                // Activate audio mode for auto-play TTS on response
+                setAudioMode(sessionId, true);
+
+                // Clear input and send
+                setMessage('');
+
+                // Build message with file context if there are attachments
+                let messageToSend = text.trim();
+                const fileMentions = attachments.filter((a) => a.type === 'mention');
+                if (fileMentions.length > 0) {
+                  const fileContext = fileMentions.map((m) => `@${m.name}`).join(', ');
+                  messageToSend = `[Files: ${fileContext}]\n\n${messageToSend}`;
+                }
+
+                const otherAttachments = attachments.filter((a) => a.type !== 'mention');
+                setAttachments([]);
+
+                await sendMessage(sessionId, messageToSend, otherAttachments.length > 0 ? otherAttachments : undefined);
+                return;
+              }
+
+              // Not in voice mode - use trigger word detection
               // Check if the transcription ends with the trigger word (configurable in settings)
-              // The trigger word is escaped for use in regex
               const escapedTrigger = triggerWord.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
               const triggerPattern = new RegExp(`\\b${escapedTrigger}\\s*[.!?]?\\s*$`, 'i');
 

@@ -234,7 +234,7 @@ export default function StatusBar() {
         )}
 
         <div className="flex items-center gap-1.5">
-          <span style={{ letterSpacing: '0.05em' }}>GREP BUILD v0.0.1</span>
+          <span style={{ letterSpacing: '0.05em' }}>GREP BUILD v0.0.2</span>
         </div>
       </div>
     </div>

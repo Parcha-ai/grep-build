@@ -42,6 +42,13 @@ interface PendingQuestion {
   reject: (error: Error) => void;
 }
 
+interface PendingPermission {
+  resolve: (response: { approved: boolean; modifiedInput?: Record<string, unknown> }) => void;
+  reject: (error: Error) => void;
+  toolName: string;
+  input: Record<string, unknown>;
+}
+
 export class ClaudeService {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private store: any;
@@ -49,6 +56,7 @@ export class ClaudeService {
   private sessionStore: any;
   private activeQueries: Map<string, AbortController> = new Map();
   private pendingQuestions: Map<string, PendingQuestion> = new Map();
+  private pendingPermissions: Map<string, PendingPermission> = new Map();
   private mainWindow: BrowserWindow | null = null;
   private browserMcpServers: Map<string, any> = new Map();
 
@@ -929,6 +937,55 @@ export class ClaudeService {
     }
   }
 
+  // Handle permission responses from the renderer
+  handlePermissionResponse(response: { requestId: string; approved: boolean; modifiedInput?: Record<string, unknown> }): void {
+    console.log('[Claude Service] handlePermissionResponse called:', response.requestId, 'approved:', response.approved);
+    const pending = this.pendingPermissions.get(response.requestId);
+    if (pending) {
+      console.log('[Claude Service] Found pending permission, resolving...');
+      pending.resolve({ approved: response.approved, modifiedInput: response.modifiedInput });
+      this.pendingPermissions.delete(response.requestId);
+    } else {
+      console.warn('[Claude Service] No pending permission found for requestId:', response.requestId);
+    }
+  }
+
+  // Ask user for permission via the renderer
+  private async askUserPermission(
+    sessionId: string,
+    toolName: string,
+    input: Record<string, unknown>
+  ): Promise<{ approved: boolean; modifiedInput?: Record<string, unknown> }> {
+    const requestId = `permission-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+
+    return new Promise((resolve, reject) => {
+      // Store the promise resolve/reject functions
+      this.pendingPermissions.set(requestId, { resolve, reject, toolName, input });
+
+      // Send permission request to renderer
+      if (this.mainWindow) {
+        const request = {
+          sessionId,
+          requestId,
+          toolName,
+          input,
+        };
+        console.log('[Claude Service] Sending permission request to renderer:', toolName);
+        this.mainWindow.webContents.send(IPC_CHANNELS.CLAUDE_PERMISSION_REQUEST, request);
+      } else {
+        reject(new Error('Main window not available'));
+      }
+
+      // Set a timeout in case the user never responds
+      setTimeout(() => {
+        if (this.pendingPermissions.has(requestId)) {
+          this.pendingPermissions.delete(requestId);
+          reject(new Error('Permission response timeout'));
+        }
+      }, 5 * 60 * 1000); // 5 minute timeout
+    });
+  }
+
   // Ask user a question via the renderer
   private async askUserQuestion(sessionId: string, questions: unknown[]): Promise<Record<string, string>> {
     const requestId = `question-${Date.now()}-${Math.random()}`;
@@ -1141,6 +1198,8 @@ You are intelligent enough to determine what URLs to test based on the project s
           },
           // Handle tool permission requests
           canUseTool: async (toolName: string, input: Record<string, unknown>, _options: any) => {
+            console.log(`[Claude Service] canUseTool called for: ${toolName}, mode: ${sdkPermissionMode}`);
+
             // Handle AskUserQuestion tool
             if (toolName === 'AskUserQuestion' && input.questions) {
               try {
@@ -1173,7 +1232,63 @@ You are intelligent enough to determine what URLs to test based on the project s
               }
             }
 
-            // For other tools, allow them (SDK's permissionMode will still apply its rules)
+            // In 'default' mode, ask user for permission on tools that modify filesystem
+            // In 'acceptEdits' mode, only ask for Bash commands (edits are auto-approved)
+            // In 'bypassPermissions' mode, allow everything without asking
+            if (sdkPermissionMode === 'default') {
+              // Default mode: ask for permission on all modifying tools
+              const modifyingTools = ['Write', 'Edit', 'Bash', 'NotebookEdit', 'MultiEdit'];
+              if (modifyingTools.includes(toolName)) {
+                try {
+                  console.log(`[Claude Service] Asking user permission for: ${toolName}`);
+                  const response = await this.askUserPermission(sessionId, toolName, input);
+                  if (response.approved) {
+                    return {
+                      behavior: 'allow' as const,
+                      updatedInput: response.modifiedInput || input,
+                    };
+                  } else {
+                    return {
+                      behavior: 'deny' as const,
+                      message: 'User denied permission for this tool',
+                    };
+                  }
+                } catch (error) {
+                  console.error('[Claude Service] Error getting permission:', error);
+                  return {
+                    behavior: 'deny' as const,
+                    message: error instanceof Error ? error.message : 'Failed to get permission response',
+                  };
+                }
+              }
+            } else if (sdkPermissionMode === 'acceptEdits') {
+              // Accept edits mode: only ask for Bash commands
+              if (toolName === 'Bash') {
+                try {
+                  console.log(`[Claude Service] Asking user permission for Bash command`);
+                  const response = await this.askUserPermission(sessionId, toolName, input);
+                  if (response.approved) {
+                    return {
+                      behavior: 'allow' as const,
+                      updatedInput: response.modifiedInput || input,
+                    };
+                  } else {
+                    return {
+                      behavior: 'deny' as const,
+                      message: 'User denied permission for this command',
+                    };
+                  }
+                } catch (error) {
+                  console.error('[Claude Service] Error getting permission:', error);
+                  return {
+                    behavior: 'deny' as const,
+                    message: error instanceof Error ? error.message : 'Failed to get permission response',
+                  };
+                }
+              }
+            }
+
+            // For other tools or bypassPermissions mode, allow them
             // Must include updatedInput when allowing - SDK requires it
             return { behavior: 'allow' as const, updatedInput: input };
           },

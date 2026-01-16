@@ -4,6 +4,7 @@ import type { AudioSettings, TranscriptionResult, TTSRequest } from '../../share
 import { DEFAULT_AUDIO_SETTINGS } from '../../shared/types/audio';
 import OpenAI from 'openai';
 import { ElevenLabsClient } from 'elevenlabs';
+import { EMBEDDED_KEYS } from '../../shared/config/embedded-keys';
 
 export class AudioService {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -51,7 +52,12 @@ export class AudioService {
   }
 
   getElevenLabsApiKey(): string | undefined {
-    return this.store.get('elevenLabsApiKey') as string | undefined;
+    // User-provided key takes precedence over embedded key
+    const userKey = this.store.get('elevenLabsApiKey') as string | undefined;
+    if (userKey) return userKey;
+
+    // Fallback to embedded key
+    return EMBEDDED_KEYS.elevenLabs || undefined;
   }
 
   setElevenLabsApiKey(key: string): void {
@@ -60,7 +66,12 @@ export class AudioService {
   }
 
   getOpenAiApiKey(): string | undefined {
-    return this.store.get('openAiApiKey') as string | undefined;
+    // User-provided key takes precedence over embedded key
+    const userKey = this.store.get('openAiApiKey') as string | undefined;
+    if (userKey) return userKey;
+
+    // Fallback to embedded key
+    return EMBEDDED_KEYS.openAi || undefined;
   }
 
   setOpenAiApiKey(key: string): void {

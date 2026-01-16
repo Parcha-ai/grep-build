@@ -1,9 +1,18 @@
 import type IForkTsCheckerWebpackPlugin from 'fork-ts-checker-webpack-plugin';
+import webpack from 'webpack';
+import * as path from 'path';
 
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const ForkTsCheckerWebpackPlugin: typeof IForkTsCheckerWebpackPlugin = require('fork-ts-checker-webpack-plugin');
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const MonacoWebpackPlugin = require('monaco-editor-webpack-plugin');
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const dotenv = require('dotenv');
+
+// Load embedded API keys from .env.production (gitignored)
+const envPath = path.resolve(__dirname, '.env.production');
+const envConfig = dotenv.config({ path: envPath });
+const env = envConfig.parsed || {};
 
 export const plugins = [
   new ForkTsCheckerWebpackPlugin({
@@ -12,5 +21,10 @@ export const plugins = [
   new MonacoWebpackPlugin({
     languages: ['javascript', 'typescript', 'json', 'html', 'css', 'markdown', 'python', 'yaml', 'shell'],
     features: ['coreCommands', 'find'],
+  }),
+  // Inject embedded API keys at build time for voice features
+  new webpack.DefinePlugin({
+    'process.env.EMBEDDED_OPENAI_API_KEY': JSON.stringify(env.EMBEDDED_OPENAI_API_KEY || ''),
+    'process.env.EMBEDDED_ELEVENLABS_API_KEY': JSON.stringify(env.EMBEDDED_ELEVENLABS_API_KEY || ''),
   }),
 ];

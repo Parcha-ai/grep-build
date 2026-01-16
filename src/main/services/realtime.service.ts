@@ -1,6 +1,7 @@
 import WebSocket from 'ws';
 import Store from 'electron-store';
 import { EventEmitter } from 'events';
+import { EMBEDDED_KEYS } from '../../shared/config/embedded-keys';
 
 // OpenAI Realtime API event types
 interface RealtimeEvent {
@@ -48,6 +49,8 @@ export class RealtimeService extends EventEmitter {
   private isConnected = false;
   private reconnectAttempts = 0;
   private maxReconnectAttempts = 3;
+  private intentionalDisconnect = false;
+  private reconnectTimeout: NodeJS.Timeout | null = null;
 
   constructor() {
     super();
@@ -55,13 +58,27 @@ export class RealtimeService extends EventEmitter {
   }
 
   private getOpenAiApiKey(): string | undefined {
-    return this.store.get('openAiApiKey') as string | undefined;
+    // User-provided key takes precedence over embedded key
+    const userKey = this.store.get('openAiApiKey') as string | undefined;
+    if (userKey) return userKey;
+
+    // Fallback to embedded key
+    return EMBEDDED_KEYS.openAi || undefined;
   }
 
   async connect(): Promise<void> {
     const apiKey = this.getOpenAiApiKey();
     if (!apiKey) {
       throw new Error('OpenAI API key not configured');
+    }
+
+    // Reset intentional disconnect flag for new connection
+    this.intentionalDisconnect = false;
+
+    // Clear any pending reconnect timeout
+    if (this.reconnectTimeout) {
+      clearTimeout(this.reconnectTimeout);
+      this.reconnectTimeout = null;
     }
 
     return new Promise((resolve, reject) => {
@@ -125,7 +142,30 @@ export class RealtimeService extends EventEmitter {
           console.log('[RealtimeService] WebSocket closed:', code, reason.toString());
           this.isConnected = false;
           this.ws = null;
-          this.emit('disconnected');
+
+          // Only attempt reconnection if this wasn't intentional
+          if (!this.intentionalDisconnect && this.reconnectAttempts < this.maxReconnectAttempts) {
+            this.reconnectAttempts++;
+            const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts - 1), 5000); // Exponential backoff, max 5s
+            console.log(`[RealtimeService] Attempting reconnection ${this.reconnectAttempts}/${this.maxReconnectAttempts} in ${delay}ms...`);
+            this.emit('reconnecting', { attempt: this.reconnectAttempts, maxAttempts: this.maxReconnectAttempts });
+
+            this.reconnectTimeout = setTimeout(async () => {
+              try {
+                await this.connect();
+                console.log('[RealtimeService] Reconnection successful');
+                this.emit('reconnected');
+              } catch (error) {
+                console.error('[RealtimeService] Reconnection failed:', error);
+                if (this.reconnectAttempts >= this.maxReconnectAttempts) {
+                  this.emit('reconnect_failed');
+                  this.emit('disconnected');
+                }
+              }
+            }, delay);
+          } else {
+            this.emit('disconnected');
+          }
         });
 
       } catch (error) {
@@ -263,6 +303,16 @@ export class RealtimeService extends EventEmitter {
    * Disconnect from the Realtime API
    */
   disconnect(): void {
+    // Mark as intentional to prevent auto-reconnection
+    this.intentionalDisconnect = true;
+    this.reconnectAttempts = 0;
+
+    // Clear any pending reconnect timeout
+    if (this.reconnectTimeout) {
+      clearTimeout(this.reconnectTimeout);
+      this.reconnectTimeout = null;
+    }
+
     if (this.ws) {
       console.log('[RealtimeService] Disconnecting...');
       this.ws.close();
