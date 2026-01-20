@@ -146,6 +146,11 @@ export default function BrowserPreview({ session, isVisible = true }: BrowserPre
   const [automationIndicator, setAutomationIndicator] = useState<AutomationIndicator | null>(null);
   const [clickRipples, setClickRipples] = useState<Array<{ id: number; x: number; y: number }>>([]);
 
+  // Stagehand browser state (shows screenshots from AI automation)
+  const [stagehandScreenshot, setStagehandScreenshot] = useState<string | null>(null);
+  const [stagehandUrl, setStagehandUrl] = useState<string | null>(null);
+  const [showStagehand, setShowStagehand] = useState(false);
+
   // Use per-session inspector state for multi-session support
   const {
     sessionInspectorActive,
@@ -336,6 +341,38 @@ export default function BrowserPreview({ session, isVisible = true }: BrowserPre
           setAutomationIndicator(null);
         }, 300);
       }
+    });
+
+    return () => {
+      if (unsubscribe) {
+        unsubscribe();
+      }
+    };
+  }, [session.id]);
+
+  // Handle Stagehand browser updates (screenshots from AI automation)
+  useEffect(() => {
+    console.log('[BrowserPreview] Setting up Stagehand update listener for session:', session.id);
+    const unsubscribe = window.electronAPI.browser.onBrowserUpdate((data: { sessionId: string; screenshot: string; url?: string; timestamp: string }) => {
+      if (data.sessionId !== session.id) {
+        return;
+      }
+
+      console.log('[BrowserPreview] Stagehand update received:', data.url || 'unknown URL');
+
+      // Update Stagehand screenshot state
+      setStagehandScreenshot(data.screenshot);
+      if (data.url) {
+        setStagehandUrl(data.url);
+        setInputUrl(data.url);
+      }
+      setShowStagehand(true);
+      setIsAutomationActive(true);
+
+      // Auto-hide automation indicator after a delay
+      setTimeout(() => {
+        setIsAutomationActive(false);
+      }, 1500);
     });
 
     return () => {
@@ -1076,6 +1113,21 @@ export default function BrowserPreview({ session, isVisible = true }: BrowserPre
         </form>
 
         {/* Actions */}
+        {/* Stagehand/Webview toggle */}
+        {stagehandScreenshot && (
+          <button
+            onClick={() => setShowStagehand(!showStagehand)}
+            className={`p-1.5 rounded transition-colors ${
+              showStagehand
+                ? 'text-white'
+                : 'hover:bg-claude-bg text-claude-text-secondary'
+            }`}
+            style={showStagehand ? { backgroundColor: '#10B981' } : undefined}
+            title={showStagehand ? 'Showing AI Browser (click to show webview)' : 'Showing Webview (click to show AI browser)'}
+          >
+            <Bot size={16} />
+          </button>
+        )}
         <button
           onClick={() => setInspectorActive(!isInspectorActive)}
           className={`p-1.5 rounded transition-colors ${
@@ -1118,7 +1170,7 @@ export default function BrowserPreview({ session, isVisible = true }: BrowserPre
         </div>
       )}
 
-      {/* Webview */}
+      {/* Webview / Stagehand Screenshot */}
       <div
         ref={containerRef}
         className={`flex-1 relative transition-all duration-300 ${
@@ -1128,11 +1180,31 @@ export default function BrowserPreview({ session, isVisible = true }: BrowserPre
         }`}
         style={isAutomationActive ? { '--tw-ring-color': '#5D5FEF' } as React.CSSProperties : undefined}
       >
+        {/* Stagehand Screenshot View (AI Browser) */}
+        {showStagehand && stagehandScreenshot && (
+          <div className="absolute inset-0 w-full h-full bg-gray-900 flex flex-col">
+            <div className="flex-1 relative overflow-auto">
+              <img
+                src={`data:image/png;base64,${stagehandScreenshot}`}
+                alt="AI Browser View"
+                className="w-full h-auto"
+              />
+            </div>
+            {/* Stagehand mode indicator */}
+            <div className="absolute bottom-2 left-2 z-50 flex items-center gap-2 text-white px-3 py-1.5 rounded-full text-xs font-medium" style={{ backgroundColor: 'rgba(16,185,129,0.9)' }}>
+              <Bot size={14} />
+              <span>AI Browser (Stagehand)</span>
+              {stagehandUrl && <span className="opacity-75 ml-1">{new URL(stagehandUrl).hostname}</span>}
+            </div>
+          </div>
+        )}
+
+        {/* Traditional Webview (hidden when showing Stagehand) */}
         <webview
           key={session.id}
           ref={webviewRef}
           src={initialUrl.current}
-          className="absolute inset-0 w-full h-full"
+          className={`absolute inset-0 w-full h-full ${showStagehand && stagehandScreenshot ? 'invisible' : ''}`}
           partition={`persist:browser-${session.id}`}
         />
 

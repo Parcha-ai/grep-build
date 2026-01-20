@@ -115,6 +115,28 @@ export class BrowserService {
   }
 
   /**
+   * Get webContentsId for a session (public, for CDP proxy)
+   */
+  getWebContentsId(sessionId: string): number | undefined {
+    return this.sessionWebContents.get(sessionId);
+  }
+
+  /**
+   * Get all registered session IDs (public, for CDP proxy)
+   */
+  getRegisteredSessions(): string[] {
+    return Array.from(this.sessionWebContents.keys());
+  }
+
+  /**
+   * Get first available session ID (fallback)
+   */
+  getFirstSessionId(): string | undefined {
+    const sessions = this.getRegisteredSessions();
+    return sessions.length > 0 ? sessions[0] : undefined;
+  }
+
+  /**
    * Get webContents for a session's webview
    * Falls back to any registered session if specified session not found
    */

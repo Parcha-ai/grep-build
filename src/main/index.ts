@@ -2,6 +2,9 @@ import { app, BrowserWindow, ipcMain, protocol, session, net } from 'electron';
 import * as path from 'path';
 import { pathToFileURL } from 'url';
 
+// Enable remote debugging for CDP access (used by Stagehand to control webviews)
+app.commandLine.appendSwitch('remote-debugging-port', '9222');
+
 // CRITICAL: Fix PATH for packaged macOS apps launched from Finder
 // Without this, spawned processes (like Claude Code) can't find 'node' because
 // GUI apps don't inherit the user's shell PATH
@@ -22,6 +25,7 @@ import { registerExtensionHandlers } from './ipc/extension.ipc';
 import { registerBrowserHandlers } from './ipc/browser.ipc';
 import { IPC_CHANNELS } from '../shared/constants/channels';
 import { claudeService } from './ipc/claude.ipc';
+import { cdpProxyService } from './services/cdp-proxy.service';
 
 // Global error handlers to prevent crashes from broken pipes and other uncaught errors
 process.on('uncaughtException', (error: Error) => {
@@ -503,9 +507,17 @@ function registerIPCHandlers(): void {
 }
 
 // This method will be called when Electron has finished initialization
-app.on('ready', () => {
+app.on('ready', async () => {
   registerIPCHandlers();
   createWindow();
+
+  // Start CDP proxy for Stagehand webview integration
+  try {
+    await cdpProxyService.start();
+    console.log('[Main] CDP proxy started for Stagehand webview integration');
+  } catch (error) {
+    console.error('[Main] Failed to start CDP proxy:', error);
+  }
 });
 
 // Quit when all windows are closed, except on macOS.

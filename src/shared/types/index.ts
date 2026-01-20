@@ -16,6 +16,8 @@ export interface Session {
   isTeleported?: boolean; // True for sessions imported from claude.ai/code
   lastBrowserUrl?: string; // Last URL visited in browser preview
   model?: string; // Selected Claude model for this session
+  worktreeInstructions?: string; // Setup instructions to send to Claude when session starts
+  worktreeInstructionsSent?: boolean; // Track if instructions have been sent
 }
 
 export type SessionStatus = 'creating' | 'starting' | 'setup' | 'running' | 'stopping' | 'stopped' | 'error';
@@ -240,6 +242,20 @@ export interface CompactionComplete {
     modelSwitched: boolean;
     restoredModel: string;
   };
+}
+
+// Plan approval types - for ExitPlanMode tool
+export interface PlanApprovalRequest {
+  sessionId: string;
+  requestId: string;
+  planContent: string;
+  planFilePath?: string;
+  allowedPrompts?: Array<{ tool: string; prompt: string }>;
+}
+
+export interface PlanApprovalResponse {
+  requestId: string;
+  approved: boolean;
 }
 
 // Export audio types

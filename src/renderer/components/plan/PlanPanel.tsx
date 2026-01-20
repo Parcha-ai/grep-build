@@ -1,19 +1,32 @@
 import React from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { X, FileText, Trash2 } from 'lucide-react';
+import { X, FileText, Trash2, Check, XCircle } from 'lucide-react';
 import { useUIStore } from '../../stores/ui.store';
 import { useSessionStore } from '../../stores/session.store';
 
 export default function PlanPanel() {
   const { togglePlanPanel, sessionPlanContent, clearPlanContent } = useUIStore();
-  const { activeSessionId } = useSessionStore();
+  const { activeSessionId, pendingPlanApproval, approvePlan, rejectPlan } = useSessionStore();
 
   const planContent = activeSessionId ? sessionPlanContent[activeSessionId] : null;
+  const pendingApproval = activeSessionId ? pendingPlanApproval[activeSessionId] : null;
 
   const handleClear = () => {
     if (activeSessionId) {
       clearPlanContent(activeSessionId);
+    }
+  };
+
+  const handleApprove = async () => {
+    if (activeSessionId) {
+      await approvePlan(activeSessionId);
+    }
+  };
+
+  const handleReject = async () => {
+    if (activeSessionId) {
+      await rejectPlan(activeSessionId);
     }
   };
 
@@ -24,9 +37,14 @@ export default function PlanPanel() {
         <div className="flex items-center gap-2">
           <FileText size={14} className="text-claude-accent" />
           <span className="text-sm font-medium">Plan</span>
+          {pendingApproval && (
+            <span className="px-2 py-0.5 text-xs font-medium bg-amber-500/20 text-amber-400 border border-amber-500/30">
+              Awaiting Approval
+            </span>
+          )}
         </div>
         <div className="flex items-center gap-1">
-          {planContent && (
+          {planContent && !pendingApproval && (
             <button
               onClick={handleClear}
               className="p-1 rounded hover:bg-claude-bg text-claude-text-secondary hover:text-claude-text"
@@ -43,6 +61,44 @@ export default function PlanPanel() {
           </button>
         </div>
       </div>
+
+      {/* Approval buttons - shown when there's a pending approval */}
+      {pendingApproval && (
+        <div className="px-4 py-3 border-b border-claude-border bg-claude-surface/50">
+          <p className="text-sm text-claude-text-secondary mb-3">
+            Claude has created a plan and is waiting for your approval to proceed.
+          </p>
+          <div className="flex gap-2">
+            <button
+              onClick={handleApprove}
+              className="flex-1 flex items-center justify-center gap-2 px-4 py-2 bg-green-600 hover:bg-green-500 text-white font-medium text-sm transition-colors"
+            >
+              <Check size={16} />
+              Approve Plan
+            </button>
+            <button
+              onClick={handleReject}
+              className="flex-1 flex items-center justify-center gap-2 px-4 py-2 bg-claude-surface hover:bg-claude-bg border border-claude-border text-claude-text font-medium text-sm transition-colors"
+            >
+              <XCircle size={16} />
+              Reject
+            </button>
+          </div>
+          {pendingApproval.allowedPrompts && pendingApproval.allowedPrompts.length > 0 && (
+            <div className="mt-3 pt-3 border-t border-claude-border">
+              <p className="text-xs text-claude-text-secondary mb-2">Requested permissions:</p>
+              <ul className="text-xs text-claude-text-secondary space-y-1">
+                {pendingApproval.allowedPrompts.map((prompt, i) => (
+                  <li key={i} className="flex items-center gap-2">
+                    <span className="text-claude-accent">•</span>
+                    {prompt.prompt}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Content */}
       <div className="flex-1 overflow-auto p-4">

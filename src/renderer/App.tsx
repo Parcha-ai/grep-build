@@ -136,6 +136,7 @@ function ElectronApp() {
     checkApiKey,
     openOnboarding,
     hasApiKey,
+    enableSessionBrowser,
   } = useUIStore();
   const { toggleQuickSearch } = useEditorStore();
   const { loadSettings: loadAudioSettings } = useAudioStore();
@@ -191,6 +192,31 @@ function ElectronApp() {
       unsubscribe();
     };
   }, [isBrowserPanelOpen]);
+
+  // Auto-open browser panel when Stagehand browser tools are used
+  useEffect(() => {
+    const unsubscribe = window.electronAPI.browser.onBrowserUpdate((data: { sessionId: string; screenshot: string; url?: string; timestamp: string }) => {
+      // Enable browser for this session - this also opens the browser panel
+      enableSessionBrowser(data.sessionId);
+    });
+
+    return () => {
+      unsubscribe();
+    };
+  }, [enableSessionBrowser]);
+
+  // Open browser panel when requested by main process (for Stagehand initialization)
+  useEffect(() => {
+    const unsubscribe = window.electronAPI.browser.onBrowserOpenPanel((data: { sessionId: string }) => {
+      console.log('[App] Browser panel open requested for session:', data.sessionId);
+      // Enable browser for this session - this also opens the browser panel
+      enableSessionBrowser(data.sessionId);
+    });
+
+    return () => {
+      unsubscribe();
+    };
+  }, [enableSessionBrowser]);
 
   useEffect(() => {
     // Load sessions when authenticated OR in dev mode

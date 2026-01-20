@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { Session, ChatMessage, ToolCall, PermissionRequest, PermissionResponse, QuestionRequest, QuestionResponse, SetupProgressEvent, CompactionStatus, CompactionComplete } from '../../shared/types';
+import type { Session, ChatMessage, ToolCall, PermissionRequest, PermissionResponse, QuestionRequest, QuestionResponse, SetupProgressEvent, CompactionStatus, CompactionComplete, PlanApprovalRequest, PlanApprovalResponse } from '../../shared/types';
 
 // Check if running in Electron environment
 const hasElectronAPI = typeof window !== 'undefined' && !!window.electronAPI;
@@ -48,6 +48,7 @@ interface SessionState {
   availableModels: ModelInfo[];
   pendingPermission: Record<string, PermissionRequest | null>;
   pendingQuestion: Record<string, QuestionRequest | null>;
+  pendingPlanApproval: Record<string, PlanApprovalRequest | null>;
   setupProgress: Record<string, SetupProgressEvent | null>;
   compactionStatus: Record<string, CompactionStatus | null>;
   messageQueue: Record<string, Array<{
@@ -97,6 +98,10 @@ interface SessionState {
   // Question handling
   setPendingQuestion: (sessionId: string, request: QuestionRequest | null) => void;
   answerQuestion: (sessionId: string, answers: Record<string, string>) => Promise<void>;
+  // Plan approval handling
+  setPendingPlanApproval: (sessionId: string, request: PlanApprovalRequest | null) => void;
+  approvePlan: (sessionId: string) => Promise<void>;
+  rejectPlan: (sessionId: string) => Promise<void>;
   // Queue management
   removeFromQueue: (sessionId: string, messageId: string) => void;
   editQueuedMessage: (sessionId: string, messageId: string, newMessage: string) => void;
@@ -134,6 +139,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   availableModels: [],
   pendingPermission: {},
   pendingQuestion: {},
+  pendingPlanApproval: {},
   setupProgress: {},
   compactionStatus: {},
   messageQueue: {},
@@ -177,7 +183,26 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       }
 
       // Load messages for this session from SDK transcripts
-      loadMessages(sessionId);
+      await loadMessages(sessionId);
+
+      // Check if this session has worktree instructions that haven't been sent yet
+      const currentSession = get().sessions.find(s => s.id === sessionId);
+      if (currentSession?.worktreeInstructions && !currentSession.worktreeInstructionsSent) {
+        console.log('[SessionStore] Session has worktree instructions, sending as first message');
+
+        // Mark instructions as sent FIRST to prevent double-sending
+        await window.electronAPI.sessions.update(sessionId, { worktreeInstructionsSent: true });
+        set((state) => ({
+          sessions: state.sessions.map(s =>
+            s.id === sessionId ? { ...s, worktreeInstructionsSent: true } : s
+          ),
+        }));
+
+        // Send instructions as the first message to Claude
+        const { sendMessage } = get();
+        const instructionsMessage = `## Worktree Setup Instructions\n\nThis is a new worktree session. Please follow these setup instructions:\n\n${currentSession.worktreeInstructions}`;
+        sendMessage(sessionId, instructionsMessage);
+      }
     }
   },
 
@@ -773,6 +798,19 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       });
     });
 
+    // Subscribe to plan approval requests (when ExitPlanMode is called)
+    const unsubPlanApproval = window.electronAPI.claude.onPlanApprovalRequest((request) => {
+      console.log('[Session Store] Plan approval request received for session:', request.sessionId);
+      const { setPendingPlanApproval } = get();
+      setPendingPlanApproval(request.sessionId, request);
+      // Also update the plan content in UI store for display
+      import('./ui.store').then(({ useUIStore }) => {
+        useUIStore.getState().setPlanContent(request.sessionId, request.planContent);
+        // Open the plan panel automatically when approval is requested
+        useUIStore.getState().showPlanPanel();
+      });
+    });
+
     return () => {
       unsubChunk();
       unsubThinking();
@@ -784,6 +822,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       unsubPermission();
       unsubQuestion();
       unsubPlanContent();
+      unsubPlanApproval();
     };
   },
 
@@ -866,6 +905,56 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     console.log('[Session Store] Answering question:', request.requestId, answers);
     await window.electronAPI.claude.respondToQuestion(response);
     setPendingQuestion(sessionId, null);
+  },
+
+  // Plan approval handling methods
+  setPendingPlanApproval: (sessionId, request) => {
+    set((state) => ({
+      pendingPlanApproval: {
+        ...state.pendingPlanApproval,
+        [sessionId]: request,
+      },
+    }));
+  },
+
+  approvePlan: async (sessionId) => {
+    if (!hasElectronAPI) return;
+    const { pendingPlanApproval, setPendingPlanApproval } = get();
+    const request = pendingPlanApproval[sessionId];
+
+    if (!request) {
+      console.warn('[Session Store] No pending plan approval to approve');
+      return;
+    }
+
+    const response: PlanApprovalResponse = {
+      requestId: request.requestId,
+      approved: true,
+    };
+
+    console.log('[Session Store] Approving plan:', request.requestId);
+    await window.electronAPI.claude.respondToPlanApproval(response);
+    setPendingPlanApproval(sessionId, null);
+  },
+
+  rejectPlan: async (sessionId) => {
+    if (!hasElectronAPI) return;
+    const { pendingPlanApproval, setPendingPlanApproval } = get();
+    const request = pendingPlanApproval[sessionId];
+
+    if (!request) {
+      console.warn('[Session Store] No pending plan approval to reject');
+      return;
+    }
+
+    const response: PlanApprovalResponse = {
+      requestId: request.requestId,
+      approved: false,
+    };
+
+    console.log('[Session Store] Rejecting plan:', request.requestId);
+    await window.electronAPI.claude.respondToPlanApproval(response);
+    setPendingPlanApproval(sessionId, null);
   },
 
   // Queue management methods

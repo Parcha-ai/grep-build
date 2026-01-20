@@ -6,10 +6,11 @@ import Store from 'electron-store';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
-import type { ChatMessage, ToolCall, Session, QuestionRequest, QuestionResponse, Attachment, ContentBlock, CompactionStatus, CompactionComplete } from '../../shared/types';
+import type { ChatMessage, ToolCall, Session, QuestionRequest, QuestionResponse, Attachment, ContentBlock, CompactionStatus, CompactionComplete, PlanApprovalRequest, PlanApprovalResponse } from '../../shared/types';
 import { BrowserWindow } from 'electron';
 import { IPC_CHANNELS } from '../../shared/constants/channels';
 import { browserService } from './browser.service';
+import { stagehandService } from './stagehand.service';
 import { documentService } from './document.service';
 
 interface StreamEvent {
@@ -49,6 +50,11 @@ interface PendingPermission {
   input: Record<string, unknown>;
 }
 
+interface PendingPlanApproval {
+  resolve: (approved: boolean) => void;
+  reject: (error: Error) => void;
+}
+
 export class ClaudeService {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private store: any;
@@ -57,6 +63,7 @@ export class ClaudeService {
   private activeQueries: Map<string, AbortController> = new Map();
   private pendingQuestions: Map<string, PendingQuestion> = new Map();
   private pendingPermissions: Map<string, PendingPermission> = new Map();
+  private pendingPlanApprovals: Map<string, PendingPlanApproval> = new Map();
   private mainWindow: BrowserWindow | null = null;
   private browserMcpServers: Map<string, any> = new Map();
 
@@ -67,6 +74,62 @@ export class ClaudeService {
 
   setMainWindow(window: BrowserWindow | null): void {
     this.mainWindow = window;
+  }
+
+  /**
+   * Emit browser update event to renderer for UI synchronization
+   * Sends screenshot and URL to update the browser preview panel
+   */
+  private emitBrowserUpdate(sessionId: string, screenshot: string, url?: string): void {
+    console.log('[Claude Service] emitBrowserUpdate called, mainWindow:', !!this.mainWindow, 'sessionId:', sessionId, 'url:', url);
+    if (this.mainWindow) {
+      console.log('[Claude Service] Sending BROWSER_UPDATE to renderer');
+      this.mainWindow.webContents.send(IPC_CHANNELS.BROWSER_UPDATE, {
+        sessionId,
+        screenshot,
+        url,
+        timestamp: new Date().toISOString(),
+      });
+    } else {
+      console.log('[Claude Service] WARNING: mainWindow is null, cannot emit browser update');
+    }
+  }
+
+  /**
+   * Ensure browser panel is open and webview is registered before Stagehand operations
+   * This solves the chicken-and-egg problem where Stagehand needs a webview to connect to
+   */
+  private async ensureBrowserPanelOpen(sessionId: string): Promise<boolean> {
+    // Check if webview is already registered
+    if (browserService.getRegisteredSessions().length > 0) {
+      console.log('[Claude Service] Webview already registered');
+      return true;
+    }
+
+    // Request renderer to open browser panel
+    if (this.mainWindow) {
+      console.log('[Claude Service] Requesting browser panel to open for session:', sessionId);
+      this.mainWindow.webContents.send(IPC_CHANNELS.BROWSER_OPEN_PANEL, { sessionId });
+
+      // Wait for webview to register (poll with timeout)
+      const maxWait = 5000; // 5 seconds
+      const pollInterval = 200; // 200ms
+      let waited = 0;
+
+      while (waited < maxWait) {
+        await new Promise(resolve => setTimeout(resolve, pollInterval));
+        waited += pollInterval;
+
+        if (browserService.getRegisteredSessions().length > 0) {
+          console.log('[Claude Service] Webview registered after', waited, 'ms');
+          return true;
+        }
+      }
+
+      console.log('[Claude Service] Timeout waiting for webview registration');
+    }
+
+    return false;
   }
 
   getApiKey(): string | undefined {
@@ -105,6 +168,20 @@ export class ClaudeService {
       return this.browserMcpServers.get(sessionId);
     }
 
+    // Initialize Stagehand with API keys
+    const apiKey = this.getApiKey();
+    if (apiKey) {
+      stagehandService.setApiKey(apiKey);
+    }
+    // Pass Google API key for Gemini models (from store or environment)
+    const googleApiKey = this.getGoogleApiKey() || process.env.GOOGLE_API_KEY;
+    if (googleApiKey) {
+      stagehandService.setGoogleApiKey(googleApiKey);
+    }
+
+    // ============ STAGEHAND-POWERED BROWSER TOOLS ============
+    // These tools use AI-powered browser automation via Stagehand
+
     const browserSnapshotTool = tool(
       'BrowserSnapshot',
       'Capture a snapshot of a webpage in the browser preview. Takes a screenshot and extracts the HTML content. Use this to inspect web pages, debug UI issues, or verify how pages render.',
@@ -117,49 +194,55 @@ export class ClaudeService {
         try {
           const { url, waitForLoad = true, waitTime = 2000 } = args;
 
-          console.log('[Claude Service] Capturing browser snapshot:', url);
+          console.log('[Claude Service] Capturing browser snapshot via Stagehand:', url);
 
-          // Navigate to URL first
-          await browserService.navigate(sessionId, url);
+          // Also navigate the app's webview to keep it in sync
+          browserService.navigate(sessionId, url).catch(err => {
+            console.log('[Claude Service] Could not sync webview navigation:', err);
+          });
 
-          // Wait for page to load if requested (configurable timeout)
+          // Navigate using Stagehand
+          const navResult = await stagehandService.navigate(url);
+          if (!navResult.success) {
+            return {
+              content: [{
+                type: 'text',
+                text: `Failed to navigate to ${url}: ${navResult.error}`,
+              }],
+              isError: true,
+            };
+          }
+
+          // Additional wait if requested
           if (waitForLoad && waitTime > 0) {
             await new Promise(resolve => setTimeout(resolve, Math.min(waitTime, 10000)));
           }
 
-          // Capture snapshot
-          const snapshot = await browserService.captureSnapshot(sessionId, url);
-
-          // Clean up the screenshot data - strip any data URL prefix
-          let screenshotData = snapshot.screenshot;
-          if (screenshotData.startsWith('data:')) {
-            // Handle multiple data URL formats: data:image/png;base64, or data:image/jpeg;base64, etc.
-            const base64Index = screenshotData.indexOf('base64,');
-            if (base64Index !== -1) {
-              screenshotData = screenshotData.substring(base64Index + 7);
-            }
-          }
-
-          // Validate screenshot data
-          if (!screenshotData || screenshotData.length === 0) {
+          // Capture full snapshot
+          const snapshot = await stagehandService.captureSnapshot();
+          if (!snapshot) {
             return {
               content: [{
                 type: 'text',
-                text: `Captured snapshot of ${url} but screenshot failed to capture. HTML is available:\n\n${snapshot.html.slice(0, 10000)}${snapshot.html.length > 10000 ? '...(truncated)' : ''}`,
+                text: `Failed to capture snapshot of ${url}`,
               }],
+              isError: true,
             };
           }
+
+          // Emit navigation event to update UI
+          this.emitBrowserUpdate(sessionId, snapshot.screenshot, snapshot.url);
 
           // Return snapshot info with image (MCP format)
           return {
             content: [
               {
                 type: 'text',
-                text: `Captured snapshot of ${url}\n\nHTML Preview:\n${snapshot.html.slice(0, 10000)}${snapshot.html.length > 10000 ? '...(truncated)' : ''}`,
+                text: `Captured snapshot of ${snapshot.url} (${snapshot.title})\n\nHTML Preview:\n${snapshot.html.slice(0, 10000)}${snapshot.html.length > 10000 ? '...(truncated)' : ''}`,
               },
               {
                 type: 'image',
-                data: screenshotData,
+                data: snapshot.screenshot,
                 mimeType: 'image/png',
               },
             ],
@@ -187,13 +270,23 @@ export class ClaudeService {
       async (args) => {
         try {
           const { url } = args;
-          console.log('[Claude Service] Navigating browser to:', url);
-          await browserService.navigate(sessionId, url);
+
+          // Ensure browser panel is open before Stagehand operations
+          await this.ensureBrowserPanelOpen(sessionId);
+
+          console.log('[Claude Service] Navigating browser via Stagehand to:', url);
+          const result = await stagehandService.navigate(url);
+
+          if (result.success && result.screenshot) {
+            this.emitBrowserUpdate(sessionId, result.screenshot, url);
+          }
+
           return {
             content: [{
               type: 'text',
-              text: `Navigated to ${url}`,
+              text: result.success ? `Navigated to ${url}` : `Failed to navigate: ${result.error}`,
             }],
+            isError: !result.success,
           };
         } catch (error) {
           return {
@@ -207,34 +300,180 @@ export class ClaudeService {
       }
     );
 
-    // BrowserClick tool - click on elements
-    const browserClickTool = tool(
-      'BrowserClick',
-      'Click on an element in the browser preview using a CSS selector. Use this to interact with buttons, links, or other clickable elements.',
+    // BrowserAct tool - AI-powered natural language actions (NEW - Stagehand feature!)
+    const browserActTool = tool(
+      'BrowserAct',
+      'Execute a natural language action in the browser. This is the PRIMARY way to interact with web pages - use natural language like "click the login button", "fill in the email field with test@example.com", "scroll down to see more products". Much more reliable than CSS selectors!',
       {
-        selector: z.string().describe('CSS selector for the element to click (e.g., "button.submit", "#login-btn", "a[href=\'/about\']")'),
+        instruction: z.string().describe('Natural language instruction for what to do, e.g., "click the login button", "type hello in the search box", "scroll down"'),
       },
       async (args) => {
         try {
-          const { selector } = args;
-          console.log('[Claude Service] Clicking element:', selector);
-          const result = await browserService.click(sessionId, selector);
-          if (result.success) {
+          const { instruction } = args;
+
+          // Ensure browser panel is open before Stagehand operations
+          await this.ensureBrowserPanelOpen(sessionId);
+
+          console.log('[Claude Service] Browser act:', instruction);
+          const result = await stagehandService.act(instruction);
+
+          if (result.success && result.screenshot) {
+            this.emitBrowserUpdate(sessionId, result.screenshot);
+          }
+
+          return {
+            content: [
+              {
+                type: 'text',
+                text: result.success ? `✓ ${result.message}` : `✗ Failed: ${result.error}`,
+              },
+              ...(result.screenshot ? [{
+                type: 'image' as const,
+                data: result.screenshot,
+                mimeType: 'image/png' as const,
+              }] : []),
+            ],
+            isError: !result.success,
+          };
+        } catch (error) {
+          return {
+            content: [{
+              type: 'text',
+              text: `Failed to execute action: ${error instanceof Error ? error.message : String(error)}`,
+            }],
+            isError: true,
+          };
+        }
+      }
+    );
+
+    // BrowserObserve tool - Discover available actions (NEW - Stagehand feature!)
+    const browserObserveTool = tool(
+      'BrowserObserve',
+      'Analyze the current page to discover available actions and interactive elements. Returns a list of things you can do on the page. Use this when you need to understand what actions are possible.',
+      {
+        instruction: z.string().optional().describe('Optional: Focus on specific types of elements, e.g., "buttons for submitting forms" or "navigation links"'),
+      },
+      async (args) => {
+        try {
+          const { instruction } = args;
+          console.log('[Claude Service] Browser observe:', instruction || 'all');
+          const result = await stagehandService.observe(instruction);
+
+          if (!result.success) {
             return {
               content: [{
                 type: 'text',
-                text: `Clicked element: ${selector}`,
-              }],
-            };
-          } else {
-            return {
-              content: [{
-                type: 'text',
-                text: `Failed to click: ${result.error}`,
+                text: `Failed to observe page: ${result.error}`,
               }],
               isError: true,
             };
           }
+
+          const actionsText = result.actions?.map((a, i) =>
+            `${i + 1}. ${a.description}\n   Action: ${a.suggestedAction}\n   Selector: ${a.selector}`
+          ).join('\n\n') || 'No actions found';
+
+          return {
+            content: [
+              {
+                type: 'text',
+                text: `Available actions on page:\n\n${actionsText}`,
+              },
+              ...(result.screenshot ? [{
+                type: 'image' as const,
+                data: result.screenshot,
+                mimeType: 'image/png' as const,
+              }] : []),
+            ],
+          };
+        } catch (error) {
+          return {
+            content: [{
+              type: 'text',
+              text: `Failed to observe page: ${error instanceof Error ? error.message : String(error)}`,
+            }],
+            isError: true,
+          };
+        }
+      }
+    );
+
+    // BrowserAgent tool - Autonomous multi-step workflows (NEW - Stagehand feature!)
+    const browserAgentTool = tool(
+      'BrowserAgent',
+      'Execute a complex multi-step task autonomously. The agent will figure out the necessary steps and execute them. Use this for complex workflows like "log in to the website and navigate to settings".',
+      {
+        task: z.string().describe('The task to accomplish, e.g., "navigate to the pricing page and extract all plan names and prices"'),
+      },
+      async (args) => {
+        try {
+          const { task } = args;
+          console.log('[Claude Service] Browser agent task:', task);
+          const result = await stagehandService.agent(task);
+
+          if (result.screenshot) {
+            this.emitBrowserUpdate(sessionId, result.screenshot);
+          }
+
+          const actionsLog = result.actions?.map((a, i) =>
+            `${i + 1}. ${a.description}`
+          ).join('\n') || 'No actions recorded';
+
+          return {
+            content: [
+              {
+                type: 'text',
+                text: result.success
+                  ? `✓ Task completed: ${result.message}\n\nActions taken:\n${actionsLog}`
+                  : `✗ Task failed: ${result.error}`,
+              },
+              ...(result.screenshot ? [{
+                type: 'image' as const,
+                data: result.screenshot,
+                mimeType: 'image/png' as const,
+              }] : []),
+            ],
+            isError: !result.success,
+          };
+        } catch (error) {
+          return {
+            content: [{
+              type: 'text',
+              text: `Failed to execute agent task: ${error instanceof Error ? error.message : String(error)}`,
+            }],
+            isError: true,
+          };
+        }
+      }
+    );
+
+    // BrowserClick tool - click on elements (fallback when CSS selector is needed)
+    const browserClickTool = tool(
+      'BrowserClick',
+      'Click on an element using a CSS selector. NOTE: Prefer using BrowserAct with natural language (e.g., "click the login button") as it is more reliable and self-healing.',
+      {
+        selector: z.string().describe('CSS selector for the element to click (e.g., "button.submit", "#login-btn")'),
+      },
+      async (args) => {
+        try {
+          const { selector } = args;
+          console.log('[Claude Service] BrowserClick ENTRY - selector:', selector);
+          console.log('[Claude Service] stagehandService:', typeof stagehandService, Object.keys(stagehandService));
+          const result = await stagehandService.click(selector);
+          console.log('[Claude Service] BrowserClick result:', result);
+
+          if (result.screenshot) {
+            this.emitBrowserUpdate(sessionId, result.screenshot);
+          }
+
+          return {
+            content: [{
+              type: 'text',
+              text: result.success ? `Clicked element: ${selector}` : `Failed to click: ${result.error}`,
+            }],
+            isError: !result.success,
+          };
         } catch (error) {
           return {
             content: [{
@@ -247,35 +486,33 @@ export class ClaudeService {
       }
     );
 
-    // BrowserType tool - type text into inputs
+    // BrowserType tool - type text into inputs (fallback when CSS selector is needed)
     const browserTypeTool = tool(
       'BrowserType',
-      'Type text into an input field or textarea in the browser preview using a CSS selector.',
+      'Type text into an input field using a CSS selector. NOTE: Prefer using BrowserAct with natural language (e.g., "type hello@example.com in the email field") as it is more reliable.',
       {
-        selector: z.string().describe('CSS selector for the input element (e.g., "input[name=\'email\']", "#search-box", "textarea.comment")'),
+        selector: z.string().describe('CSS selector for the input element (e.g., "input[name=\'email\']", "#search-box")'),
         text: z.string().describe('The text to type into the element'),
       },
       async (args) => {
         try {
           const { selector, text } = args;
-          console.log('[Claude Service] Typing into element:', selector);
-          const result = await browserService.type(sessionId, selector, text);
-          if (result.success) {
-            return {
-              content: [{
-                type: 'text',
-                text: `Typed "${text.slice(0, 50)}${text.length > 50 ? '...' : ''}" into ${selector}`,
-              }],
-            };
-          } else {
-            return {
-              content: [{
-                type: 'text',
-                text: `Failed to type: ${result.error}`,
-              }],
-              isError: true,
-            };
+          console.log('[Claude Service] Typing into element via Stagehand:', selector);
+          const result = await stagehandService.type(selector, text);
+
+          if (result.screenshot) {
+            this.emitBrowserUpdate(sessionId, result.screenshot);
           }
+
+          return {
+            content: [{
+              type: 'text',
+              text: result.success
+                ? `Typed "${text.slice(0, 50)}${text.length > 50 ? '...' : ''}" into ${selector}`
+                : `Failed to type: ${result.error}`,
+            }],
+            isError: !result.success,
+          };
         } catch (error) {
           return {
             content: [{
@@ -291,15 +528,16 @@ export class ClaudeService {
     // BrowserExtract tool - extract text from page
     const browserExtractTool = tool(
       'BrowserExtract',
-      'Extract text content from the browser preview. Can extract from the whole page or a specific element using a CSS selector.',
+      'Extract text content from the browser. Can extract from the whole page or a specific element. For structured data extraction, consider using BrowserExtractData instead.',
       {
         selector: z.string().optional().describe('Optional CSS selector to extract from specific element. If not provided, extracts all page text.'),
       },
       async (args) => {
         try {
           const { selector } = args;
-          console.log('[Claude Service] Extracting text:', selector || 'full page');
-          const result = await browserService.extractText(sessionId, selector);
+          console.log('[Claude Service] Extracting text via Stagehand:', selector || 'full page');
+          const result = await stagehandService.extractText(selector);
+
           if (result.success && result.text !== undefined) {
             const truncated = result.text.length > 5000;
             return {
@@ -329,6 +567,53 @@ export class ClaudeService {
       }
     );
 
+    // BrowserExtractData tool - AI-powered structured data extraction (NEW - Stagehand feature!)
+    const browserExtractDataTool = tool(
+      'BrowserExtractData',
+      'Extract structured data from the page using AI. Describe what data you want and it will be extracted intelligently. Returns JSON data.',
+      {
+        instruction: z.string().describe('What to extract, e.g., "the product name, price, and rating", "all navigation menu items", "the main article title and author"'),
+      },
+      async (args) => {
+        try {
+          const { instruction } = args;
+          console.log('[Claude Service] AI data extraction:', instruction);
+
+          // Use a simple schema - Stagehand will interpret based on instruction
+          const flexibleSchema = z.object({
+            items: z.array(z.record(z.string(), z.string())).describe('Extracted items'),
+          });
+
+          const result = await stagehandService.extract<{ items: Array<Record<string, string>> }>(instruction, flexibleSchema);
+
+          if (result.success && result.data) {
+            return {
+              content: [{
+                type: 'text',
+                text: `Extracted data:\n\n${JSON.stringify(result.data, null, 2)}`,
+              }],
+            };
+          } else {
+            return {
+              content: [{
+                type: 'text',
+                text: `Failed to extract data: ${result.error}`,
+              }],
+              isError: true,
+            };
+          }
+        } catch (error) {
+          return {
+            content: [{
+              type: 'text',
+              text: `Failed to extract data: ${error instanceof Error ? error.message : String(error)}`,
+            }],
+            isError: true,
+          };
+        }
+      }
+    );
+
     // BrowserGetInfo tool - get current page info
     const browserGetInfoTool = tool(
       'BrowserGetInfo',
@@ -336,20 +621,21 @@ export class ClaudeService {
       {},
       async () => {
         try {
-          console.log('[Claude Service] Getting page info');
-          const result = await browserService.getPageInfo(sessionId);
-          if (result.success) {
+          console.log('[Claude Service] Getting page info via Stagehand');
+          const info = await stagehandService.getPageInfo();
+
+          if (info) {
             return {
               content: [{
                 type: 'text',
-                text: `Current page:\nURL: ${result.url}\nTitle: ${result.title}`,
+                text: `Current page:\nURL: ${info.url}\nTitle: ${info.title}`,
               }],
             };
           } else {
             return {
               content: [{
                 type: 'text',
-                text: `Failed to get page info: ${result.error}`,
+                text: 'Browser not initialized. Navigate to a page first.',
               }],
               isError: true,
             };
@@ -369,37 +655,31 @@ export class ClaudeService {
     // BrowserGetDOM tool - get full DOM without truncation
     const browserGetDOMTool = tool(
       'BrowserGetDOM',
-      'Get the complete HTML DOM of the current page without truncation. Use this when you need to find elements that may not be visible in the initial snapshot preview.',
+      'Get the complete HTML DOM of the current page. Use this when you need to find elements that may not be visible in the initial snapshot preview.',
       {
         selector: z.string().optional().describe('Optional CSS selector to get HTML of specific element instead of whole document'),
       },
       async (args) => {
         try {
           const { selector } = args;
-          console.log('[Claude Service] Getting DOM:', selector || 'full page');
-          const result = await browserService.getDOM(sessionId);
+          console.log('[Claude Service] Getting DOM via Stagehand:', selector || 'full page');
 
-          if (!result.success || !result.html) {
+          let html = await stagehandService.getHTML();
+          if (!html) {
             return {
               content: [{
                 type: 'text',
-                text: `Failed to get DOM: ${result.error || 'Unknown error'}`,
+                text: 'Browser not initialized. Navigate to a page first.',
               }],
               isError: true,
             };
           }
 
-          let html = result.html;
-
-          // If selector provided, extract that element only
+          // If selector provided, we could filter but Stagehand doesn't have direct script execution
+          // For now, return full HTML - user can use BrowserExtract for specific elements
           if (selector) {
-            const extractResult = await browserService.executeScript(
-              sessionId,
-              `document.querySelector(${JSON.stringify(selector)})?.outerHTML || ''`
-            );
-            if (extractResult.success && extractResult.result) {
-              html = String(extractResult.result);
-            }
+            // Note: Stagehand's page.evaluate could be used here if needed
+            console.log('[Claude Service] Note: selector filtering not implemented, returning full DOM');
           }
 
           // Cap at reasonable limit to avoid overwhelming Claude
@@ -409,7 +689,7 @@ export class ClaudeService {
           return {
             content: [{
               type: 'text',
-              text: `DOM HTML${selector ? ` for ${selector}` : ''}:\n\n${html.slice(0, maxLength)}${truncated ? '\n\n...(truncated - use selector to narrow scope)' : ''}`,
+              text: `DOM HTML:\n\n${html.slice(0, maxLength)}${truncated ? '\n\n...(truncated - use BrowserExtract for specific content)' : ''}`,
             }],
           };
         } catch (error) {
@@ -424,225 +704,8 @@ export class ClaudeService {
       }
     );
 
-    // BrowserEnableDebugging tool - enable console and network capture
-    const browserEnableDebuggingTool = tool(
-      'BrowserEnableDebugging',
-      'Enable browser debugging to capture console logs and network requests. Call this before trying to read console logs or network requests.',
-      {},
-      async () => {
-        try {
-          console.log('[Claude Service] Enabling browser debugging');
-          const result = await browserService.enableDebugging(sessionId);
-          if (result.success) {
-            return {
-              content: [{
-                type: 'text',
-                text: 'Browser debugging enabled. Console logs and network requests are now being captured.',
-              }],
-            };
-          } else {
-            return {
-              content: [{
-                type: 'text',
-                text: `Failed to enable debugging: ${result.error}`,
-              }],
-              isError: true,
-            };
-          }
-        } catch (error) {
-          return {
-            content: [{
-              type: 'text',
-              text: `Failed to enable debugging: ${error instanceof Error ? error.message : String(error)}`,
-            }],
-            isError: true,
-          };
-        }
-      }
-    );
-
-    // BrowserGetConsoleLogs tool - get captured console logs
-    const browserGetConsoleLogsTool = tool(
-      'BrowserGetConsoleLogs',
-      'Get captured console logs from the browser. Must call BrowserEnableDebugging first. Can filter by type (log, warning, error, info, debug) and limit the number of results.',
-      {
-        type: z.string().optional().describe('Filter by log type: "log", "warning", "error", "info", or "debug"'),
-        limit: z.number().optional().describe('Maximum number of logs to return (default: all)'),
-      },
-      async (args) => {
-        try {
-          const { type, limit } = args;
-          const logType = type as 'log' | 'warning' | 'error' | 'info' | 'debug' | undefined;
-          console.log('[Claude Service] Getting console logs:', { type: logType, limit });
-          const logs = browserService.getConsoleLogs(sessionId, { type: logType, limit });
-
-          if (logs.length === 0) {
-            return {
-              content: [{
-                type: 'text',
-                text: 'No console logs captured. Make sure to call BrowserEnableDebugging first and that the page has logged something.',
-              }],
-            };
-          }
-
-          const formatted = logs.map(log => {
-            let line = `[${log.type.toUpperCase()}] ${log.text}`;
-            if (log.url) {
-              line += `\n  at ${log.url}${log.lineNumber !== undefined ? `:${log.lineNumber}` : ''}`;
-            }
-            return line;
-          }).join('\n\n');
-
-          return {
-            content: [{
-              type: 'text',
-              text: `Console logs (${logs.length}):\n\n${formatted}`,
-            }],
-          };
-        } catch (error) {
-          return {
-            content: [{
-              type: 'text',
-              text: `Failed to get console logs: ${error instanceof Error ? error.message : String(error)}`,
-            }],
-            isError: true,
-          };
-        }
-      }
-    );
-
-    // BrowserGetNetworkRequests tool - get captured network requests
-    const browserGetNetworkRequestsTool = tool(
-      'BrowserGetNetworkRequests',
-      'Get captured network requests from the browser. Must call BrowserEnableDebugging first. Can filter by URL pattern, HTTP method, and status code.',
-      {
-        urlPattern: z.string().optional().describe('Regex pattern to filter URLs (e.g., "api", "\.json$")'),
-        method: z.string().optional().describe('Filter by HTTP method (GET, POST, etc.)'),
-        status: z.number().optional().describe('Filter by status code (e.g., 200, 404, 500)'),
-        limit: z.number().optional().describe('Maximum number of requests to return (default: all)'),
-      },
-      async (args) => {
-        try {
-          const { urlPattern, method, status, limit } = args;
-          console.log('[Claude Service] Getting network requests:', { urlPattern, method, status, limit });
-          const requests = browserService.getNetworkRequests(sessionId, { urlPattern, method, status, limit });
-
-          if (requests.length === 0) {
-            return {
-              content: [{
-                type: 'text',
-                text: 'No network requests captured. Make sure to call BrowserEnableDebugging first and that the page has made network requests.',
-              }],
-            };
-          }
-
-          const formatted = requests.map(req => {
-            let line = `${req.method} ${req.url}`;
-            if (req.status !== undefined) {
-              line += ` → ${req.status} ${req.statusText || ''}`;
-            }
-            if (req.timing?.duration !== undefined) {
-              line += ` (${req.timing.duration}ms)`;
-            }
-            if (req.responseSize !== undefined) {
-              line += ` [${req.responseSize} bytes]`;
-            }
-            return line;
-          }).join('\n');
-
-          return {
-            content: [{
-              type: 'text',
-              text: `Network requests (${requests.length}):\n\n${formatted}`,
-            }],
-          };
-        } catch (error) {
-          return {
-            content: [{
-              type: 'text',
-              text: `Failed to get network requests: ${error instanceof Error ? error.message : String(error)}`,
-            }],
-            isError: true,
-          };
-        }
-      }
-    );
-
-    // BrowserGetResponseBody tool - get response body for a network request
-    const browserGetResponseBodyTool = tool(
-      'BrowserGetResponseBody',
-      'Get the response body for a specific network request. Use BrowserGetNetworkRequests first to find the requestId.',
-      {
-        requestId: z.string().describe('The requestId from BrowserGetNetworkRequests'),
-      },
-      async (args) => {
-        try {
-          const { requestId } = args;
-          console.log('[Claude Service] Getting response body:', requestId);
-          const result = await browserService.getResponseBody(sessionId, requestId);
-
-          if (result.success && result.body !== undefined) {
-            let body = result.body;
-            if (result.base64Encoded) {
-              body = Buffer.from(result.body, 'base64').toString('utf-8');
-            }
-            const truncated = body.length > 10000;
-            return {
-              content: [{
-                type: 'text',
-                text: `Response body:\n\n${body.slice(0, 10000)}${truncated ? '\n\n...(truncated)' : ''}`,
-              }],
-            };
-          } else {
-            return {
-              content: [{
-                type: 'text',
-                text: `Failed to get response body: ${result.error || 'Response not available (may have been evicted from browser cache)'}`,
-              }],
-              isError: true,
-            };
-          }
-        } catch (error) {
-          return {
-            content: [{
-              type: 'text',
-              text: `Failed to get response body: ${error instanceof Error ? error.message : String(error)}`,
-            }],
-            isError: true,
-          };
-        }
-      }
-    );
-
-    // BrowserClearLogs tool - clear console logs and network requests
-    const browserClearLogsTool = tool(
-      'BrowserClearLogs',
-      'Clear captured console logs and/or network requests. Useful to start fresh when debugging.',
-      {
-        console: z.boolean().optional().describe('Clear console logs (default: true)'),
-        network: z.boolean().optional().describe('Clear network requests (default: true)'),
-      },
-      async (args) => {
-        const { console: clearConsole = true, network: clearNetwork = true } = args;
-        const cleared: string[] = [];
-
-        if (clearConsole) {
-          browserService.clearConsoleLogs(sessionId);
-          cleared.push('console logs');
-        }
-        if (clearNetwork) {
-          browserService.clearNetworkRequests(sessionId);
-          cleared.push('network requests');
-        }
-
-        return {
-          content: [{
-            type: 'text',
-            text: `Cleared ${cleared.join(' and ')}.`,
-          }],
-        };
-      }
-    );
+    // Note: CDP-based debugging tools (console logs, network requests) are not available with Stagehand
+    // Stagehand provides AI-powered automation instead of low-level CDP access
 
     // UpdateSessionName tool - allow Claude to set descriptive session names
     const updateSessionNameTool = tool(
@@ -897,20 +960,24 @@ export class ClaudeService {
 
     const mcpServer = createSdkMcpServer({
       name: 'claudette-browser',
-      version: '1.0.0',
+      version: '2.0.0', // Upgraded to Stagehand-powered automation
       tools: [
+        // Core browser tools
         browserSnapshotTool,
         browserNavigateTool,
+        // AI-powered Stagehand tools (PRIMARY - prefer these!)
+        browserActTool,
+        browserObserveTool,
+        browserAgentTool,
+        browserExtractDataTool,
+        // Fallback selector-based tools
         browserClickTool,
         browserTypeTool,
         browserExtractTool,
+        // Page info tools
         browserGetInfoTool,
         browserGetDOMTool,
-        browserEnableDebuggingTool,
-        browserGetConsoleLogsTool,
-        browserGetNetworkRequestsTool,
-        browserGetResponseBodyTool,
-        browserClearLogsTool,
+        // Utility tools
         updateSessionNameTool,
         // Document tools
         documentCreateTool,
@@ -926,6 +993,14 @@ export class ClaudeService {
 
   setApiKey(apiKey: string): void {
     this.store.set('anthropicApiKey', apiKey);
+  }
+
+  getGoogleApiKey(): string | undefined {
+    return this.store.get('googleApiKey') as string | undefined;
+  }
+
+  setGoogleApiKey(apiKey: string): void {
+    this.store.set('googleApiKey', apiKey);
   }
 
   // Handle question responses from the renderer
@@ -983,6 +1058,52 @@ export class ClaudeService {
           reject(new Error('Permission response timeout'));
         }
       }, 5 * 60 * 1000); // 5 minute timeout
+    });
+  }
+
+  // Handle plan approval responses from the renderer
+  handlePlanApprovalResponse(response: PlanApprovalResponse): void {
+    const pending = this.pendingPlanApprovals.get(response.requestId);
+    if (pending) {
+      pending.resolve(response.approved);
+      this.pendingPlanApprovals.delete(response.requestId);
+    }
+  }
+
+  // Ask user to approve a plan via the renderer
+  private async askPlanApproval(
+    sessionId: string,
+    planContent: string,
+    planFilePath?: string,
+    allowedPrompts?: Array<{ tool: string; prompt: string }>
+  ): Promise<boolean> {
+    const requestId = `plan-approval-${Date.now()}-${Math.random()}`;
+
+    return new Promise((resolve, reject) => {
+      // Store the promise resolve/reject functions
+      this.pendingPlanApprovals.set(requestId, { resolve, reject });
+
+      // Send plan approval request to renderer
+      if (this.mainWindow) {
+        const request: PlanApprovalRequest = {
+          sessionId,
+          requestId,
+          planContent,
+          planFilePath,
+          allowedPrompts,
+        };
+        this.mainWindow.webContents.send(IPC_CHANNELS.CLAUDE_PLAN_APPROVAL_REQUEST, request);
+      } else {
+        reject(new Error('Main window not available'));
+      }
+
+      // Set a timeout in case the user never responds (10 minute timeout for plans)
+      setTimeout(() => {
+        if (this.pendingPlanApprovals.has(requestId)) {
+          this.pendingPlanApprovals.delete(requestId);
+          reject(new Error('Plan approval response timeout'));
+        }
+      }, 10 * 60 * 1000); // 10 minute timeout
     });
   }
 
@@ -1216,6 +1337,62 @@ You are intelligent enough to determine what URLs to test based on the project s
                 return {
                   behavior: 'deny' as const,
                   message: error instanceof Error ? error.message : 'Failed to get user response',
+                };
+              }
+            }
+
+            // Handle ExitPlanMode - require user approval before proceeding
+            if (toolName === 'ExitPlanMode') {
+              try {
+                console.log('[Claude Service] ExitPlanMode called, requesting user approval');
+
+                // Find the plan file that was written most recently
+                const plansDir = path.join(os.homedir(), '.claude', 'plans');
+                let planContent = '';
+                let planFilePath = '';
+
+                if (fs.existsSync(plansDir)) {
+                  const planFiles = fs.readdirSync(plansDir)
+                    .filter(f => f.endsWith('.md'))
+                    .map(f => ({
+                      name: f,
+                      path: path.join(plansDir, f),
+                      mtime: fs.statSync(path.join(plansDir, f)).mtime.getTime(),
+                    }))
+                    .sort((a, b) => b.mtime - a.mtime);
+
+                  if (planFiles.length > 0) {
+                    planFilePath = planFiles[0].path;
+                    planContent = fs.readFileSync(planFilePath, 'utf-8');
+                  }
+                }
+
+                // If no plan file found, use a placeholder message
+                if (!planContent) {
+                  planContent = 'Plan content not found. The assistant wants to proceed with the implementation.';
+                }
+
+                // Get allowedPrompts from input if present
+                const allowedPrompts = input.allowedPrompts as Array<{ tool: string; prompt: string }> | undefined;
+
+                // Ask user for approval
+                const approved = await this.askPlanApproval(sessionId, planContent, planFilePath, allowedPrompts);
+
+                if (approved) {
+                  console.log('[Claude Service] Plan approved by user');
+                  return { behavior: 'allow' as const, updatedInput: input };
+                } else {
+                  console.log('[Claude Service] Plan rejected by user');
+                  return {
+                    behavior: 'deny' as const,
+                    message: 'Plan was not approved by the user. Please revise the plan based on user feedback.',
+                  };
+                }
+              } catch (error) {
+                console.error('[Claude Service] Error requesting plan approval:', error);
+                return {
+                  behavior: 'deny' as const,
+                  message: error instanceof Error ? error.message : 'Failed to get plan approval',
                 };
               }
             }

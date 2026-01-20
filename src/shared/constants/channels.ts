@@ -63,6 +63,8 @@ export const IPC_CHANNELS = {
   CLAUDE_COMPACTION_STATUS: 'claude:compaction-status',
   CLAUDE_COMPACTION_COMPLETE: 'claude:compaction-complete',
   CLAUDE_PLAN_CONTENT: 'claude:plan-content',
+  CLAUDE_PLAN_APPROVAL_REQUEST: 'claude:plan-approval-request',
+  CLAUDE_PLAN_APPROVAL_RESPONSE: 'claude:plan-approval-response',
 
   // Browser preview channels
   BROWSER_NAVIGATE: 'browser:navigate',
@@ -72,6 +74,9 @@ export const IPC_CHANNELS = {
   BROWSER_CAPTURE_SNAPSHOT: 'browser:capture-snapshot',
   BROWSER_GET_SNAPSHOT: 'browser:get-snapshot',
   BROWSER_CLEAR_STORAGE: 'browser:clear-storage',
+  BROWSER_UPDATE: 'browser:update', // Stagehand screenshot/URL updates
+  BROWSER_OPEN_PANEL: 'browser:open-panel', // Request to open browser panel
+  BROWSER_REGISTER: 'browser:register', // Webview registration from renderer
 
   // Settings channels
   SETTINGS_GET: 'settings:get',

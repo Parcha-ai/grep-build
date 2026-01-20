@@ -197,6 +197,15 @@ const electronAPI = {
       ipcRenderer.invoke(IPC_CHANNELS.AUTO_RESUME_GET_STATE),
     clearAutoResumeState: (): Promise<{ success: boolean }> =>
       ipcRenderer.invoke(IPC_CHANNELS.AUTO_RESUME_CLEAR_STATE),
+    // Plan approval request listener (when ExitPlanMode is called)
+    onPlanApprovalRequest: (callback: (data: { sessionId: string; requestId: string; planContent: string; planFilePath?: string; allowedPrompts?: Array<{ tool: string; prompt: string }> }) => void) => {
+      const handler = (_: IpcRendererEvent, data: { sessionId: string; requestId: string; planContent: string; planFilePath?: string; allowedPrompts?: Array<{ tool: string; prompt: string }> }) => callback(data);
+      ipcRenderer.on(IPC_CHANNELS.CLAUDE_PLAN_APPROVAL_REQUEST, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.CLAUDE_PLAN_APPROVAL_REQUEST, handler);
+    },
+    // Send plan approval response
+    respondToPlanApproval: (response: { requestId: string; approved: boolean }): Promise<void> =>
+      ipcRenderer.invoke(IPC_CHANNELS.CLAUDE_PLAN_APPROVAL_RESPONSE, response),
   },
 
   // Browser Preview
@@ -249,6 +258,18 @@ const electronAPI = {
       const handler = (_: IpcRendererEvent, data: { sessionId: string; type: string; action: string; data?: Record<string, unknown> }) => callback(data);
       ipcRenderer.on('browser:automation-event', handler);
       return () => ipcRenderer.removeListener('browser:automation-event', handler);
+    },
+    // Stagehand browser update events (screenshot + URL changes)
+    onBrowserUpdate: (callback: (data: { sessionId: string; screenshot: string; url?: string; timestamp: string }) => void) => {
+      const handler = (_: IpcRendererEvent, data: { sessionId: string; screenshot: string; url?: string; timestamp: string }) => callback(data);
+      ipcRenderer.on(IPC_CHANNELS.BROWSER_UPDATE, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.BROWSER_UPDATE, handler);
+    },
+    // Request to open browser panel (from main process for Stagehand)
+    onBrowserOpenPanel: (callback: (data: { sessionId: string }) => void) => {
+      const handler = (_: IpcRendererEvent, data: { sessionId: string }) => callback(data);
+      ipcRenderer.on(IPC_CHANNELS.BROWSER_OPEN_PANEL, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.BROWSER_OPEN_PANEL, handler);
     },
   },
 

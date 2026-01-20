@@ -64,4 +64,12 @@ export class SettingsService {
   setGitHubToken(token: string): void {
     this.store.set('githubToken', token);
   }
+
+  getGoogleApiKey(): string | undefined {
+    return this.store.get('googleApiKey') as string | undefined;
+  }
+
+  setGoogleApiKey(key: string): void {
+    this.store.set('googleApiKey', key);
+  }
 }

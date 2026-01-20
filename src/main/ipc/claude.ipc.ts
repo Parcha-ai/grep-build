@@ -3,7 +3,7 @@ import Store from 'electron-store';
 import { IPC_CHANNELS } from '../../shared/constants/channels';
 import { ClaudeService } from '../services/claude.service';
 import { getMainWindow } from '../index';
-import type { QuestionResponse, Attachment } from '../../shared/types';
+import type { QuestionResponse, Attachment, PlanApprovalResponse } from '../../shared/types';
 import { DEFAULT_AUDIO_SETTINGS } from '../../shared/types/audio';
 
 // Settings store for Ralph Loop check
@@ -108,6 +108,9 @@ export function registerClaudeHandlers(ipcMain: IpcMain): void {
     async (_, sessionId: string, message: string, attachments?: Attachment[], permissionMode?: string, thinkingMode?: string, model?: string) => {
       const mainWindow = getMainWindow();
       if (!mainWindow) return;
+
+      // Ensure claudeService has the mainWindow reference for browser updates
+      claudeService.setMainWindow(mainWindow);
 
       console.log('[Claude IPC] sendMessage received with attachments:', attachments?.length || 0, 'model:', model);
       if (attachments) {
@@ -319,6 +322,12 @@ export function registerClaudeHandlers(ipcMain: IpcMain): void {
     console.log('[Claude IPC] Clearing auto-resume state');
     settingsStore.delete('autoResumeState');
     return { success: true };
+  });
+
+  // Handle plan approval responses from user
+  ipcMain.handle(IPC_CHANNELS.CLAUDE_PLAN_APPROVAL_RESPONSE, async (_, response: PlanApprovalResponse) => {
+    console.log('[Claude IPC] Plan approval response:', response);
+    claudeService.handlePlanApprovalResponse(response);
   });
 }
 

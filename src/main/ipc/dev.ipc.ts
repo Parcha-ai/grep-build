@@ -263,6 +263,7 @@ export function registerDevHandlers(ipcMain: IpcMain): void {
   }) => {
     const sessionId = uuid();
     let worktreePath = data.repoPath;
+    let worktreeInstructions: string | undefined;
 
     // If creating a worktree, set up a new worktree directory
     if (data.createWorktree) {
@@ -309,9 +310,9 @@ export function registerDevHandlers(ipcMain: IpcMain): void {
               console.error(`[Worktree Setup] Script execution failed:`, error);
             }
           } else if (instructionsExist) {
-            const instructions = await fs.readFile(instructionsPath, 'utf-8');
-            console.log(`[Worktree Setup] Instructions found (will be provided to Claude):`, instructions.substring(0, 100) + '...');
-            // Instructions will be provided to Claude through the session
+            // Read instructions to store on the session - they'll be sent as the first message
+            worktreeInstructions = await fs.readFile(instructionsPath, 'utf-8');
+            console.log(`[Worktree Setup] Instructions loaded (will be sent as first message):`, worktreeInstructions.substring(0, 100) + '...');
           }
         }
       } catch (error) {
@@ -337,6 +338,8 @@ export function registerDevHandlers(ipcMain: IpcMain): void {
       updatedAt: new Date(),
       setupScript: '',
       isDevMode: true, // Flag for dev mode sessions
+      worktreeInstructions, // Setup instructions to send to Claude
+      worktreeInstructionsSent: false, // Track if instructions have been sent
     };
 
     // Save session

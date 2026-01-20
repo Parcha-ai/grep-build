@@ -45,6 +45,25 @@ const TOOL_CONFIG: Record<string, {
   },
   TodoWrite: { icon: ListTodo, label: 'Todo', color: 'text-amber-400' },
   AskUserQuestion: { icon: HelpCircle, label: 'Ask', color: 'text-rose-400' },
+  // Browser automation tools (Stagehand MCP)
+  BrowserSnapshot: { icon: Globe, label: 'BrowserSnapshot', color: 'text-cyan-400' },
+  BrowserNavigate: { icon: Globe, label: 'BrowserNavigate', color: 'text-cyan-400' },
+  BrowserAct: { icon: Globe, label: 'BrowserAct', color: 'text-emerald-400' },
+  BrowserObserve: { icon: Globe, label: 'BrowserObserve', color: 'text-sky-400' },
+  BrowserAgent: { icon: Globe, label: 'BrowserAgent', color: 'text-violet-400' },
+  BrowserClick: { icon: Globe, label: 'BrowserClick', color: 'text-cyan-400' },
+  BrowserType: { icon: Globe, label: 'BrowserType', color: 'text-cyan-400' },
+  BrowserExtract: { icon: Globe, label: 'BrowserExtract', color: 'text-cyan-400' },
+  BrowserExtractData: { icon: Globe, label: 'BrowserExtractData', color: 'text-teal-400' },
+  BrowserGetInfo: { icon: Globe, label: 'BrowserGetInfo', color: 'text-cyan-400' },
+  BrowserGetDOM: { icon: Globe, label: 'BrowserGetDOM', color: 'text-cyan-400' },
+  // Utility MCP tools
+  UpdateSessionName: { icon: Edit2, label: 'UpdateSessionName', color: 'text-indigo-400' },
+  // Document MCP tools
+  DocumentCreate: { icon: FileText, label: 'DocumentCreate', color: 'text-pink-400' },
+  DocumentRead: { icon: FileText, label: 'DocumentRead', color: 'text-blue-400' },
+  DocumentEdit: { icon: Edit2, label: 'DocumentEdit', color: 'text-orange-400' },
+  DocumentPreview: { icon: Globe, label: 'DocumentPreview', color: 'text-cyan-400' },
 };
 
 const DEFAULT_CONFIG = { icon: Play, label: 'Tool', color: 'text-gray-400' };
@@ -103,6 +122,37 @@ function formatToolInput(name: string, input: Record<string, unknown>): string {
       const pending = todos.filter(t => t.status === 'pending').length;
       return `${completed}/${todos.length} done${inProgress > 0 ? `, ${inProgress} active` : ''}${pending > 0 ? `, ${pending} pending` : ''}`;
     }
+    // Browser automation tools (Stagehand MCP)
+    case 'BrowserSnapshot':
+    case 'BrowserNavigate':
+      return (input.url as string) || 'Navigating...';
+    case 'BrowserAct':
+      return (input.instruction as string) || 'Performing action...';
+    case 'BrowserObserve':
+      return (input.instruction as string) || 'Observing page...';
+    case 'BrowserAgent':
+      return (input.task as string) || 'Running agent task...';
+    case 'BrowserClick':
+      return (input.selector as string) || 'Clicking element...';
+    case 'BrowserType':
+      return `${input.selector || ''}: "${(input.text as string)?.slice(0, 30) || ''}"` || 'Typing...';
+    case 'BrowserExtract':
+    case 'BrowserExtractData':
+      return (input.instruction as string) || (input.selector as string) || 'Extracting data...';
+    case 'BrowserGetInfo':
+      return 'Getting page info...';
+    case 'BrowserGetDOM':
+      return (input.selector as string) || 'Getting DOM...';
+    // Document tools
+    case 'DocumentCreate':
+      return `${input.type || 'document'}: ${(input.path as string)?.split('/').pop() || 'Creating...'}`;
+    case 'DocumentRead':
+    case 'DocumentPreview':
+      return (input.path as string)?.split('/').pop() || 'Reading document...';
+    case 'DocumentEdit':
+      return (input.path as string)?.split('/').pop() || 'Editing document...';
+    case 'UpdateSessionName':
+      return (input.name as string) || 'Updating session name...';
     default: {
       const firstValue = Object.values(input).find(v => typeof v === 'string');
       return (firstValue as string) || JSON.stringify(input).slice(0, 100);
@@ -596,15 +646,17 @@ export default function ToolCallCard({ toolCall, isLatest = false, isLatestToolC
   // Keep isLatest/isLatestToolCall for potential future use but don't auto-collapse
   const _shouldExpand = isLatest || isLatestToolCall; // eslint-disable-line @typescript-eslint/no-unused-vars
 
-  const config = TOOL_CONFIG[toolCall.name] || DEFAULT_CONFIG;
+  // Extract base tool name from MCP prefixed names (e.g., mcp__claudette-browser__BrowserNavigate -> BrowserNavigate)
+  const baseToolName = toolCall.name.includes('__') ? toolCall.name.split('__').pop() || toolCall.name : toolCall.name;
+  const config = TOOL_CONFIG[baseToolName] || DEFAULT_CONFIG;
   const Icon = config.icon;
 
-  const commandDisplay = useMemo(() => formatToolInput(toolCall.name, toolCall.input), [toolCall.name, toolCall.input]);
+  const commandDisplay = useMemo(() => formatToolInput(baseToolName, toolCall.input), [baseToolName, toolCall.input]);
 
   const isRunning = toolCall.status === 'running' || toolCall.status === 'pending';
 
   // Detect if this is a Task tool (subagent)
-  const isTaskTool = toolCall.name === 'Task';
+  const isTaskTool = baseToolName === 'Task';
   const subagentType = isTaskTool ? getSubagentType(toolCall.input) : null;
 
   // Status dot color

@@ -36,6 +36,7 @@ interface UIState {
   toggleGitPanel: () => void;
   toggleExtensionsPanel: () => void;
   togglePlanPanel: () => void;
+  showPlanPanel: () => void;
   setInspectorActive: (active: boolean) => void;
   setSelectedElement: (element: unknown | null) => void;
   cycleSplitRatio: () => void;
@@ -87,6 +88,7 @@ export const useUIStore = create<UIState>((set, get) => ({
   toggleGitPanel: () => set((state) => ({ isGitPanelOpen: !state.isGitPanelOpen })),
   toggleExtensionsPanel: () => set((state) => ({ isExtensionsPanelOpen: !state.isExtensionsPanelOpen })),
   togglePlanPanel: () => set((state) => ({ isPlanPanelOpen: !state.isPlanPanelOpen })),
+  showPlanPanel: () => set({ isPlanPanelOpen: true }),
   setInspectorActive: (active) => set({ isInspectorActive: active }),
   setSelectedElement: (element) => set({ selectedElement: element }),
   cycleSplitRatio: () => set((state) => {

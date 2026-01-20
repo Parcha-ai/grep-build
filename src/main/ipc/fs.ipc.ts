@@ -30,14 +30,6 @@ const IGNORED_DIRS = new Set([
   '.turbo',
 ]);
 
-// File extensions that are commonly referenced
-const CODE_EXTENSIONS = new Set([
-  '.ts', '.tsx', '.js', '.jsx', '.py', '.go', '.rs', '.java',
-  '.c', '.cpp', '.h', '.hpp', '.cs', '.rb', '.php', '.swift',
-  '.kt', '.scala', '.vue', '.svelte', '.html', '.css', '.scss',
-  '.json', '.yaml', '.yml', '.toml', '.md', '.sql', '.sh', '.bash',
-]);
-
 async function listFilesRecursive(
   dirPath: string,
   basePath: string,
@@ -73,16 +65,14 @@ async function listFilesRecursive(
         entries.push(...subEntries);
       } else if (item.isFile()) {
         const ext = path.extname(item.name).toLowerCase();
-        // Only include code files and common config files
-        if (CODE_EXTENSIONS.has(ext) || item.name.includes('.config') || item.name.includes('.rc')) {
-          entries.push({
-            name: item.name,
-            path: fullPath,
-            relativePath,
-            type: 'file',
-            extension: ext,
-          });
-        }
+        // Include all files - no filtering
+        entries.push({
+          name: item.name,
+          path: fullPath,
+          relativePath,
+          type: 'file',
+          extension: ext,
+        });
       }
     }
   } catch (error) {
