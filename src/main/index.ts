@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, protocol, session, net } from 'electron';
+import { app, BrowserWindow, ipcMain, protocol, session, net, Menu } from 'electron';
 import * as path from 'path';
 import { pathToFileURL } from 'url';
 
@@ -117,6 +117,62 @@ const createWindow = (): void => {
   // This ensures Claude service can send permission requests at any time
   claudeService.setMainWindow(mainWindow);
   console.log('[Main] Main window reference set for Claude service');
+
+  // Set custom application menu to disable CMD+R reload (we handle it ourselves)
+  const template: Electron.MenuItemConstructorOptions[] = [
+    {
+      label: app.name,
+      submenu: [
+        { role: 'about' },
+        { type: 'separator' },
+        { role: 'services' },
+        { type: 'separator' },
+        { role: 'hide' },
+        { role: 'hideOthers' },
+        { role: 'unhide' },
+        { type: 'separator' },
+        { role: 'quit' },
+      ],
+    },
+    {
+      label: 'Edit',
+      submenu: [
+        { role: 'undo' },
+        { role: 'redo' },
+        { type: 'separator' },
+        { role: 'cut' },
+        { role: 'copy' },
+        { role: 'paste' },
+        { role: 'selectAll' },
+      ],
+    },
+    {
+      label: 'View',
+      submenu: [
+        // Removed 'reload' and 'forceReload' - we handle CMD+R ourselves
+        { role: 'toggleDevTools' },
+        { type: 'separator' },
+        { role: 'resetZoom' },
+        { role: 'zoomIn' },
+        { role: 'zoomOut' },
+        { type: 'separator' },
+        { role: 'togglefullscreen' },
+      ],
+    },
+    {
+      label: 'Window',
+      submenu: [
+        { role: 'minimize' },
+        { role: 'zoom' },
+        { type: 'separator' },
+        { role: 'front' },
+        { type: 'separator' },
+        { role: 'close' },
+      ],
+    },
+  ];
+  const menu = Menu.buildFromTemplate(template);
+  Menu.setApplicationMenu(menu);
 
   // Show window when ready to prevent blank screen
   mainWindow.once('ready-to-show', () => {
