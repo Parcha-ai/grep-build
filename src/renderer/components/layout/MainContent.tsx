@@ -278,9 +278,9 @@ export default function MainContent() {
                     </div>
                     {/* Browser content area - centred mobile viewport when in mobile mode */}
                     <div className={`flex-1 overflow-hidden relative ${viewportMode === 'mobile' ? 'bg-gray-900 flex items-start justify-center pt-4' : ''}`}>
-                      {/* Mobile device frame when in mobile mode */}
+                      {/* Mobile device frame when in mobile mode, full size in desktop mode */}
                       <div
-                        className={`relative ${viewportMode === 'mobile' ? 'rounded-xl overflow-hidden shadow-2xl border-4 border-gray-700' : 'absolute inset-0'}`}
+                        className={`${viewportMode === 'mobile' ? 'relative rounded-xl overflow-hidden shadow-2xl border-4 border-gray-700' : 'absolute inset-0'}`}
                         style={viewportMode === 'mobile' ? { width: 375, height: 667 } : undefined}
                       >
                         {/* Render a BrowserPreview for each session with browser enabled */}
