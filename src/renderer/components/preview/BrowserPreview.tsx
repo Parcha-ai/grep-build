@@ -704,12 +704,18 @@ ${data.textContent ? `**Text Content:** "${data.textContent.slice(0, 100)}${data
 
           console.log('[BrowserPreview] Element selected - populating chat input');
 
-          // Dispatch event to populate chat input with element context
+          // Dispatch event to populate chat input with element context (as attachments only, no text)
           const insertEvent = new CustomEvent('grep-insert-chat', {
             detail: {
               sessionId: session.id,
-              content: markdown,
+              content: '', // No visible text - context is in attachments
               screenshot: screenshotBase64,
+              elementContext: {
+                selector: data.selector,
+                outerHTML: data.outerHTML || '',
+                tagName: data.tagName,
+                reactComponent: data.reactComponent,
+              },
             },
           });
           window.dispatchEvent(insertEvent);

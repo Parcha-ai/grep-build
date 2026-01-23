@@ -246,33 +246,62 @@ export default function InputArea({ sessionId, disabled, systemInfo, isStreaming
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [showModelDropdown]);
 
-  // Listen for insert-chat events from browser preview annotations (legacy - inserts into input)
+  // Listen for insert-chat events from browser preview - adds element context as attachments (chips)
   useEffect(() => {
-    const handleInsertChat = (event: CustomEvent<{ sessionId: string; content: string; screenshot?: string }>) => {
-      const { sessionId: targetSessionId, content, screenshot } = event.detail;
+    interface InsertChatDetail {
+      sessionId: string;
+      content: string;
+      screenshot?: string;
+      elementContext?: {
+        selector: string;
+        outerHTML: string;
+        tagName: string;
+        reactComponent?: string;
+      };
+    }
+    const handleInsertChat = (event: CustomEvent<InsertChatDetail>) => {
+      const { sessionId: targetSessionId, content, screenshot, elementContext } = event.detail;
       if (targetSessionId !== sessionId) return;
 
-      console.log('[InputArea] Received grep-insert-chat event:', content.slice(0, 100));
+      console.log('[InputArea] Received grep-insert-chat event');
 
-      // Insert the content into the message input
-      setMessage(prev => {
-        // If there's existing content, add a newline before the new content
-        if (prev.trim()) {
-          return prev + '\n\n' + content;
-        }
-        return content;
-      });
+      const newAttachments: Attachment[] = [];
 
-      // If there's a screenshot, add it as an attachment
+      // Add element context as a dom_element attachment (shows as chip, sent as context)
+      if (elementContext) {
+        const displayName = elementContext.reactComponent
+          ? `<${elementContext.reactComponent}>`
+          : elementContext.selector || `<${elementContext.tagName.toLowerCase()}>`;
+
+        newAttachments.push({
+          type: 'dom_element',
+          name: displayName,
+          content: elementContext.outerHTML,
+        });
+      }
+
+      // Add screenshot as an image attachment
       if (screenshot) {
-        setAttachments(prev => [
-          ...prev,
-          {
-            type: 'image',
-            name: 'element-screenshot.png',
-            content: screenshot,
-          },
-        ]);
+        newAttachments.push({
+          type: 'image',
+          name: 'element-screenshot.png',
+          content: screenshot,
+        });
+      }
+
+      // Add attachments (context shown as chips, no visible text)
+      if (newAttachments.length > 0) {
+        setAttachments(prev => [...prev, ...newAttachments]);
+      }
+
+      // Only set message if there's explicit content (not element metadata)
+      if (content && content.trim()) {
+        setMessage(prev => {
+          if (prev.trim()) {
+            return prev + '\n\n' + content;
+          }
+          return content;
+        });
       }
 
       // Focus the textarea
@@ -1127,10 +1156,10 @@ export default function InputArea({ sessionId, disabled, systemInfo, isStreaming
         )}
 
         {/* Voice Mode UI or Textarea */}
-        <div className="flex-1 relative">
+        <div className="flex-1 relative min-w-0">
           {isVoiceModeActive ? (
             /* Voice Mode Active - Clean display with animated audio visualization */
-            <div className="flex items-center gap-3 py-1 min-h-[24px]">
+            <div className="flex items-start gap-3 py-1 min-h-[24px] min-w-0">
               {/* Audio wave visualization - reacts to voice input */}
               <div className="flex items-center gap-[2px] h-6">
                 {[...Array(12)].map((_, i) => {
@@ -1161,24 +1190,24 @@ export default function InputArea({ sessionId, disabled, systemInfo, isStreaming
                 })}
               </div>
 
-              {/* Status text */}
-              <div className="flex-1 overflow-hidden">
+              {/* Status text - wraps to multiple lines */}
+              <div className="flex-1 min-w-0">
                 {voiceState?.agentResponse ? (
-                  <span className={`font-mono text-sm truncate block ${
+                  <span className={`font-mono text-sm block ${
                     voiceState?.isSpeaking ? 'grep-speaking-shimmer' : 'text-claude-text'
                   }`}>
                     {voiceState.agentResponse}
                   </span>
                 ) : voiceState?.isSpeaking ? (
-                  <span className="font-mono text-sm text-claude-accent grep-speaking-shimmer">
+                  <span className="font-mono text-sm text-claude-accent grep-speaking-shimmer block">
                     Speaking...
                   </span>
                 ) : voiceState?.transcript ? (
-                  <span className="font-mono text-sm text-green-400">
+                  <span className="font-mono text-sm text-green-400 block">
                     {voiceState.transcript}
                   </span>
                 ) : (
-                  <span className="font-mono text-sm text-green-400/70">
+                  <span className="font-mono text-sm text-green-400/70 block">
                     Listening...
                   </span>
                 )}

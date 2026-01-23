@@ -477,7 +477,8 @@ ${messageSummary || 'No messages yet'}`;
     };
   }, [hookConnected, isStreaming]);
 
-  // Event-driven status updates - send tool changes to agent for summary
+  // Event-driven status updates - send tool changes as silent context (no verbal prompt)
+  // The agent can reference this if needed, but thinking updates are the primary verbal updates
   const prevToolCallCountRef = useRef<number>(0);
 
   useEffect(() => {
@@ -486,7 +487,7 @@ ${messageSummary || 'No messages yet'}`;
       return;
     }
 
-    // When new tool calls come in, send raw JSON to agent for summarization
+    // When new tool calls come in, send raw JSON as context (silently - no speak)
     const currentCount = currentToolCalls.length;
     if (currentCount > prevToolCallCountRef.current && currentCount > 0) {
       // Get the new tool calls since last update
@@ -501,18 +502,17 @@ ${messageSummary || 'No messages yet'}`;
       const contextJson = JSON.stringify({
         type: 'tool_update',
         toolCalls: rawToolData,
+        note: 'This is background context. Only mention if relevant and not already covered by thinking updates.',
       });
 
-      console.log('[MicrophoneButton] Tool update, sending raw JSON:', contextJson.slice(0, 200));
+      console.log('[MicrophoneButton] Tool update (silent context):', contextJson.slice(0, 200));
 
-      // First send the raw data as context
+      // Send as context only - no verbal prompt for tool calls
+      // Thinking updates are the primary way to communicate what's happening
       updateContext(contextJson);
-
-      // Then ask for a verbal update
-      speak('Please provide a brief verbal update based on the tool calls I just sent you.');
     }
     prevToolCallCountRef.current = currentCount;
-  }, [hookConnected, isStreaming, currentToolCalls, speak, updateContext]);
+  }, [hookConnected, isStreaming, currentToolCalls, updateContext]);
 
   // Announce permission requests vocally
   const prevPermissionRef = useRef<string | null>(null);
@@ -546,64 +546,72 @@ ${messageSummary || 'No messages yet'}`;
     }
   }, [hookConnected, pendingPermission, speak]);
 
-  // Push thinking content updates so the agent can "think out loud"
+  // Push thinking content updates - triggered on sentence completion with 10s minimum interval
   const prevThinkingContentRef = useRef<string>('');
-  const thinkingUpdateThrottleRef = useRef<NodeJS.Timeout | null>(null);
+  const lastSpokenThoughtRef = useRef<string>('');
+  const lastUpdateTimeRef = useRef<number>(0);
+  const prevSentenceCountRef = useRef<number>(0);
 
   useEffect(() => {
     if (!hookConnected || !isStreaming || !currentThinkingContent) {
       // Reset when not streaming or disconnected
       if (!isStreaming) {
         prevThinkingContentRef.current = '';
+        lastSpokenThoughtRef.current = '';
+        lastUpdateTimeRef.current = 0;
+        prevSentenceCountRef.current = 0;
       }
       return;
     }
 
-    // Check if thinking content has meaningfully changed (at least 50 new chars)
-    const newContent = currentThinkingContent.slice(prevThinkingContentRef.current.length);
-    if (newContent.length < 50) {
-      return;
+    // Count complete sentences (ending with . ! or ?)
+    const sentences = currentThinkingContent.split(/[.!?]/).filter(s => s.trim().length > 10);
+    const currentSentenceCount = sentences.length;
+
+    // Check if a new sentence was completed
+    const newSentenceCompleted = currentSentenceCount > prevSentenceCountRef.current;
+    prevSentenceCountRef.current = currentSentenceCount;
+
+    if (!newSentenceCompleted) {
+      return; // No new sentence, wait
     }
 
-    // Throttle thinking updates to avoid overwhelming the agent
-    if (thinkingUpdateThrottleRef.current) {
-      return; // Already have a pending update
+    // Check minimum time interval (10 seconds)
+    const now = Date.now();
+    const timeSinceLastUpdate = now - lastUpdateTimeRef.current;
+    if (timeSinceLastUpdate < 10000) {
+      return; // Too soon, wait for next sentence
     }
 
-    thinkingUpdateThrottleRef.current = setTimeout(() => {
-      thinkingUpdateThrottleRef.current = null;
+    // Get the most recent complete sentences for context
+    const recentThinking = sentences.slice(-2).join('. ').slice(0, 300);
 
-      // Extract the most recent complete sentences from thinking
-      const sentences = currentThinkingContent.split(/[.!?]\n|\n\n/).filter(s => s.trim().length > 10);
-      const recentThinking = sentences.slice(-2).join('. ').slice(0, 200);
+    if (recentThinking.length > 20) {
+      const contextJson = JSON.stringify({
+        type: 'thinking_update',
+        label: 'THINKING',
+        thought: recentThinking,
+        previouslySaid: lastSpokenThoughtRef.current.slice(0, 100),
+      });
 
-      if (recentThinking.length > 20) {
-        const contextJson = JSON.stringify({
-          type: 'thinking_update',
-          label: 'THINKING',
-          thought: recentThinking,
-        });
+      console.log('[MicrophoneButton] Thinking update (sentence + 10s):', recentThinking.slice(0, 100));
+      updateContext(contextJson);
 
-        console.log('[MicrophoneButton] Thinking update:', recentThinking.slice(0, 100));
-        updateContext(contextJson);
-        speak('Brief thinking update. Summarize what Grep is thinking about in a few words.');
+      // Ask for update but remind not to repeat
+      speak('Thinking update received. Briefly summarize what Grep is considering. Do not repeat yourself if you already mentioned this.');
 
-        // Update ref after successful send
-        prevThinkingContentRef.current = currentThinkingContent;
-      }
-    }, 3000); // Throttle: at most one thinking update every 3 seconds
-
-    return () => {
-      if (thinkingUpdateThrottleRef.current) {
-        clearTimeout(thinkingUpdateThrottleRef.current);
-        thinkingUpdateThrottleRef.current = null;
-      }
-    };
+      // Track what we sent and when
+      lastSpokenThoughtRef.current = recentThinking;
+      prevThinkingContentRef.current = currentThinkingContent;
+      lastUpdateTimeRef.current = now;
+    }
   }, [hookConnected, isStreaming, currentThinkingContent, updateContext, speak]);
 
-  // NOTE: Push-based speech updates are now back for thinking content.
-  // Tool updates and permission requests are pushed proactively.
-  // The agent can also poll via get_task_status for comprehensive status.
+  // NOTE: Thinking updates are the PRIMARY verbal communication channel.
+  // - Thinking updates: Triggered on sentence completion, minimum 10s between updates
+  // - Tool calls: Sent as silent context only (no verbal prompt, reduces chattiness)
+  // - Permission requests: Still announced verbally (important for user action)
+  // The agent should prioritize thinking content and avoid repeating itself.
 
   const handleClick = useCallback(async () => {
     if (isConnected) {
