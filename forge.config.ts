@@ -29,6 +29,13 @@ const config: ForgeConfig = {
     // macOS specific
     darwinDarkModeSupport: true,
     appCategoryType: 'public.app-category.developer-tools',
+    // macOS entitlements for microphone access
+    osxSign: {
+      optionsForFile: () => ({
+        entitlements: './entitlements.mac.plist',
+        'entitlements-inherit': './entitlements.mac.plist',
+      }),
+    },
   },
   rebuildConfig: {},
   hooks: {
