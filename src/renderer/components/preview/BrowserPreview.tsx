@@ -151,6 +151,7 @@ export default function BrowserPreview({ session, isVisible = true }: BrowserPre
   const [stagehandUrl, setStagehandUrl] = useState<string | null>(null);
   const [showStagehand, setShowStagehand] = useState(false);
 
+
   // Use per-session inspector state for multi-session support
   const {
     sessionInspectorActive,
@@ -683,8 +684,38 @@ export default function BrowserPreview({ session, isVisible = true }: BrowserPre
             screenshot: screenshotBase64,
           };
 
+          // Generate structured markdown for the element context
+          const elementName = data.reactComponent
+            ? `<${data.reactComponent}>`
+            : `<${data.tagName.toLowerCase()}>`;
+
+          const markdown = `## Selected Element
+
+**Element:** ${elementName}
+**Selector:** \`${data.selector}\`
+${data.id ? `**ID:** \`${data.id}\`\n` : ''}${data.className ? `**Classes:** \`${data.className}\`\n` : ''}**Position:** x=${data.boundingRect.x}, y=${data.boundingRect.y}, width=${data.boundingRect.width}px, height=${data.boundingRect.height}px
+${data.textContent ? `**Text Content:** "${data.textContent.slice(0, 100)}${data.textContent.length > 100 ? '...' : ''}"\n` : ''}
+**Current Page:** ${url}
+
+---
+
+**Your instruction:**
+`;
+
+          console.log('[BrowserPreview] Element selected - populating chat input');
+
+          // Dispatch event to populate chat input with element context
+          const insertEvent = new CustomEvent('grep-insert-chat', {
+            detail: {
+              sessionId: session.id,
+              content: markdown,
+              screenshot: screenshotBase64,
+            },
+          });
+          window.dispatchEvent(insertEvent);
+
+          // Set selected element for inspector panel
           setSelectedElement(elementWithScreenshot);
-          console.log('[BrowserPreview] setSelectedElement called with screenshot');
           setInspectorActive(false);
         } catch (e) {
           console.error('Failed to parse inspector data:', e);
@@ -1245,6 +1276,7 @@ export default function BrowserPreview({ session, isVisible = true }: BrowserPre
             </div>
           </div>
         ))}
+
       </div>
 
       {/* Automation mode footer indicator */}

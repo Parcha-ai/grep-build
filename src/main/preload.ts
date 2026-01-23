@@ -212,6 +212,9 @@ const electronAPI = {
     // Check if session has an active query
     hasActiveQuery: (sessionId: string): Promise<boolean> =>
       ipcRenderer.invoke(IPC_CHANNELS.CLAUDE_HAS_ACTIVE_QUERY, sessionId),
+    // Update permission mode mid-stream (used by GREP IT! button)
+    setPermissionMode: (sessionId: string, mode: string): Promise<void> =>
+      ipcRenderer.invoke(IPC_CHANNELS.CLAUDE_SET_PERMISSION_MODE, sessionId, mode),
   },
 
   // Browser Preview
@@ -471,6 +474,11 @@ const electronAPI = {
       ipcRenderer.invoke(IPC_CHANNELS.AUDIO_GET_OPENAI_KEY),
     setOpenAiKey: (key: string): Promise<{ success: boolean }> =>
       ipcRenderer.invoke(IPC_CHANNELS.AUDIO_SET_OPENAI_KEY, key),
+    // Microphone permission (macOS)
+    checkMicrophonePermission: (): Promise<{ status: string; granted: boolean; canRequest: boolean }> =>
+      ipcRenderer.invoke(IPC_CHANNELS.AUDIO_CHECK_MICROPHONE_PERMISSION),
+    requestMicrophonePermission: (): Promise<{ success: boolean; granted: boolean; error?: string }> =>
+      ipcRenderer.invoke(IPC_CHANNELS.AUDIO_REQUEST_MICROPHONE_PERMISSION),
   },
 
   // Realtime API for streaming transcription

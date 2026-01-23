@@ -548,12 +548,19 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   },
 
   setPermissionMode: (sessionId, mode) => {
+    // Update local state
     set((state) => ({
       permissionMode: {
         ...state.permissionMode,
         [sessionId]: mode,
       },
     }));
+    // Also notify backend for active queries (GREP IT! button mid-stream)
+    if (hasElectronAPI) {
+      window.electronAPI.claude.setPermissionMode(sessionId, mode).catch((err) => {
+        console.error('[SessionStore] Failed to set permission mode on backend:', err);
+      });
+    }
   },
 
   cyclePermissionMode: (sessionId) => {

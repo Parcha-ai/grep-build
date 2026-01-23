@@ -33,6 +33,7 @@ export default function ChatContainer({ session }: ChatContainerProps) {
     subscribeToClaude,
     compactionStatus,
     setPermissionMode,
+    messageQueue,
   } = useSessionStore();
   const { audioModeActive, ttsStates } = useAudioStore();
   const { toggleTerminalPanel, isTerminalPanelOpen } = useUIStore();
@@ -54,6 +55,7 @@ export default function ChatContainer({ session }: ChatContainerProps) {
   const currentPermissionRequest = pendingPermission[session.id] || null;
   const currentQuestionRequest = pendingQuestion[session.id] || null;
   const currentCompactionStatus = compactionStatus[session.id] || null;
+  const queuedMessages = messageQueue[session.id] || [];
 
   // Check if any TTS is actively playing for messages in this session
   const isTTSPlaying = sessionMessages.some(msg => ttsStates[msg.id]?.isPlaying);
@@ -213,6 +215,7 @@ export default function ChatContainer({ session }: ChatContainerProps) {
           streamContent={streamContent}
           streamingToolCalls={streamingToolCalls}
           currentToolCalls={streamingToolCalls}
+          queuedMessages={queuedMessages}
         />
 
         <div ref={messagesEndRef} />

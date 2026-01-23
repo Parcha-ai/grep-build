@@ -343,6 +343,12 @@ export function registerClaudeHandlers(ipcMain: IpcMain): void {
   ipcMain.handle(IPC_CHANNELS.CLAUDE_HAS_ACTIVE_QUERY, async (_, sessionId: string) => {
     return claudeService.hasActiveQuery(sessionId);
   });
+
+  // Update permission mode for an active session (used by GREP IT! button)
+  ipcMain.handle(IPC_CHANNELS.CLAUDE_SET_PERMISSION_MODE, async (_, sessionId: string, mode: string) => {
+    console.log(`[Claude IPC] Setting permission mode for ${sessionId}: ${mode}`);
+    claudeService.setSessionPermissionMode(sessionId, mode);
+  });
 }
 
 // Export the claude service instance so it can be updated with mainWindow reference

@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, protocol, session, net, Menu } from 'electron';
+import { app, BrowserWindow, ipcMain, protocol, session, net, Menu, systemPreferences } from 'electron';
 import * as path from 'path';
 import { pathToFileURL } from 'url';
 
@@ -231,6 +231,28 @@ const createWindow = (): void => {
         ].join('; ')
       }
     });
+  });
+
+  // Handle permission requests for the main window (media, notifications, etc.)
+  session.defaultSession.setPermissionRequestHandler((webContents, permission, callback) => {
+    console.log('[Main] Default session permission requested:', permission);
+    // Allow media (includes microphone/camera) and other necessary permissions
+    // 'media' covers microphone and camera access in Electron
+    if (permission === 'media' || permission === 'notifications') {
+      callback(true);
+    } else {
+      // For other permissions, use default behavior
+      callback(true);
+    }
+  });
+
+  // Also set the permission check handler for synchronous permission checks
+  session.defaultSession.setPermissionCheckHandler((webContents, permission, requestingOrigin) => {
+    // Allow media permissions for the app ('media' covers microphone/camera)
+    if (permission === 'media') {
+      return true;
+    }
+    return true;
   });
 
   // Configure webview partition session for browser preview

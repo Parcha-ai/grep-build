@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { X, Eye, EyeOff, Check, AlertCircle, Save } from 'lucide-react';
+import { X, Eye, EyeOff, Check, AlertCircle, Save, Sparkles } from 'lucide-react';
 import { useUIStore } from '../../stores/ui.store';
 import { useAudioStore } from '../../stores/audio.store';
+import ReleaseNotes from '../common/ReleaseNotes';
 
 export default function SettingsDialog() {
   const { isSettingsOpen, closeSettings } = useUIStore();
@@ -403,6 +404,17 @@ export default function SettingsDialog() {
                 {' '}and paste the agent ID here.
               </p>
             </div>
+          </div>
+
+          {/* Release Notes Section */}
+          <div className="space-y-2 pt-4 border-t border-claude-border">
+            <div className="flex items-center gap-2 mb-3">
+              <Sparkles size={14} className="text-purple-400" />
+              <label className="text-xs font-mono text-claude-text-secondary uppercase tracking-wider">
+                What's New
+              </label>
+            </div>
+            <ReleaseNotes />
           </div>
 
           {/* Save Button */}

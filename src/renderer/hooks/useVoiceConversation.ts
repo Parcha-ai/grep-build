@@ -316,6 +316,36 @@ export const useVoiceConversation = ({
     }
 
     try {
+      // On macOS, check and request microphone permission first
+      // This ensures the system permission dialog is shown before getUserMedia
+      if (window.electronAPI?.audio?.checkMicrophonePermission) {
+        const permStatus = await window.electronAPI.audio.checkMicrophonePermission();
+        console.log('[VoiceConversation] Microphone permission status:', permStatus);
+
+        if (!permStatus.granted) {
+          if (permStatus.canRequest) {
+            // Request permission
+            console.log('[VoiceConversation] Requesting microphone permission...');
+            const result = await window.electronAPI.audio.requestMicrophonePermission();
+            if (!result.granted) {
+              const errorMsg = result.error || 'Microphone access denied';
+              console.error('[VoiceConversation] Microphone permission denied:', errorMsg);
+              setState(s => ({ ...s, error: errorMsg }));
+              onErrorRef.current?.(errorMsg);
+              return;
+            }
+            console.log('[VoiceConversation] Microphone permission granted');
+          } else {
+            // Permission denied or restricted - user needs to enable manually
+            const errorMsg = 'Microphone access denied. Please enable it in System Settings > Privacy & Security > Microphone.';
+            console.error('[VoiceConversation]', errorMsg);
+            setState(s => ({ ...s, error: errorMsg }));
+            onErrorRef.current?.(errorMsg);
+            return;
+          }
+        }
+      }
+
       // Request microphone
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {

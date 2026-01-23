@@ -1,9 +1,18 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import ReactMarkdown from 'react-markdown';
 import MessageBubble from './MessageBubble';
 import ToolCallCard from './ToolCallCard';
+import ReleaseNotes from '../common/ReleaseNotes';
+import { getLatestRelease } from '../../../shared/config/release-notes';
 import type { ChatMessage, ToolCall } from '../../../shared/types';
 import type { StreamEvent } from '../../stores/session.store';
+
+interface QueuedMessage {
+  id: string;
+  message: string;
+  attachments?: unknown[];
+  timestamp: number;
+}
 
 interface MessageListProps {
   messages: ChatMessage[];
@@ -12,6 +21,7 @@ interface MessageListProps {
   streamContent: string;
   streamingToolCalls?: ToolCall[];
   currentToolCalls?: ToolCall[]; // Live-updated tool calls (not snapshots)
+  queuedMessages?: QueuedMessage[];
 }
 
 export default function MessageList({
@@ -21,6 +31,7 @@ export default function MessageList({
   streamContent,
   streamingToolCalls,
   currentToolCalls = [],
+  queuedMessages = [],
 }: MessageListProps) {
   // All hooks must be called before any conditional returns
 
@@ -47,12 +58,52 @@ export default function MessageList({
   // Check if we have any content to show (either messages, streaming content, or streaming tool calls)
   const hasStreamingContent = isStreaming && (streamContent || (streamingToolCalls && streamingToolCalls.length > 0));
 
+  // Track whether to show release notes banner (dismissible)
+  const [showReleaseNotes, setShowReleaseNotes] = useState(true);
+
+  // Check localStorage for dismissed version
+  useEffect(() => {
+    const dismissedVersion = localStorage.getItem('grep-dismissed-release');
+    const latestVersion = getLatestRelease().version;
+    if (dismissedVersion === latestVersion) {
+      setShowReleaseNotes(false);
+    }
+  }, []);
+
+  const handleDismissReleaseNotes = () => {
+    const latestVersion = getLatestRelease().version;
+    localStorage.setItem('grep-dismissed-release', latestVersion);
+    setShowReleaseNotes(false);
+  };
+
   if (messages.length === 0 && !hasStreamingContent) {
     return (
-      <div className="h-full flex items-center justify-center text-claude-text-secondary">
-        <div className="text-center">
-          <p className="text-lg mb-2">Start a conversation</p>
-          <p className="text-sm">Ask questions, request code changes, or get help debugging.</p>
+      <div className="h-full flex flex-col">
+        {/* Release notes banner at top */}
+        {showReleaseNotes && (
+          <ReleaseNotes banner onDismiss={handleDismissReleaseNotes} />
+        )}
+
+        {/* Empty state message */}
+        <div className="flex-1 flex items-center justify-center text-claude-text-secondary">
+          <div className="text-center max-w-md px-4">
+            <div className="text-4xl mb-4">$_</div>
+            <p className="text-lg mb-2 font-bold text-claude-text">Ready to grep</p>
+            <p className="text-sm text-claude-text-secondary">
+              Ask questions, request code changes, or get help debugging.
+            </p>
+            <div className="mt-6 flex flex-wrap justify-center gap-2 text-xs">
+              <span className="px-2 py-1 border border-claude-border text-claude-text-secondary">
+                Tab → cycle modes
+              </span>
+              <span className="px-2 py-1 border border-claude-border text-claude-text-secondary">
+                Cmd+K → quick search
+              </span>
+              <span className="px-2 py-1 border border-claude-border text-claude-text-secondary">
+                Cmd+L → clear chat
+              </span>
+            </div>
+          </div>
         </div>
       </div>
     );
@@ -129,6 +180,44 @@ export default function MessageList({
             }
             return null;
           })}
+        </div>
+      )}
+
+      {/* Queued messages - show as pending user messages */}
+      {queuedMessages.length > 0 && (
+        <div className="space-y-2 mt-4">
+          {queuedMessages.map((queuedMsg, index) => (
+            <div
+              key={queuedMsg.id}
+              className="flex items-start gap-2 p-3 border border-dashed border-claude-border bg-claude-surface/30 opacity-70"
+            >
+              <div className="flex-shrink-0">
+                <div className="w-6 h-6 flex items-center justify-center bg-amber-500/20 border border-amber-500/50">
+                  <span className="text-xs text-amber-400 font-bold">{index + 1}</span>
+                </div>
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2 mb-1">
+                  <span className="text-[10px] font-bold text-amber-400 uppercase" style={{ letterSpacing: '0.05em' }}>
+                    QUEUED
+                  </span>
+                  <span className="text-[10px] text-claude-text-secondary">
+                    Will send after current response
+                  </span>
+                </div>
+                <p className="text-sm text-claude-text break-words" style={{ overflowWrap: 'anywhere' }}>
+                  {queuedMsg.message.length > 200
+                    ? `${queuedMsg.message.slice(0, 200)}...`
+                    : queuedMsg.message}
+                </p>
+                {queuedMsg.attachments && queuedMsg.attachments.length > 0 && (
+                  <div className="mt-1 text-[10px] text-claude-text-secondary">
+                    + {queuedMsg.attachments.length} attachment{queuedMsg.attachments.length > 1 ? 's' : ''}
+                  </div>
+                )}
+              </div>
+            </div>
+          ))}
         </div>
       )}
 

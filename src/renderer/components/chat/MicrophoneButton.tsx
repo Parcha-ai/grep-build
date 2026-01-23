@@ -546,9 +546,64 @@ ${messageSummary || 'No messages yet'}`;
     }
   }, [hookConnected, pendingPermission, speak]);
 
-  // NOTE: Push-based speech updates removed in favor of polling model.
-  // The ElevenLabs agent now calls get_task_status tool to poll for updates.
-  // This is more reliable than trying to push verbatim speech to the agent.
+  // Push thinking content updates so the agent can "think out loud"
+  const prevThinkingContentRef = useRef<string>('');
+  const thinkingUpdateThrottleRef = useRef<NodeJS.Timeout | null>(null);
+
+  useEffect(() => {
+    if (!hookConnected || !isStreaming || !currentThinkingContent) {
+      // Reset when not streaming or disconnected
+      if (!isStreaming) {
+        prevThinkingContentRef.current = '';
+      }
+      return;
+    }
+
+    // Check if thinking content has meaningfully changed (at least 50 new chars)
+    const newContent = currentThinkingContent.slice(prevThinkingContentRef.current.length);
+    if (newContent.length < 50) {
+      return;
+    }
+
+    // Throttle thinking updates to avoid overwhelming the agent
+    if (thinkingUpdateThrottleRef.current) {
+      return; // Already have a pending update
+    }
+
+    thinkingUpdateThrottleRef.current = setTimeout(() => {
+      thinkingUpdateThrottleRef.current = null;
+
+      // Extract the most recent complete sentences from thinking
+      const sentences = currentThinkingContent.split(/[.!?]\n|\n\n/).filter(s => s.trim().length > 10);
+      const recentThinking = sentences.slice(-2).join('. ').slice(0, 200);
+
+      if (recentThinking.length > 20) {
+        const contextJson = JSON.stringify({
+          type: 'thinking_update',
+          label: 'THINKING',
+          thought: recentThinking,
+        });
+
+        console.log('[MicrophoneButton] Thinking update:', recentThinking.slice(0, 100));
+        updateContext(contextJson);
+        speak('Brief thinking update. Summarize what Grep is thinking about in a few words.');
+
+        // Update ref after successful send
+        prevThinkingContentRef.current = currentThinkingContent;
+      }
+    }, 3000); // Throttle: at most one thinking update every 3 seconds
+
+    return () => {
+      if (thinkingUpdateThrottleRef.current) {
+        clearTimeout(thinkingUpdateThrottleRef.current);
+        thinkingUpdateThrottleRef.current = null;
+      }
+    };
+  }, [hookConnected, isStreaming, currentThinkingContent, updateContext, speak]);
+
+  // NOTE: Push-based speech updates are now back for thinking content.
+  // Tool updates and permission requests are pushed proactively.
+  // The agent can also poll via get_task_status for comprehensive status.
 
   const handleClick = useCallback(async () => {
     if (isConnected) {

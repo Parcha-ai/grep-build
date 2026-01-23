@@ -67,6 +67,7 @@ export const IPC_CHANNELS = {
   CLAUDE_PLAN_APPROVAL_RESPONSE: 'claude:plan-approval-response',
   CLAUDE_INJECT_MESSAGE: 'claude:inject-message', // Inject message into active query via streamInput
   CLAUDE_HAS_ACTIVE_QUERY: 'claude:has-active-query', // Check if session has active query
+  CLAUDE_SET_PERMISSION_MODE: 'claude:set-permission-mode', // Update permission mode mid-stream (used by GREP IT! button)
 
   // Browser preview channels
   BROWSER_NAVIGATE: 'browser:navigate',
@@ -129,6 +130,8 @@ export const IPC_CHANNELS = {
   AUDIO_SET_ELEVENLABS_KEY: 'audio:set-elevenlabs-key',
   AUDIO_GET_OPENAI_KEY: 'audio:get-openai-key',
   AUDIO_SET_OPENAI_KEY: 'audio:set-openai-key',
+  AUDIO_REQUEST_MICROPHONE_PERMISSION: 'audio:request-microphone-permission', // macOS microphone permission
+  AUDIO_CHECK_MICROPHONE_PERMISSION: 'audio:check-microphone-permission', // Check if microphone permission granted
 
   // Realtime transcription channels
   REALTIME_CONNECT: 'realtime:connect',

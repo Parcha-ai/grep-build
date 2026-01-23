@@ -246,6 +246,83 @@ export default function InputArea({ sessionId, disabled, systemInfo, isStreaming
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [showModelDropdown]);
 
+  // Listen for insert-chat events from browser preview annotations (legacy - inserts into input)
+  useEffect(() => {
+    const handleInsertChat = (event: CustomEvent<{ sessionId: string; content: string; screenshot?: string }>) => {
+      const { sessionId: targetSessionId, content, screenshot } = event.detail;
+      if (targetSessionId !== sessionId) return;
+
+      console.log('[InputArea] Received grep-insert-chat event:', content.slice(0, 100));
+
+      // Insert the content into the message input
+      setMessage(prev => {
+        // If there's existing content, add a newline before the new content
+        if (prev.trim()) {
+          return prev + '\n\n' + content;
+        }
+        return content;
+      });
+
+      // If there's a screenshot, add it as an attachment
+      if (screenshot) {
+        setAttachments(prev => [
+          ...prev,
+          {
+            type: 'image',
+            name: 'element-screenshot.png',
+            content: screenshot,
+          },
+        ]);
+      }
+
+      // Focus the textarea
+      setTimeout(() => {
+        textareaRef.current?.focus();
+      }, 100);
+    };
+
+    window.addEventListener('grep-insert-chat', handleInsertChat as EventListener);
+    return () => window.removeEventListener('grep-insert-chat', handleInsertChat as EventListener);
+  }, [sessionId]);
+
+  // Listen for send-annotation events - sends IMMEDIATELY AND populates input for editing option
+  useEffect(() => {
+    const handleSendAnnotation = (event: CustomEvent<{ sessionId: string; content: string; screenshot?: string; alsoPopulateInput?: boolean }>) => {
+      const { sessionId: targetSessionId, content, screenshot, alsoPopulateInput } = event.detail;
+      if (targetSessionId !== sessionId) return;
+
+      console.log('[InputArea] Received grep-send-annotation event - sending immediately');
+
+      // Build attachments array if there's a screenshot
+      const annotationAttachments: Attachment[] = [];
+      if (screenshot) {
+        annotationAttachments.push({
+          type: 'image',
+          name: 'element-screenshot.png',
+          content: screenshot,
+        });
+      }
+
+      // Send the message immediately
+      sendMessage(sessionId, content, annotationAttachments.length > 0 ? annotationAttachments : undefined);
+
+      // Also populate the input and attachments so user can see/edit for next annotation
+      if (alsoPopulateInput) {
+        setMessage(content);
+        if (screenshot) {
+          setAttachments([{
+            type: 'image',
+            name: 'element-screenshot.png',
+            content: screenshot,
+          }]);
+        }
+      }
+    };
+
+    window.addEventListener('grep-send-annotation', handleSendAnnotation as EventListener);
+    return () => window.removeEventListener('grep-send-annotation', handleSendAnnotation as EventListener);
+  }, [sessionId, sendMessage]);
+
   // Extract current todos from the most recent TodoWrite tool call
   const currentTodos = useMemo((): TodoItem[] => {
     // First check current streaming tool calls

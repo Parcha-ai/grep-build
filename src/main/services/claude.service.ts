@@ -63,6 +63,7 @@ export class ClaudeService {
   private sessionStore: any;
   private activeQueries: Map<string, AbortController> = new Map();
   private activeQueryObjects: Map<string, Query> = new Map(); // Store Query objects for streamInput
+  private sessionPermissionModes: Map<string, string> = new Map(); // Track current permission mode per session
   private pendingQuestions: Map<string, PendingQuestion> = new Map();
   private pendingPermissions: Map<string, PendingPermission> = new Map();
   private pendingPlanApprovals: Map<string, PendingPlanApproval> = new Map();
@@ -76,6 +77,22 @@ export class ClaudeService {
 
   setMainWindow(window: BrowserWindow | null): void {
     this.mainWindow = window;
+  }
+
+  /**
+   * Update the permission mode for an active session
+   * This allows changing from 'default' to 'bypassPermissions' mid-stream
+   */
+  setSessionPermissionMode(sessionId: string, mode: string): void {
+    console.log(`[Claude Service] Setting permission mode for ${sessionId}: ${mode}`);
+    this.sessionPermissionModes.set(sessionId, mode);
+  }
+
+  /**
+   * Get the current permission mode for a session
+   */
+  getSessionPermissionMode(sessionId: string): string | undefined {
+    return this.sessionPermissionModes.get(sessionId);
   }
 
   /**
@@ -1252,6 +1269,9 @@ export class ClaudeService {
         ? (permissionMode as SDKPermissionMode)
         : 'acceptEdits';
 
+      // Store the initial permission mode for this session (can be updated mid-stream via GREP IT!)
+      this.sessionPermissionModes.set(sessionId, sdkPermissionMode);
+
       // Check if bypassPermissions mode requires the danger flag
       const requiresDangerFlag = sdkPermissionMode === 'bypassPermissions';
 
@@ -1474,8 +1494,12 @@ You are intelligent enough to determine what URLs to test based on the project s
               }
             }
 
+            // Check the CURRENT permission mode (may have changed via GREP IT! button)
+            const currentPermissionMode = this.getSessionPermissionMode(sessionId) || sdkPermissionMode;
+            console.log(`[Claude Service] Permission check - initial mode: ${sdkPermissionMode}, current mode: ${currentPermissionMode}`);
+
             // In plan mode, deny write operations
-            if (sdkPermissionMode === 'plan') {
+            if (currentPermissionMode === 'plan') {
               const writeTools = ['Write', 'Edit', 'Bash', 'NotebookEdit', 'TodoWrite'];
               if (writeTools.includes(toolName)) {
                 console.log(`[Claude Service] Plan mode - denying write tool: ${toolName}`);
@@ -1486,10 +1510,15 @@ You are intelligent enough to determine what URLs to test based on the project s
               }
             }
 
+            // In 'bypassPermissions' mode, allow everything without asking
+            if (currentPermissionMode === 'bypassPermissions') {
+              console.log(`[Claude Service] Bypass permissions mode - auto-allowing: ${toolName}`);
+              return { behavior: 'allow' as const, updatedInput: input };
+            }
+
             // In 'default' mode, ask user for permission on tools that modify filesystem
             // In 'acceptEdits' mode, only ask for Bash commands (edits are auto-approved)
-            // In 'bypassPermissions' mode, allow everything without asking
-            if (sdkPermissionMode === 'default') {
+            if (currentPermissionMode === 'default') {
               // Default mode: ask for permission on all modifying tools
               const modifyingTools = ['Write', 'Edit', 'Bash', 'NotebookEdit', 'MultiEdit'];
               if (modifyingTools.includes(toolName)) {
@@ -1515,7 +1544,7 @@ You are intelligent enough to determine what URLs to test based on the project s
                   };
                 }
               }
-            } else if (sdkPermissionMode === 'acceptEdits') {
+            } else if (currentPermissionMode === 'acceptEdits') {
               // Accept edits mode: only ask for Bash commands
               if (toolName === 'Bash') {
                 try {
