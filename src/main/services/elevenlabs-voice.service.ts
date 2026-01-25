@@ -65,6 +65,14 @@ interface ConversationInitClientData {
           prompt: string;
         };
       };
+      turn?: {
+        mode?: 'turn_based' | 'simultaneous';
+        turn_timeout?: number;
+      };
+      tts?: {
+        stability?: number;
+        similarity_boost?: number;
+      };
     };
     custom_llm_extra_body?: Record<string, unknown>;
   };
@@ -186,6 +194,15 @@ export class ElevenLabsVoiceService extends EventEmitter {
    */
   async connect(config: VoiceSessionConfig): Promise<void> {
     const { agentId, systemPrompt, sessionContext } = config;
+
+    // Disconnect any existing connection first to prevent duplicates
+    if (this.ws) {
+      console.log('[ElevenLabsVoice] Closing existing connection before reconnecting');
+      this.ws.close();
+      this.ws = null;
+      this.isConnected = false;
+    }
+
     this.agentId = agentId;
 
     return new Promise(async (resolve, reject) => {
@@ -213,6 +230,7 @@ export class ElevenLabsVoiceService extends EventEmitter {
             type: 'conversation_initiation_client_data',
           };
 
+          // Set up conversation config if needed
           if (systemPrompt || sessionContext) {
             initData.conversation_initiation_client_data = {};
 

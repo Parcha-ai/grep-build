@@ -68,11 +68,22 @@ export const useVoiceConversation = ({
   const isPlayingRef = useRef(false);
   const playbackContextRef = useRef<AudioContext | null>(null);
 
+  // Track if listeners have been set up to prevent duplicates
+  const listenersSetupRef = useRef(false);
+
+  // Track speaking state for muting mic during playback (prevent feedback loop)
+  const isSpeakingRef = useRef(false);
+
   // Refs for callbacks to avoid stale closures
   const onTranscriptRef = useRef(onTranscript);
   const onClaudeResponseRef = useRef(onClaudeResponse);
   const onErrorRef = useRef(onError);
   const onToolCallRef = useRef(onToolCall);
+
+  // Keep track of last received events to deduplicate
+  const lastAgentResponseRef = useRef<string>('');
+  const lastAgentResponseTimeRef = useRef<number>(0);
+  const processedAudioEventIdsRef = useRef<Set<number>>(new Set());
 
   // Keep refs updated
   onTranscriptRef.current = onTranscript;
@@ -84,7 +95,18 @@ export const useVoiceConversation = ({
    * Set up event listeners
    */
   const setupListeners = useCallback(() => {
+    // Prevent duplicate listener setup
+    if (listenersSetupRef.current) {
+      console.log('[VoiceConversation] Listeners already set up, skipping');
+      return;
+    }
+
+    // Clean up any existing listeners first to prevent duplicates
+    cleanupFunctionsRef.current.forEach(fn => fn());
+    cleanupFunctionsRef.current = [];
+
     console.log('[VoiceConversation] Setting up listeners');
+    listenersSetupRef.current = true;
 
     const unsubConnected = window.electronAPI.voice.onConnected(() => {
       console.log('[VoiceConversation] Connected');
@@ -113,12 +135,34 @@ export const useVoiceConversation = ({
     cleanupFunctionsRef.current.push(unsubTranscript);
 
     const unsubAgentResponse = window.electronAPI.voice.onAgentResponse((text) => {
+      // Deduplicate agent responses - ignore if same text within 500ms
+      const now = Date.now();
+      if (text === lastAgentResponseRef.current && now - lastAgentResponseTimeRef.current < 500) {
+        console.log('[VoiceConversation] Ignoring duplicate agent response:', text.slice(0, 50));
+        return;
+      }
+      lastAgentResponseRef.current = text;
+      lastAgentResponseTimeRef.current = now;
+
       console.log('[VoiceConversation] Agent response:', text);
       onClaudeResponseRef.current?.(text);
     });
     cleanupFunctionsRef.current.push(unsubAgentResponse);
 
     const unsubAudio = window.electronAPI.voice.onAudioChunk(async (data) => {
+      // Deduplicate audio events by event ID
+      if (processedAudioEventIdsRef.current.has(data.eventId)) {
+        console.log('[VoiceConversation] Ignoring duplicate audio event:', data.eventId);
+        return;
+      }
+      processedAudioEventIdsRef.current.add(data.eventId);
+
+      // Clean up old event IDs to prevent memory leak (keep last 100)
+      if (processedAudioEventIdsRef.current.size > 100) {
+        const idsArray = Array.from(processedAudioEventIdsRef.current);
+        processedAudioEventIdsRef.current = new Set(idsArray.slice(-50));
+      }
+
       // Queue audio for playback
       const audioData = new Uint8Array(data.data);
       await queueAudioForPlayback(audioData);
@@ -177,6 +221,11 @@ export const useVoiceConversation = ({
     console.log('[VoiceConversation] Cleaning up listeners');
     cleanupFunctionsRef.current.forEach(fn => fn());
     cleanupFunctionsRef.current = [];
+    listenersSetupRef.current = false;
+    // Reset deduplication refs
+    lastAgentResponseRef.current = '';
+    lastAgentResponseTimeRef.current = 0;
+    processedAudioEventIdsRef.current.clear();
   }, []);
 
   /**
@@ -205,6 +254,7 @@ export const useVoiceConversation = ({
 
       audioQueueRef.current.push(audioBuffer);
       setState(s => ({ ...s, isSpeaking: true }));
+      isSpeakingRef.current = true;  // Mute mic input while speaking
       playNextAudio();
     } catch (e) {
       console.error('[VoiceConversation] Failed to process audio:', e);
@@ -218,6 +268,13 @@ export const useVoiceConversation = ({
     if (isPlayingRef.current || audioQueueRef.current.length === 0) {
       if (audioQueueRef.current.length === 0) {
         setState(s => ({ ...s, isSpeaking: false }));
+        // Add a small delay before re-enabling mic to avoid echo/feedback
+        setTimeout(() => {
+          // Only re-enable if still not speaking (no new audio queued)
+          if (audioQueueRef.current.length === 0 && !isPlayingRef.current) {
+            isSpeakingRef.current = false;
+          }
+        }, 300);
       }
       return;
     }
@@ -225,6 +282,7 @@ export const useVoiceConversation = ({
     if (!playbackContextRef.current) return;
 
     isPlayingRef.current = true;
+    isSpeakingRef.current = true;  // Mute mic during playback
     const audioBuffer = audioQueueRef.current.shift()!;
     const source = playbackContextRef.current.createBufferSource();
     source.buffer = audioBuffer;
@@ -244,6 +302,7 @@ export const useVoiceConversation = ({
   const stopPlayback = useCallback(() => {
     audioQueueRef.current = [];
     isPlayingRef.current = false;
+    isSpeakingRef.current = false;  // Re-enable mic input
     setState(s => ({ ...s, isSpeaking: false }));
   }, []);
 
@@ -370,6 +429,14 @@ export const useVoiceConversation = ({
 
       processor.onaudioprocess = async (event) => {
         if (!isConnectedRef.current) return;
+
+        // Skip sending audio while agent is speaking to prevent feedback loop
+        // The agent's voice output can be picked up by the mic and cause self-triggering
+        if (isSpeakingRef.current) {
+          // Still update audio level to 0 for UI feedback
+          setState(s => ({ ...s, audioLevel: 0 }));
+          return;
+        }
 
         const inputData = event.inputBuffer.getChannelData(0);
 

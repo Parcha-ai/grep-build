@@ -101,12 +101,35 @@ export const MicrophoneButton = forwardRef<VoiceModeHandle, MicrophoneButtonProp
   const pendingPermission = useSessionStore((state) => state.pendingPermission[sessionId]);
 
   // Generate context summary for ElevenLabs agent
-  const generateContextSummary = useCallback(() => {
+  const generateContextSummary = useCallback((isInitial = false) => {
     const recentMessages = messages.slice(-5);
     const messageSummary = recentMessages
-      .map(m => `${m.role}: ${(m.content as string)?.slice(0, 100) || '[tool/media content]'}`)
+      .map(m => {
+        const content = typeof m.content === 'string' ? m.content : JSON.stringify(m.content);
+        return `${m.role}: ${content.slice(0, 150)}${content.length > 150 ? '...' : ''}`;
+      })
       .join('\n');
 
+    // Extract project name from path
+    const projectName = session?.repoPath?.split('/').pop() || session?.name || 'unknown project';
+
+    if (isInitial) {
+      // Rich initial context for when voice mode first connects
+      return `INITIAL SESSION CONTEXT:
+You are now connected as the voice assistant for Grep (an AI coding tool).
+
+PROJECT: ${projectName}
+WORKING DIRECTORY: ${session?.repoPath || 'unknown'}
+BRANCH: ${session?.branch || 'main'}
+STATUS: ${isStreaming ? 'Grep is currently working on a task' : 'Grep is idle, ready for instructions'}
+
+RECENT CONVERSATION (last ${recentMessages.length} messages):
+${messageSummary || 'No conversation yet - this is a fresh session'}
+
+You should greet the user briefly and ask how you can help with their coding work on ${projectName}.`;
+    }
+
+    // Standard update context
     return `Current Grep Session Context:
 - Working directory: ${session?.repoPath || 'unknown'}
 - Branch: ${session?.branch || 'unknown'}
@@ -367,15 +390,18 @@ ${messageSummary || 'No messages yet'}`;
   const generateContextRef = useRef(generateContextSummary);
   generateContextRef.current = generateContextSummary;
 
-  // Send initial context when connected
+  // Send initial context when connected - includes rich context for proper greeting
   useEffect(() => {
     console.log('[MicrophoneButton] Connection effect fired, hookConnected:', hookConnected);
     if (hookConnected) {
-      const context = generateContextRef.current();
-      console.log('[MicrophoneButton] Sending initial context, preview:', context.slice(0, 100));
+      // Send rich initial context - this gives the agent all the information it needs
+      const context = generateContextRef.current(true);
+      console.log('[MicrophoneButton] Sending initial context, preview:', context.slice(0, 200));
       updateContext(context);
+      // Note: We don't send a greeting speak() anymore - let user initiate conversation
+      // The initial context is enough for the agent to understand the session state
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks-exhaustive-deps
   }, [hookConnected]);
 
   // Helper to summarize assistant response for voice announcements
@@ -427,13 +453,9 @@ ${messageSummary || 'No messages yet'}`;
           });
           updateContext(completionData);
 
-          // Ask for verbal summary - delay if agent is currently speaking to avoid overlap
-          const completionMessage = 'Grep has completed the task. Provide a SPECIFIC summary of what was done - mention exact files modified, functions created, or actions taken. For example: "Grep updated the login component to add validation" not just "the task is done". Be concrete.';
+          // Brief completion prompt - let agent summarize naturally
           if (!isSpeaking) {
-            speak(completionMessage);
-          } else {
-            // Delay speak request to allow current speech to finish
-            setTimeout(() => speak(completionMessage), 3000);
+            speak('Task complete. Give a brief summary.');
           }
         } else {
           // Still streaming - just a progress update (no speak needed)
@@ -520,14 +542,33 @@ ${messageSummary || 'No messages yet'}`;
     prevToolCallCountRef.current = currentCount;
   }, [hookConnected, isStreaming, currentToolCalls, updateContext]);
 
-  // Announce permission requests vocally
+  // Announce permission requests vocally and notify when approved/denied
   const prevPermissionRef = useRef<string | null>(null);
+  const hadPendingPermissionRef = useRef<boolean>(false);
 
   useEffect(() => {
-    if (!hookConnected || !pendingPermission) {
+    if (!hookConnected) {
+      prevPermissionRef.current = null;
+      hadPendingPermissionRef.current = false;
+      return;
+    }
+
+    // Check if permission was just resolved (had one, now gone)
+    if (hadPendingPermissionRef.current && !pendingPermission) {
+      console.log('[MicrophoneButton] Permission resolved, notifying agent');
+      updateContext(JSON.stringify({ type: 'permission_resolved', status: 'approved' }));
+      speak('Permission granted. Grep is continuing.');
+      hadPendingPermissionRef.current = false;
       prevPermissionRef.current = null;
       return;
     }
+
+    if (!pendingPermission) {
+      return;
+    }
+
+    // Track that we have a pending permission
+    hadPendingPermissionRef.current = true;
 
     // Only announce if this is a new permission request
     const permissionId = pendingPermission.requestId;
@@ -548,97 +589,64 @@ ${messageSummary || 'No messages yet'}`;
       }
 
       console.log('[MicrophoneButton] Permission request, announcing:', announcement);
-      speak(`Please provide an update to me. ${announcement}. Tell me that Grep needs permission to proceed.`);
+      speak(`${announcement}. Tell me that Grep needs permission to proceed.`);
     }
-  }, [hookConnected, pendingPermission, speak]);
+  }, [hookConnected, pendingPermission, speak, updateContext]);
 
-  // Push thinking content updates - triggered on sentence completion with 10s minimum interval
-  // IMPORTANT: Don't call speak() while agent is already speaking to avoid overlap
+  // Silent thinking context updates - NO forced speak() calls
+  // The agent decides when to speak based on significant moments:
+  // - Discoveries or interesting findings
+  // - Changes in direction or approach
+  // - Important progress updates
   const prevThinkingContentRef = useRef<string>('');
-  const lastSpokenThoughtRef = useRef<string>('');
-  const lastUpdateTimeRef = useRef<number>(0);
-  const prevSentenceCountRef = useRef<number>(0);
-  const pendingSpeakRef = useRef<boolean>(false);
-
-  // When agent finishes speaking, check if we have a pending speak request
-  useEffect(() => {
-    if (!isSpeaking && pendingSpeakRef.current && hookConnected) {
-      console.log('[MicrophoneButton] Agent finished speaking, sending queued speak request');
-      pendingSpeakRef.current = false;
-      speak('You have new thinking updates. Provide a SPECIFIC update on what Grep is doing - mention exact files, functions, or steps. Be concrete. Do not repeat yourself.');
-    }
-  }, [isSpeaking, hookConnected, speak]);
+  const lastContextUpdateRef = useRef<number>(0);
 
   useEffect(() => {
     if (!hookConnected || !isStreaming || !currentThinkingContent) {
-      // Reset when not streaming or disconnected
       if (!isStreaming) {
         prevThinkingContentRef.current = '';
-        lastSpokenThoughtRef.current = '';
-        lastUpdateTimeRef.current = 0;
-        prevSentenceCountRef.current = 0;
-        pendingSpeakRef.current = false;
+        lastContextUpdateRef.current = 0;
       }
       return;
     }
 
-    // Count complete sentences (ending with . ! or ?)
-    const sentences = currentThinkingContent.split(/[.!?]/).filter(s => s.trim().length > 10);
-    const currentSentenceCount = sentences.length;
-
-    // Check if a new sentence was completed
-    const newSentenceCompleted = currentSentenceCount > prevSentenceCountRef.current;
-    prevSentenceCountRef.current = currentSentenceCount;
-
-    if (!newSentenceCompleted) {
-      return; // No new sentence, wait
-    }
-
-    // Check minimum time interval (10 seconds)
+    // Throttle context updates to every 5 seconds
     const now = Date.now();
-    const timeSinceLastUpdate = now - lastUpdateTimeRef.current;
-    if (timeSinceLastUpdate < 10000) {
-      return; // Too soon, wait for next sentence
+    if (now - lastContextUpdateRef.current < 5000) {
+      return;
     }
 
-    // Get the most recent complete sentences for context
-    const recentThinking = sentences.slice(-2).join('. ').slice(0, 300);
+    // Check for meaningful new content
+    const newContent = currentThinkingContent.slice(prevThinkingContentRef.current.length);
+    if (newContent.length < 100) {
+      return;
+    }
 
-    if (recentThinking.length > 20) {
+    // Get recent thinking for context
+    const sentences = currentThinkingContent.split(/[.!?]/).filter(s => s.trim().length > 10);
+    const recentThinking = sentences.slice(-3).join('. ').slice(0, 500);
+
+    if (recentThinking.length > 30) {
+      // Send context silently - agent decides when to speak
       const contextJson = JSON.stringify({
         type: 'thinking_update',
-        label: 'THINKING',
         thought: recentThinking,
-        previouslySaid: lastSpokenThoughtRef.current.slice(0, 100),
+        instruction: 'Only speak if you notice something significant: a discovery, a change in approach, or important progress. Stay quiet for routine work.',
       });
 
-      console.log('[MicrophoneButton] Thinking update (sentence + 10s):', recentThinking.slice(0, 100));
-
-      // Always send context update
+      console.log('[MicrophoneButton] Silent thinking context update');
       updateContext(contextJson);
 
-      // Only call speak() if agent is NOT currently speaking
-      if (!isSpeaking) {
-        speak('Thinking update received. Provide a SPECIFIC update on what Grep is doing - mention the exact approach, specific files, function names, or steps being taken. For example: "Grep is now reading the config file to find the database settings" not "Grep is thinking about the configuration". Be concrete and detailed. Do not repeat yourself.');
-      } else {
-        // Queue the speak request for when agent finishes
-        console.log('[MicrophoneButton] Agent is speaking, queueing speak request');
-        pendingSpeakRef.current = true;
-      }
-
-      // Track what we sent and when
-      lastSpokenThoughtRef.current = recentThinking;
       prevThinkingContentRef.current = currentThinkingContent;
-      lastUpdateTimeRef.current = now;
+      lastContextUpdateRef.current = now;
     }
-  }, [hookConnected, isStreaming, currentThinkingContent, isSpeaking, updateContext, speak]);
+  }, [hookConnected, isStreaming, currentThinkingContent, updateContext]);
 
-  // NOTE: Speech debouncing to avoid overlapping audio:
-  // - Thinking updates: Only speak() if agent is NOT speaking, otherwise queue for later
-  // - Tool calls: Silent context only (no speak)
-  // - Permission requests: Speak immediately (important, can interrupt)
-  // - Task completion: Speak immediately if not speaking, otherwise delay 3s
-  // Context updates are always sent regardless of speaking state.
+  // NOTE: Minimal speech approach - let agent decide when to speak
+  // - Thinking updates: Silent context only, agent speaks when significant
+  // - Tool calls: Silent context only
+  // - Permission requests: Speak (needs user action)
+  // - Task completion: Brief natural prompt
 
   const handleClick = useCallback(async () => {
     if (isConnected) {

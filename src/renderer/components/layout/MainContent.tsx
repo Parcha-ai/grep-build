@@ -125,19 +125,21 @@ export default function MainContent() {
 
     const container = e.currentTarget.parentElement as HTMLElement;
 
-    // Prevent text selection and iframes from capturing mouse events during drag
+    // Prevent text selection during drag
     document.body.style.userSelect = 'none';
     document.body.style.cursor = 'col-resize';
-    document.body.style.pointerEvents = 'none';
-    // Re-enable pointer events on body itself so we can track mouse
-    (e.currentTarget.parentElement as HTMLElement).style.pointerEvents = 'auto';
+
+    // Create an overlay to capture mouse events (prevents iframes from stealing them)
+    const overlay = document.createElement('div');
+    overlay.id = 'panel-resize-overlay';
+    overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;z-index:9999;cursor:col-resize';
+    document.getElementById('panel-resize-overlay')?.remove();
+    document.body.appendChild(overlay);
 
     const handleMouseMove = (e: MouseEvent) => {
-      // Get fresh rect on each move for accuracy
       const containerRect = container.getBoundingClientRect();
       const mouseX = e.clientX - containerRect.left;
       const ratio = (mouseX / containerRect.width) * 100;
-      // Constrain between 20% and 80%
       const newRatio = Math.max(20, Math.min(80, ratio));
       setCustomSplitRatio(newRatio);
     };
@@ -146,7 +148,7 @@ export default function MainContent() {
       setIsPanelResizing(false);
       document.body.style.userSelect = '';
       document.body.style.cursor = '';
-      document.body.style.pointerEvents = '';
+      overlay.remove();
       document.removeEventListener('mousemove', handleMouseMove);
       document.removeEventListener('mouseup', handleMouseUp);
     };
@@ -194,13 +196,9 @@ export default function MainContent() {
         <div
           className="flex flex-col overflow-hidden min-w-0 transition-all duration-200"
           style={{
-            flexBasis: hasSidePanel
-              ? (viewportMode === 'mobile' && isBrowserPanelOpen && !isGitPanelOpen && !isEditorOpen && !isExtensionsPanelOpen && !isPlanPanelOpen)
-                ? 'auto'  // Let it grow to fill remaining space
-                : flexBasis.main
-              : '100%',
-            flexShrink: 0,
-            flexGrow: (viewportMode === 'mobile' && isBrowserPanelOpen && !isGitPanelOpen && !isEditorOpen && !isExtensionsPanelOpen && !isPlanPanelOpen) ? 1 : 0,
+            flexBasis: hasSidePanel ? flexBasis.main : '100%',
+            flexShrink: 1,
+            flexGrow: 1,
           }}
         >
           {isSessionSetup ? (
@@ -222,8 +220,10 @@ export default function MainContent() {
             >
               {/* Viewport toggle button - appears on hover */}
               <button
+                onMouseDown={(e) => e.stopPropagation()}
                 onClick={(e) => {
                   e.stopPropagation();
+                  setCustomSplitRatio(null); // Reset any custom drag ratio
                   toggleViewportMode();
                 }}
                 className="p-0.5 my-1 rounded hover:bg-claude-surface-hover text-claude-text-secondary hover:text-claude-accent transition-colors opacity-0 group-hover:opacity-100"
@@ -251,7 +251,7 @@ export default function MainContent() {
               }}
             >
               {/* Left side of side panel: Browser, Git, Editor (stacked vertically) */}
-              <div className={`flex flex-col overflow-hidden ${isExtensionsPanelOpen && isBrowserPanelOpen ? 'flex-1' : 'w-full'}`}>
+              <div className={`flex flex-col overflow-hidden ${isExtensionsPanelOpen && isBrowserPanelOpen ? 'flex-1' : 'w-full h-full'}`}>
                 {/* Browser panel - renders multiple BrowserPreview instances for multi-session support */}
                 {isBrowserPanelOpen && (
                   <div className={`flex flex-col overflow-hidden ${isGitPanelOpen || isEditorOpen ? 'flex-1' : 'h-full'}`}>

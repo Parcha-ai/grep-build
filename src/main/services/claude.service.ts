@@ -2034,7 +2034,33 @@ You are intelligent enough to determine what URLs to test based on the project s
       yield { type: 'message_complete', message };
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      yield { type: 'error', error: errorMessage };
+
+      // Check if this is the thinking blocks corruption error
+      if (errorMessage.includes('thinking or redacted_thinking blocks') ||
+          errorMessage.includes('cannot be modified')) {
+        console.error('[Claude SDK] Thinking blocks corrupted (caught in exception):', sessionId);
+        const sdkSessionId = this.sessionStore.get(`sessions.${sessionId}.sdkSessionId`) as string | undefined;
+
+        // Attempt to repair the transcript
+        const repaired = await this.repairCorruptedTranscript(sessionId, sdkSessionId);
+
+        if (repaired) {
+          yield {
+            type: 'error',
+            error: '⚠️ Session had corrupted thinking data. The transcript has been repaired - please try your message again.'
+          };
+        } else {
+          // If repair failed, clear SDK session ID to start fresh
+          this.sessionStore.delete(`sessions.${sessionId}.sdkSessionId`);
+          this.sessionStore.delete(`sdkSessionMappings.${sessionId}`);
+          yield {
+            type: 'error',
+            error: '⚠️ Session had corrupted thinking data. Starting fresh session - please try your message again.'
+          };
+        }
+      } else {
+        yield { type: 'error', error: errorMessage };
+      }
     } finally {
       this.activeQueries.delete(sessionId);
       this.activeQueryObjects.delete(sessionId);

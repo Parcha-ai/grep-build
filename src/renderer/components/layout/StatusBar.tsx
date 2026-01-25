@@ -62,15 +62,13 @@ export default function StatusBar() {
   // Listen for branch change events from the file system watcher
   useEffect(() => {
     const unsubscribe = window.electronAPI.git.onBranchChanged(({ sessionId, branch }) => {
-      if (sessionId === activeSessionId) {
-        console.log(`[StatusBar] Branch changed via fs.watch: ${branch}`);
-        // Update the session store with the new branch
-        updateSession(sessionId, { branch });
-      }
+      console.log(`[StatusBar] Branch changed via fs.watch for session ${sessionId}: ${branch}`);
+      // Update the session store with the new branch (for any session, not just active)
+      updateSession(sessionId, { branch });
     });
 
     return unsubscribe;
-  }, [activeSessionId, updateSession]);
+  }, [updateSession]);
 
   // Track active Task tool calls (subagents)
   const activeTaskTools = useMemo(() => {

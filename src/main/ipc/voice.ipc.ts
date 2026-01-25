@@ -7,6 +7,9 @@ export function registerVoiceHandlers(ipcMain: IpcMain): void {
   console.log('[Voice IPC] Registering voice handlers...');
   const voiceService = getElevenLabsVoiceService();
 
+  // Remove any existing listeners to prevent duplicates (important for hot reload)
+  voiceService.removeAllListeners();
+
   // Set up event listeners to relay to renderer
   voiceService.on('connected', () => {
     console.log('[Voice IPC] Relaying connected event');
