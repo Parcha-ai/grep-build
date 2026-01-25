@@ -17,6 +17,7 @@ export const IPC_CHANNELS = {
   SESSION_GET: 'session:get',
   SESSION_UPDATE: 'session:update',
   SESSION_STATUS_CHANGED: 'session:status-changed',
+  SESSION_LIST_UPDATED: 'session:list-updated',
 
   // Docker channels
   DOCKER_STATUS: 'docker:status',

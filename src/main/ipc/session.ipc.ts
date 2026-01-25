@@ -17,6 +17,14 @@ export function registerSessionHandlers(ipcMain: IpcMain): void {
     }
   });
 
+  // Subscribe to sessions list updates (from background discovery)
+  sessionService.on('sessionsUpdated', (sessions) => {
+    const mainWindow = getMainWindow();
+    if (mainWindow) {
+      mainWindow.webContents.send(IPC_CHANNELS.SESSION_LIST_UPDATED, sessions);
+    }
+  });
+
   ipcMain.handle(IPC_CHANNELS.SESSION_CREATE, async (_, config) => {
     return sessionService.createSession(config);
   });

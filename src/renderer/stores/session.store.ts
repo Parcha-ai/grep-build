@@ -334,13 +334,25 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
   subscribeToSessionChanges: () => {
     if (!hasElectronAPI) return () => {};
-    const unsubscribe = window.electronAPI.sessions.onStatusChanged((session) => {
+
+    // Subscribe to individual session status changes
+    const unsubscribeStatus = window.electronAPI.sessions.onStatusChanged((session) => {
       if (!session?.id) return;
       set((state) => ({
         sessions: state.sessions.map((s) => (s.id === session.id ? session : s)),
       }));
     });
-    return unsubscribe;
+
+    // Subscribe to full session list updates (from background discovery)
+    const unsubscribeList = window.electronAPI.sessions.onListUpdated((sessions) => {
+      console.log('[SessionStore] Received sessions update from background discovery:', sessions.length);
+      set({ sessions, isLoadingSessions: false });
+    });
+
+    return () => {
+      unsubscribeStatus();
+      unsubscribeList();
+    };
   },
 
   // Chat methods

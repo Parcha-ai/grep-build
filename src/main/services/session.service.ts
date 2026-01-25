@@ -43,6 +43,8 @@ export class SessionService extends EventEmitter {
   private discoveredSessionsCache: Map<string, Session> = new Map();
   private lastDiscoveryTime: number = 0;
   private readonly DISCOVERY_CACHE_TTL = 60000; // 1 minute cache
+  private isInitialLoadDone: boolean = false;
+  private discoveryInProgress: boolean = false;
 
   constructor() {
     super();
@@ -50,6 +52,35 @@ export class SessionService extends EventEmitter {
     this.dockerService = new DockerService();
     this.gitService = new GitService();
     this.sessionsPath = path.join(app.getPath('userData'), 'sessions');
+
+    // Load persisted discovered sessions into cache immediately
+    this.loadPersistedDiscoveredSessions();
+  }
+
+  /**
+   * Load previously discovered sessions from store into cache
+   * This allows instant startup without waiting for full discovery
+   */
+  private loadPersistedDiscoveredSessions(): void {
+    const persisted = this.store.get('discoveredSessions') as Record<string, Session> | undefined;
+    if (persisted) {
+      Object.values(persisted).forEach(session => {
+        this.discoveredSessionsCache.set(session.id, session);
+      });
+      console.log('[Session] Loaded', this.discoveredSessionsCache.size, 'persisted sessions from cache');
+    }
+  }
+
+  /**
+   * Persist discovered sessions to store for fast startup
+   */
+  private persistDiscoveredSessions(): void {
+    const sessionsObj: Record<string, Session> = {};
+    this.discoveredSessionsCache.forEach((session, id) => {
+      sessionsObj[id] = session;
+    });
+    this.store.set('discoveredSessions', sessionsObj);
+    this.store.set('lastDiscoveryTimestamp', Date.now());
   }
 
   private async ensureSessionsDirectory(): Promise<void> {
@@ -251,38 +282,90 @@ Only return the title, nothing else.`
   }
 
   async listSessions(): Promise<Session[]> {
-    // Discover sessions from ~/.claude/projects/ directory
-    const claudeSessions = await this.discoverClaudeSessions();
+    // If we have cached sessions, return them immediately
+    // and trigger background discovery for updates
+    if (this.discoveredSessionsCache.size > 0 && !this.isInitialLoadDone) {
+      this.isInitialLoadDone = true;
+      // Trigger background discovery without blocking
+      this.backgroundDiscoverSessions();
+      return this.getMergedSessions();
+    }
 
-    // Update cache with discovered sessions
-    this.discoveredSessionsCache.clear();
-    claudeSessions.forEach(s => this.discoveredSessionsCache.set(s.id, s));
-    this.lastDiscoveryTime = Date.now();
+    // If cache is empty or stale, do full discovery
+    const now = Date.now();
+    if (this.discoveredSessionsCache.size === 0 || now - this.lastDiscoveryTime > this.DISCOVERY_CACHE_TTL) {
+      await this.discoverAndCacheSessions();
+    }
 
-    // Merge with any sessions in our store (shouldn't be many since we discover from Claude)
+    return this.getMergedSessions();
+  }
+
+  /**
+   * Discover sessions and update cache
+   */
+  private async discoverAndCacheSessions(): Promise<void> {
+    if (this.discoveryInProgress) return;
+    this.discoveryInProgress = true;
+
+    try {
+      const claudeSessions = await this.discoverClaudeSessions();
+
+      // Update cache with discovered sessions (don't clear - merge to preserve user settings)
+      claudeSessions.forEach(s => {
+        const existing = this.discoveredSessionsCache.get(s.id);
+        if (existing) {
+          // Preserve user settings
+          s.model = existing.model;
+          s.lastBrowserUrl = existing.lastBrowserUrl;
+        }
+        this.discoveredSessionsCache.set(s.id, s);
+      });
+
+      this.lastDiscoveryTime = Date.now();
+      this.persistDiscoveredSessions();
+    } finally {
+      this.discoveryInProgress = false;
+    }
+  }
+
+  /**
+   * Run discovery in background and emit event when new sessions found
+   */
+  private backgroundDiscoverSessions(): void {
+    (async () => {
+      const beforeCount = this.discoveredSessionsCache.size;
+      await this.discoverAndCacheSessions();
+      const afterCount = this.discoveredSessionsCache.size;
+
+      if (afterCount !== beforeCount) {
+        console.log('[Session] Background discovery found', afterCount - beforeCount, 'new sessions');
+        this.emit('sessionsUpdated', this.getMergedSessions());
+      }
+    })();
+  }
+
+  /**
+   * Get merged sessions from cache and store
+   */
+  private getMergedSessions(): Session[] {
     const storedSessions = this.getSessions();
-
-    // Deduplicate by SESSION ID (not path - multiple sessions per path is valid!)
     const sessionMap = new Map<string, Session>();
 
     storedSessions.forEach(s => sessionMap.set(s.id, s));
-    // Merge discovered sessions with stored ones, preserving user settings like model selection
-    claudeSessions.forEach(s => {
-      const existing = sessionMap.get(s.id);
+
+    this.discoveredSessionsCache.forEach((s, id) => {
+      const existing = sessionMap.get(id);
       if (existing) {
-        // Merge: discovered session data + preserved user settings from stored session
-        sessionMap.set(s.id, {
+        sessionMap.set(id, {
           ...s,
-          // Preserve user-set properties from stored session
           model: existing.model,
           lastBrowserUrl: existing.lastBrowserUrl,
         });
       } else {
-        sessionMap.set(s.id, s);
+        sessionMap.set(id, s);
       }
     });
 
-    // Sort by createdAt (newest first) for stable ordering
     const allSessions = Array.from(sessionMap.values());
     allSessions.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 

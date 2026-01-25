@@ -57,6 +57,11 @@ const electronAPI = {
       ipcRenderer.on(IPC_CHANNELS.SESSION_STATUS_CHANGED, handler);
       return () => ipcRenderer.removeListener(IPC_CHANNELS.SESSION_STATUS_CHANGED, handler);
     },
+    onListUpdated: (callback: (sessions: Session[]) => void) => {
+      const handler = (_: IpcRendererEvent, sessions: Session[]) => callback(sessions);
+      ipcRenderer.on(IPC_CHANNELS.SESSION_LIST_UPDATED, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.SESSION_LIST_UPDATED, handler);
+    },
   },
 
   // Terminal
