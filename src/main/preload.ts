@@ -220,6 +220,12 @@ const electronAPI = {
     // Update permission mode mid-stream (used by GREP IT! button)
     setPermissionMode: (sessionId: string, mode: string): Promise<void> =>
       ipcRenderer.invoke(IPC_CHANNELS.CLAUDE_SET_PERMISSION_MODE, sessionId, mode),
+    // Background task output listener
+    onBackgroundTaskOutput: (callback: (data: { sessionId: string; taskId: string; output: string; status: 'running' | 'completed' | 'error'; completedAt?: string }) => void) => {
+      const handler = (_: IpcRendererEvent, data: { sessionId: string; taskId: string; output: string; status: 'running' | 'completed' | 'error'; completedAt?: string }) => callback(data);
+      ipcRenderer.on(IPC_CHANNELS.CLAUDE_BACKGROUND_TASK_OUTPUT, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.CLAUDE_BACKGROUND_TASK_OUTPUT, handler);
+    },
   },
 
   // Browser Preview
@@ -545,6 +551,10 @@ const electronAPI = {
       ipcRenderer.invoke(IPC_CHANNELS.EXTENSION_SCAN_AGENTS, projectPath),
     getCommand: (commandName: string, projectPath?: string) =>
       ipcRenderer.invoke(IPC_CHANNELS.EXTENSION_GET_COMMAND, commandName, projectPath),
+    installSkill: (source: string, options?: { global?: boolean; skills?: string[]; projectPath?: string }): Promise<{ success: boolean; output: string; error?: string }> =>
+      ipcRenderer.invoke(IPC_CHANNELS.EXTENSION_INSTALL_SKILL, source, options),
+    listAvailableSkills: (source: string): Promise<{ success: boolean; skills?: Array<{ name: string; description?: string }>; error?: string }> =>
+      ipcRenderer.invoke(IPC_CHANNELS.EXTENSION_LIST_AVAILABLE_SKILLS, source),
   },
 
   // Voice mode (ElevenLabs Conversational AI)

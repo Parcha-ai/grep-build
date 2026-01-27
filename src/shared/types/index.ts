@@ -201,6 +201,7 @@ export interface Command {
 export interface Skill {
   name: string;
   path: string;
+  content: string;
   description?: string;
   scope: 'user' | 'project';
 }

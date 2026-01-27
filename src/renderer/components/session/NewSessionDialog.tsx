@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
-import { X, Search, Loader2, GitBranch, Lock, Globe, Folder, Github, Zap, ChevronDown, AlertTriangle } from 'lucide-react';
+import { X, Search, Loader2, GitBranch, Lock, Globe, Folder, Github, Zap, ChevronDown, AlertTriangle, Edit3, Eye, FileText, Terminal as TerminalIcon } from 'lucide-react';
 import { useAuthStore } from '../../stores/auth.store';
 import { useSessionStore } from '../../stores/session.store';
 
@@ -28,6 +28,11 @@ export default function NewSessionDialog({ isOpen, onClose, initialPath, initial
   const [worktreeScriptPath, setWorktreeScriptPath] = useState('');
   const [worktreeInstructions, setWorktreeInstructions] = useState('');
   const [hasExistingSetup, setHasExistingSetup] = useState(false);
+  const [existingSetupType, setExistingSetupType] = useState<'script' | 'instructions' | null>(null);
+  const [existingSetupContent, setExistingSetupContent] = useState('');
+  const [existingSetupPath, setExistingSetupPath] = useState('');
+  const [overrideExistingSetup, setOverrideExistingSetup] = useState(false);
+  const [showExistingSetup, setShowExistingSetup] = useState(false);
   const [teleportSessionId, setTeleportSessionId] = useState('');
   const [teleportDirectory, setTeleportDirectory] = useState('');
   const [claudeCliInstalled, setClaudeCliInstalled] = useState<boolean | null>(null);
@@ -79,10 +84,26 @@ export default function NewSessionDialog({ isOpen, onClose, initialPath, initial
         }
       });
 
-      // Check for existing worktree setup
-      window.electronAPI.dev.checkWorktreeSetup(initialPath).then(result => {
+      // Check for existing worktree setup and load content
+      window.electronAPI.dev.checkWorktreeSetup(initialPath).then(async (result) => {
         if (result.success && (result.hasScript || result.hasInstructions)) {
           setHasExistingSetup(true);
+          // Load the content of the existing setup
+          if (result.hasScript && result.scriptPath) {
+            setExistingSetupType('script');
+            setExistingSetupPath(result.scriptPath);
+            const fileResult = await window.electronAPI.fs.readFile(result.scriptPath);
+            if (fileResult.success && fileResult.content) {
+              setExistingSetupContent(fileResult.content);
+            }
+          } else if (result.hasInstructions && result.instructionsPath) {
+            setExistingSetupType('instructions');
+            setExistingSetupPath(result.instructionsPath);
+            const fileResult = await window.electronAPI.fs.readFile(result.instructionsPath);
+            if (fileResult.success && fileResult.content) {
+              setExistingSetupContent(fileResult.content);
+            }
+          }
         }
       });
     }
@@ -137,10 +158,32 @@ export default function NewSessionDialog({ isOpen, onClose, initialPath, initial
         setAvailableBranches([]);
       }
 
-      // Check for existing worktree setup
+      // Check for existing worktree setup and load content
       const setupResult = await window.electronAPI.dev.checkWorktreeSetup(result.repoPath);
       if (setupResult.success && (setupResult.hasScript || setupResult.hasInstructions)) {
         setHasExistingSetup(true);
+        // Load the content of the existing setup
+        if (setupResult.hasScript && setupResult.scriptPath) {
+          setExistingSetupType('script');
+          setExistingSetupPath(setupResult.scriptPath);
+          const fileResult = await window.electronAPI.fs.readFile(setupResult.scriptPath);
+          if (fileResult.success && fileResult.content) {
+            setExistingSetupContent(fileResult.content);
+          }
+        } else if (setupResult.hasInstructions && setupResult.instructionsPath) {
+          setExistingSetupType('instructions');
+          setExistingSetupPath(setupResult.instructionsPath);
+          const fileResult = await window.electronAPI.fs.readFile(setupResult.instructionsPath);
+          if (fileResult.success && fileResult.content) {
+            setExistingSetupContent(fileResult.content);
+          }
+        }
+      } else {
+        // Reset existing setup state
+        setHasExistingSetup(false);
+        setExistingSetupType(null);
+        setExistingSetupContent('');
+        setExistingSetupPath('');
       }
     } else if (result.canceled) {
       // User canceled - go back to source selection
@@ -252,7 +295,8 @@ export default function NewSessionDialog({ isOpen, onClose, initialPath, initial
       let session;
       if (selectedFolder) {
         // Save worktree setup if provided and worktree is being created
-        if (isGitRepo && createWorktree && !hasExistingSetup) {
+        // Either no existing setup, or user chose to override
+        if (isGitRepo && createWorktree && (!hasExistingSetup || overrideExistingSetup)) {
           if (worktreeSetupType === 'script' && worktreeScriptPath) {
             await window.electronAPI.dev.saveWorktreeScript({
               repoPath: selectedFolder,
@@ -335,6 +379,16 @@ export default function NewSessionDialog({ isOpen, onClose, initialPath, initial
     setCreateError(null);
     setTeleportSessionId('');
     setTeleportDirectory('');
+    // Reset worktree setup state
+    setHasExistingSetup(false);
+    setExistingSetupType(null);
+    setExistingSetupContent('');
+    setExistingSetupPath('');
+    setOverrideExistingSetup(false);
+    setShowExistingSetup(false);
+    setWorktreeSetupType('none');
+    setWorktreeScriptPath('');
+    setWorktreeInstructions('');
     onClose();
   };
 
@@ -912,12 +966,161 @@ export default function NewSessionDialog({ isOpen, onClose, initialPath, initial
                     </div>
                   )}
 
-                  {/* Show info about existing setup */}
+                  {/* Show existing setup with options to view/edit/override */}
                   {isGitRepo && selectedFolder && createWorktree && hasExistingSetup && (
-                    <div className="p-3 bg-claude-accent/10 border border-claude-accent">
-                      <p className="text-[10px] text-claude-text-secondary leading-relaxed">
-                        This project already has worktree setup configured in .claudette/. It will run automatically when the worktree is created.
-                      </p>
+                    <div className="p-3 bg-claude-bg border border-claude-border space-y-3">
+                      <div className="flex items-start justify-between">
+                        <div className="flex items-center gap-2">
+                          {existingSetupType === 'script' ? (
+                            <TerminalIcon size={14} className="text-claude-accent" />
+                          ) : (
+                            <FileText size={14} className="text-purple-400" />
+                          )}
+                          <div>
+                            <span className="text-xs font-bold text-claude-text">
+                              Existing Worktree Setup
+                            </span>
+                            <p className="text-[10px] text-claude-text-secondary">
+                              {existingSetupType === 'script' ? 'worktree-setup.sh' : 'worktree-setup.md'}
+                            </p>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-1">
+                          <button
+                            onClick={() => setShowExistingSetup(!showExistingSetup)}
+                            className="p-1.5 hover:bg-claude-surface text-claude-text-secondary hover:text-claude-text transition-colors"
+                            title={showExistingSetup ? 'Hide content' : 'View content'}
+                          >
+                            <Eye size={14} />
+                          </button>
+                          <button
+                            onClick={() => window.electronAPI.app.openPath(existingSetupPath)}
+                            className="p-1.5 hover:bg-claude-surface text-claude-text-secondary hover:text-claude-accent transition-colors"
+                            title="Edit in external editor"
+                          >
+                            <Edit3 size={14} />
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Show existing setup content */}
+                      {showExistingSetup && existingSetupContent && (
+                        <div className="bg-claude-surface border border-claude-border">
+                          <pre className="p-2 text-[10px] font-mono text-claude-text-secondary max-h-32 overflow-y-auto whitespace-pre-wrap">
+                            {existingSetupContent}
+                          </pre>
+                        </div>
+                      )}
+
+                      {/* Override checkbox */}
+                      <label className="flex items-start gap-2 cursor-pointer pt-2 border-t border-claude-border">
+                        <input
+                          type="checkbox"
+                          checked={overrideExistingSetup}
+                          onChange={(e) => {
+                            setOverrideExistingSetup(e.target.checked);
+                            if (e.target.checked) {
+                              // Pre-populate with existing content if it's instructions
+                              if (existingSetupType === 'instructions') {
+                                setWorktreeSetupType('instructions');
+                                setWorktreeInstructions(existingSetupContent);
+                              } else {
+                                setWorktreeSetupType('script');
+                              }
+                            } else {
+                              setWorktreeSetupType('none');
+                              setWorktreeInstructions('');
+                              setWorktreeScriptPath('');
+                            }
+                          }}
+                          className="mt-0.5 w-3 h-3 accent-claude-accent"
+                        />
+                        <div>
+                          <span className="text-xs text-claude-text">Override existing setup</span>
+                          <p className="text-[9px] text-claude-text-secondary">
+                            Replace the current worktree setup with a new configuration
+                          </p>
+                        </div>
+                      </label>
+
+                      {/* Override configuration UI */}
+                      {overrideExistingSetup && (
+                        <div className="pt-3 border-t border-claude-border space-y-3">
+                          <div className="space-y-2">
+                            <label className="flex items-center gap-2 cursor-pointer">
+                              <input
+                                type="radio"
+                                name="worktree-setup-override"
+                                checked={worktreeSetupType === 'none'}
+                                onChange={() => setWorktreeSetupType('none')}
+                                className="w-3 h-3 accent-claude-accent"
+                              />
+                              <span className="text-xs text-claude-text">No Setup (remove existing)</span>
+                            </label>
+                            <label className="flex items-center gap-2 cursor-pointer">
+                              <input
+                                type="radio"
+                                name="worktree-setup-override"
+                                checked={worktreeSetupType === 'script'}
+                                onChange={() => setWorktreeSetupType('script')}
+                                className="w-3 h-3 accent-claude-accent"
+                              />
+                              <span className="text-xs text-claude-text">Shell Script</span>
+                            </label>
+                            <label className="flex items-center gap-2 cursor-pointer">
+                              <input
+                                type="radio"
+                                name="worktree-setup-override"
+                                checked={worktreeSetupType === 'instructions'}
+                                onChange={() => setWorktreeSetupType('instructions')}
+                                className="w-3 h-3 accent-claude-accent"
+                              />
+                              <span className="text-xs text-claude-text">Instructions for Claude</span>
+                            </label>
+                          </div>
+
+                          {worktreeSetupType === 'script' && (
+                            <div>
+                              <label className="block text-[10px] font-bold mb-1.5 text-claude-text-secondary" style={{ letterSpacing: '0.1em' }}>
+                                SCRIPT PATH
+                              </label>
+                              <div className="flex gap-2">
+                                <input
+                                  type="text"
+                                  value={worktreeScriptPath}
+                                  onChange={(e) => setWorktreeScriptPath(e.target.value)}
+                                  placeholder="/path/to/setup.sh"
+                                  className="flex-1 px-2 py-1.5 text-[10px] font-mono focus:outline-none focus:border-claude-accent bg-claude-surface border border-claude-border text-claude-text"
+                                  style={{ borderRadius: 0 }}
+                                />
+                                <button
+                                  onClick={handleSelectScriptFile}
+                                  className="px-3 py-1.5 text-[10px] font-bold bg-claude-bg hover:bg-claude-surface border border-claude-border text-claude-text"
+                                  style={{ borderRadius: 0 }}
+                                >
+                                  BROWSE
+                                </button>
+                              </div>
+                            </div>
+                          )}
+
+                          {worktreeSetupType === 'instructions' && (
+                            <div>
+                              <label className="block text-[10px] font-bold mb-1.5 text-claude-text-secondary" style={{ letterSpacing: '0.1em' }}>
+                                SETUP INSTRUCTIONS
+                              </label>
+                              <textarea
+                                value={worktreeInstructions}
+                                onChange={(e) => setWorktreeInstructions(e.target.value)}
+                                placeholder="Enter setup instructions for Claude to follow..."
+                                rows={4}
+                                className="w-full px-2 py-1.5 text-[10px] font-mono focus:outline-none focus:border-claude-accent bg-claude-surface border border-claude-border text-claude-text resize-none"
+                                style={{ borderRadius: 0 }}
+                              />
+                            </div>
+                          )}
+                        </div>
+                      )}
                     </div>
                   )}
 

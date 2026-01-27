@@ -11,7 +11,7 @@ import ExtensionsExplorer from '../extensions/ExtensionsExplorer';
 import PlanPanel from '../plan/PlanPanel';
 import SetupProgress from '../session/SetupProgress';
 import EmptyState from './EmptyState';
-import { X, GripVertical, Smartphone, Monitor } from 'lucide-react';
+import { X, GripVertical, GripHorizontal, Smartphone, Monitor } from 'lucide-react';
 
 export default function MainContent() {
   const { activeSessionId, sessions, setupProgress } = useSessionStore();
@@ -30,6 +30,8 @@ export default function MainContent() {
     splitRatio,
     viewportMode,
     toggleViewportMode,
+    mobileBrowserHeight,
+    setMobileBrowserHeight,
     // Multi-session browser support
     sessionBrowsersEnabled,
     enableSessionBrowser,
@@ -38,6 +40,7 @@ export default function MainContent() {
   const { isEditorOpen, closeEditor } = useEditorStore();
   const [isTerminalResizing, setIsTerminalResizing] = useState(false);
   const [isPanelResizing, setIsPanelResizing] = useState(false);
+  const [isMobileBrowserResizing, setIsMobileBrowserResizing] = useState(false);
   const [customSplitRatio, setCustomSplitRatio] = useState<number | null>(null);
 
   // Set default terminal height when panel opens
@@ -181,6 +184,45 @@ export default function MainContent() {
     document.addEventListener('mouseup', handleMouseUp);
   }, [terminalHeight, setTerminalHeight]);
 
+  // Handle mobile browser vertical resize
+  const handleMobileBrowserResizeMouseDown = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsMobileBrowserResizing(true);
+
+    const startY = e.clientY;
+    const startHeight = mobileBrowserHeight;
+
+    // Prevent text selection during drag
+    document.body.style.userSelect = 'none';
+    document.body.style.cursor = 'row-resize';
+
+    // Create an overlay to capture mouse events
+    const overlay = document.createElement('div');
+    overlay.id = 'mobile-browser-resize-overlay';
+    overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;z-index:9999;cursor:row-resize';
+    document.getElementById('mobile-browser-resize-overlay')?.remove();
+    document.body.appendChild(overlay);
+
+    const handleMouseMove = (e: MouseEvent) => {
+      const delta = e.clientY - startY; // Down = increase height
+      const newHeight = startHeight + delta;
+      setMobileBrowserHeight(newHeight); // Clamping is done in the store
+    };
+
+    const handleMouseUp = () => {
+      setIsMobileBrowserResizing(false);
+      document.body.style.userSelect = '';
+      document.body.style.cursor = '';
+      overlay.remove();
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+    };
+
+    document.addEventListener('mousemove', handleMouseMove);
+    document.addEventListener('mouseup', handleMouseUp);
+  }, [mobileBrowserHeight, setMobileBrowserHeight]);
+
   if (!activeSession) {
     return <EmptyState />;
   }
@@ -260,7 +302,7 @@ export default function MainContent() {
                         <span className="text-sm font-medium">Browser Preview</span>
                         {viewportMode === 'mobile' && (
                           <span className="text-xs text-purple-400 font-medium">
-                            375 × 667
+                            375 × {mobileBrowserHeight}
                           </span>
                         )}
                         {sessionsWithBrowsers.length > 1 && (
@@ -277,11 +319,11 @@ export default function MainContent() {
                       </button>
                     </div>
                     {/* Browser content area - centred mobile viewport when in mobile mode */}
-                    <div className={`flex-1 overflow-hidden relative ${viewportMode === 'mobile' ? 'bg-gray-900 flex items-start justify-center pt-4' : ''}`}>
+                    <div className={`flex-1 overflow-hidden relative ${viewportMode === 'mobile' ? 'bg-gray-900 flex flex-col items-center pt-4' : ''}`}>
                       {/* Mobile device frame when in mobile mode, full size in desktop mode */}
                       <div
                         className={`${viewportMode === 'mobile' ? 'relative rounded-xl overflow-hidden shadow-2xl border-4 border-gray-700' : 'absolute inset-0'}`}
-                        style={viewportMode === 'mobile' ? { width: 375, height: 667 } : undefined}
+                        style={viewportMode === 'mobile' ? { width: 375, height: mobileBrowserHeight } : undefined}
                       >
                         {/* Render a BrowserPreview for each session with browser enabled */}
                         {/* Only the active session's browser is visible, others stay mounted but hidden */}
@@ -302,6 +344,18 @@ export default function MainContent() {
                           <BrowserPreview session={activeSession} isVisible={true} />
                         )}
                       </div>
+                      {/* Vertical resize handle for mobile browser - only in mobile mode */}
+                      {viewportMode === 'mobile' && (
+                        <div
+                          className={`w-[375px] h-3 mt-1 flex items-center justify-center cursor-row-resize rounded-b-lg hover:bg-gray-700 transition-colors ${
+                            isMobileBrowserResizing ? 'bg-claude-accent' : 'bg-gray-800'
+                          }`}
+                          onMouseDown={handleMobileBrowserResizeMouseDown}
+                          title="Drag to resize mobile browser height"
+                        >
+                          <GripHorizontal size={12} className="text-gray-500" />
+                        </div>
+                      )}
                     </div>
                   </div>
                 )}

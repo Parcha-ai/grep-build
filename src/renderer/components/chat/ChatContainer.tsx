@@ -1,5 +1,5 @@
-import React, { useEffect, useRef, useState, useCallback } from 'react';
-import { useSessionStore } from '../../stores/session.store';
+import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react';
+import { useSessionStore, type BackgroundTask } from '../../stores/session.store';
 import { useAudioStore } from '../../stores/audio.store';
 import { useUIStore } from '../../stores/ui.store';
 import MessageList from './MessageList';
@@ -7,10 +7,12 @@ import InputArea from './InputArea';
 import PermissionDialog from './PermissionDialog';
 import QuestionDialog from './QuestionDialog';
 import ThinkingBlock from './ThinkingBlock';
+import TasksBlock, { type Task } from './TasksBlock';
+import BackgroundTasksBlock from './BackgroundTasksBlock';
 // CompactionBar removed - compaction status now shown in ThinkingBlock
 import { SoundVisualization } from './SoundVisualization';
 import { ArrowDown } from 'lucide-react';
-import type { Session } from '../../../shared/types';
+import type { Session, ToolCall } from '../../../shared/types';
 
 interface ChatContainerProps {
   session: Session;
@@ -34,6 +36,10 @@ export default function ChatContainer({ session }: ChatContainerProps) {
     compactionStatus,
     setPermissionMode,
     messageQueue,
+    backgroundTasks,
+    addBackgroundTask,
+    removeBackgroundTask,
+    subscribeToBackgroundTasks,
   } = useSessionStore();
   const { audioModeActive, ttsStates } = useAudioStore();
   const { toggleTerminalPanel, isTerminalPanelOpen } = useUIStore();
@@ -49,6 +55,11 @@ export default function ChatContainer({ session }: ChatContainerProps) {
   const sessionStreamEvents = streamEvents[session.id] || [];
   const streamContent = currentStreamContent[session.id] || '';
   const thinkingContent = currentThinkingContent[session.id] || '';
+
+  // Debug: Log thinking content
+  if (thinkingContent) {
+    console.log('[ChatContainer] thinkingContent length:', thinkingContent.length, 'isStreaming:', isStreaming[session.id]);
+  }
   const streamingToolCalls = currentToolCalls[session.id] || [];
   const systemInfo = currentSystemInfo[session.id] || null;
   const isAudioMode = audioModeActive[session.id] || false;
@@ -56,14 +67,278 @@ export default function ChatContainer({ session }: ChatContainerProps) {
   const currentQuestionRequest = pendingQuestion[session.id] || null;
   const currentCompactionStatus = compactionStatus[session.id] || null;
   const queuedMessages = messageQueue[session.id] || [];
+  const sessionBackgroundTasks = backgroundTasks[session.id] || [];
 
   // Check if any TTS is actively playing for messages in this session
   const isTTSPlaying = sessionMessages.some(msg => ttsStates[msg.id]?.isPlaying);
+
+  // Handler to background a running Bash command
+  const handleBackgroundTask = useCallback((toolCall: ToolCall) => {
+    const task: BackgroundTask = {
+      id: toolCall.id,
+      sessionId: session.id,
+      command: (toolCall.input?.command as string) || 'Unknown command',
+      output: '',
+      status: 'running',
+      startedAt: new Date(),
+    };
+    addBackgroundTask(session.id, task);
+    console.log('[ChatContainer] Backgrounded task:', task.command.slice(0, 50));
+  }, [session.id, addBackgroundTask]);
+
+  // Handler to stop a background task
+  const handleStopBackgroundTask = useCallback((taskId: string) => {
+    // TODO: Implement actual task termination via IPC
+    removeBackgroundTask(session.id, taskId);
+    console.log('[ChatContainer] Stopped background task:', taskId);
+  }, [session.id, removeBackgroundTask]);
+
+  // Handler to view output file
+  const handleViewOutput = useCallback((taskId: string) => {
+    const task = sessionBackgroundTasks.find(t => t.id === taskId);
+    if (task?.outputFile) {
+      // Open in editor
+      window.electronAPI?.app.openPath(task.outputFile);
+    }
+  }, [sessionBackgroundTasks]);
+
+  // Extract tasks from TaskCreate/TaskUpdate/TaskList tool calls (new SDK Tasks system)
+  // Also supports legacy TodoWrite for backwards compatibility
+  const currentTasks = useMemo((): Task[] => {
+    const streamingToolCalls = currentToolCalls[session.id] || [];
+
+    // Debug: Log all tool calls to understand what we're getting
+    if (streamingToolCalls.length > 0) {
+      console.log('[TasksBlock] All streaming tool calls:', streamingToolCalls.map(tc => tc.name));
+    }
+
+    // Debug: Log all task-related tool calls
+    const taskToolCalls = streamingToolCalls.filter(tc =>
+      tc.name === 'TaskCreate' || tc.name === 'TaskUpdate' || tc.name === 'TaskList' || tc.name === 'TaskGet'
+    );
+    if (taskToolCalls.length > 0) {
+      console.log('[TasksBlock] Found task tool calls in streaming:', taskToolCalls.map(tc => ({
+        name: tc.name,
+        input: tc.input,
+        result: tc.result,
+        status: tc.status,
+      })));
+    }
+
+    // Also check messages for task tool calls
+    const messageTaskCalls: any[] = [];
+    for (const msg of sessionMessages) {
+      if (msg.toolCalls) {
+        for (const tc of msg.toolCalls) {
+          if (tc.name === 'TaskCreate' || tc.name === 'TaskUpdate' || tc.name === 'TaskList' || tc.name === 'TaskGet') {
+            messageTaskCalls.push({ name: tc.name, input: tc.input, result: tc.result });
+          }
+        }
+      }
+    }
+    if (messageTaskCalls.length > 0) {
+      console.log('[TasksBlock] Found task tool calls in messages:', messageTaskCalls);
+    }
+
+    // Look for TaskList result first (gives complete picture)
+    const taskListCall = [...streamingToolCalls]
+      .reverse()
+      .find(tc => tc.name === 'TaskList' && tc.result);
+
+    if (taskListCall?.result) {
+      // TaskList returns an array of tasks (or might be wrapped in an object)
+      const taskListResult = taskListCall.result;
+      console.log('[TasksBlock] TaskList result:', taskListResult);
+
+      // Handle both array and object-wrapped formats
+      const tasksArray = Array.isArray(taskListResult)
+        ? taskListResult
+        : (taskListResult as any)?.tasks || (taskListResult as any)?.items || [];
+
+      if (Array.isArray(tasksArray) && tasksArray.length > 0) {
+        return tasksArray.map((t: any) => ({
+          id: t.id || String(Math.random()),
+          subject: t.subject || 'Task',
+          description: t.description,
+          status: t.status || 'pending',
+          owner: t.owner,
+          activeForm: t.activeForm,
+          blocks: t.blocks,
+          blockedBy: t.blockedBy,
+        }));
+      }
+    }
+
+    // Build task list from TaskCreate/TaskUpdate calls in current streaming
+    const taskMap = new Map<string, Task>();
+
+    // First, check message history for previous task tool calls
+    for (const msg of sessionMessages) {
+      if (msg.toolCalls) {
+        for (const tc of msg.toolCalls) {
+          if (tc.name === 'TaskCreate' && tc.result) {
+            const result = tc.result as any;
+            if (result.id) {
+              taskMap.set(result.id, {
+                id: result.id,
+                subject: (tc.input as any).subject || 'Task',
+                description: (tc.input as any).description,
+                status: 'pending',
+                activeForm: (tc.input as any).activeForm,
+              });
+            }
+          } else if (tc.name === 'TaskUpdate' && tc.input) {
+            const input = tc.input as any;
+            const taskId = input.taskId;
+            if (taskId && taskMap.has(taskId)) {
+              const existing = taskMap.get(taskId)!;
+              taskMap.set(taskId, {
+                ...existing,
+                status: input.status || existing.status,
+                subject: input.subject || existing.subject,
+                description: input.description || existing.description,
+                activeForm: input.activeForm || existing.activeForm,
+              });
+            }
+          } else if (tc.name === 'TaskList' && tc.result && Array.isArray(tc.result)) {
+            // TaskList result replaces the map
+            taskMap.clear();
+            for (const t of tc.result as any[]) {
+              taskMap.set(t.id, {
+                id: t.id,
+                subject: t.subject || 'Task',
+                description: t.description,
+                status: t.status || 'pending',
+                owner: t.owner,
+                activeForm: t.activeForm,
+                blocks: t.blocks,
+                blockedBy: t.blockedBy,
+              });
+            }
+          }
+        }
+      }
+    }
+
+    // Then apply streaming tool calls
+    for (const tc of streamingToolCalls) {
+      if (tc.name === 'TaskCreate') {
+        const input = tc.input as any;
+        const tempId = tc.id || String(Math.random());
+        // If result has real ID, use it; otherwise use temp
+        const taskId = (tc.result as any)?.id || tempId;
+        taskMap.set(taskId, {
+          id: taskId,
+          subject: input.subject || 'Task',
+          description: input.description,
+          status: 'pending',
+          activeForm: input.activeForm,
+        });
+      } else if (tc.name === 'TaskUpdate') {
+        const input = tc.input as any;
+        const taskId = input.taskId;
+        if (taskId) {
+          const existing = taskMap.get(taskId);
+          if (existing) {
+            taskMap.set(taskId, {
+              ...existing,
+              status: input.status || existing.status,
+              subject: input.subject || existing.subject,
+              description: input.description || existing.description,
+              activeForm: input.activeForm || existing.activeForm,
+            });
+          }
+        }
+      } else if (tc.name === 'TaskList' && tc.result && Array.isArray(tc.result)) {
+        // TaskList result replaces the map
+        taskMap.clear();
+        for (const t of tc.result as any[]) {
+          taskMap.set(t.id, {
+            id: t.id,
+            subject: t.subject || 'Task',
+            description: t.description,
+            status: t.status || 'pending',
+            owner: t.owner,
+            activeForm: t.activeForm,
+            blocks: t.blocks,
+            blockedBy: t.blockedBy,
+          });
+        }
+      }
+    }
+
+    // Fallback: Check for legacy TodoWrite calls and convert to Task format
+    if (taskMap.size === 0) {
+      const todoWriteCall = [...streamingToolCalls]
+        .reverse()
+        .find(tc => tc.name === 'TodoWrite');
+
+      if (todoWriteCall?.input?.todos) {
+        const todos = todoWriteCall.input.todos as any[];
+        return todos.map((todo, index) => ({
+          id: `todo-${index}`,
+          subject: todo.content,
+          status: todo.status || 'pending',
+          activeForm: todo.activeForm,
+        }));
+      }
+
+      // Check message history for TodoWrite
+      for (let i = sessionMessages.length - 1; i >= 0; i--) {
+        const msg = sessionMessages[i];
+        if (msg.toolCalls) {
+          const todoWrite = [...msg.toolCalls]
+            .reverse()
+            .find(tc => tc.name === 'TodoWrite');
+          if (todoWrite?.input?.todos) {
+            const todos = todoWrite.input.todos as any[];
+            return todos.map((todo, index) => ({
+              id: `todo-${index}`,
+              subject: todo.content,
+              status: todo.status || 'pending',
+              activeForm: todo.activeForm,
+            }));
+          }
+        }
+      }
+    }
+
+    const tasks = Array.from(taskMap.values());
+    if (tasks.length > 0) {
+      console.log('[TasksBlock] Extracted tasks:', tasks);
+    }
+    return tasks;
+  }, [session.id, currentToolCalls, sessionMessages]);
 
   useEffect(() => {
     const unsubscribe = subscribeToClaude();
     return unsubscribe;
   }, [subscribeToClaude]);
+
+  // Subscribe to background task updates
+  useEffect(() => {
+    const unsubscribe = subscribeToBackgroundTasks();
+    return unsubscribe;
+  }, [subscribeToBackgroundTasks]);
+
+  // Keyboard shortcut: Cmd+B to background running Bash command
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.metaKey && e.key === 'b') {
+        // Find the first running Bash command
+        const runningBash = streamingToolCalls.find(
+          (tc) => tc.name === 'Bash' && (tc.status === 'running' || tc.status === 'pending')
+        );
+        if (runningBash) {
+          e.preventDefault();
+          handleBackgroundTask(runningBash);
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [streamingToolCalls, handleBackgroundTask]);
 
   // Check if user is at bottom of chat
   const checkIfAtBottom = useCallback(() => {
@@ -216,6 +491,7 @@ export default function ChatContainer({ session }: ChatContainerProps) {
           streamingToolCalls={streamingToolCalls}
           currentToolCalls={streamingToolCalls}
           queuedMessages={queuedMessages}
+          onBackgroundTask={handleBackgroundTask}
         />
 
         <div ref={messagesEndRef} />
@@ -232,6 +508,27 @@ export default function ChatContainer({ session }: ChatContainerProps) {
           </button>
         )}
       </div>
+
+      {/* Tasks section - above thinking */}
+      {currentTasks.length > 0 && (
+        <div className="border-t border-claude-border bg-claude-surface/30 px-4 py-2">
+          <TasksBlock
+            tasks={currentTasks}
+            isStreaming={isSessionStreaming}
+          />
+        </div>
+      )}
+
+      {/* Background tasks section - between tasks and thinking */}
+      {sessionBackgroundTasks.length > 0 && (
+        <div className="border-t border-claude-border bg-claude-surface/30 px-4 py-2">
+          <BackgroundTasksBlock
+            tasks={sessionBackgroundTasks}
+            onStopTask={handleStopBackgroundTask}
+            onViewOutput={handleViewOutput}
+          />
+        </div>
+      )}
 
       {/* Active thinking/compacting section - separate from message history */}
       {((isSessionStreaming && thinkingContent) || (currentCompactionStatus?.isCompacting)) && (

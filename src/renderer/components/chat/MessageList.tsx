@@ -22,6 +22,7 @@ interface MessageListProps {
   streamingToolCalls?: ToolCall[];
   currentToolCalls?: ToolCall[]; // Live-updated tool calls (not snapshots)
   queuedMessages?: QueuedMessage[];
+  onBackgroundTask?: (toolCall: ToolCall) => void; // Callback to background a running Bash command
 }
 
 export default function MessageList({
@@ -32,6 +33,7 @@ export default function MessageList({
   streamingToolCalls,
   currentToolCalls = [],
   queuedMessages = [],
+  onBackgroundTask,
 }: MessageListProps) {
   // All hooks must be called before any conditional returns
 
@@ -136,6 +138,7 @@ export default function MessageList({
                   toolCall={liveToolCall}
                   isLatest={false}
                   isStreaming={true}
+                  onBackground={onBackgroundTask}
                 />
               );
             } else if (event.type === 'text' && event.content) {

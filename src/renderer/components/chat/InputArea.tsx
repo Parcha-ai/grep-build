@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
-import { Paperclip, X, Image, FileCode, Target, File, Folder, AtSign, Brain, Square, Code } from 'lucide-react';
+import { X, Image, FileCode, Target, File, Folder, AtSign, Brain, Square, Code } from 'lucide-react';
 import { useSessionStore, type PermissionMode, type ThinkingMode, type ModelInfo } from '../../stores/session.store';
 import { useUIStore } from '../../stores/ui.store';
 import { useAudioStore } from '../../stores/audio.store';
@@ -7,51 +7,6 @@ import MentionAutocomplete, { type Mention } from './MentionAutocomplete';
 import CommandAutocomplete from './CommandAutocomplete';
 import { MicrophoneButton, type VoiceModeHandle } from './MicrophoneButton';
 import { MessageQueuePanel } from './MessageQueuePanel';
-
-interface TodoItem {
-  content: string;
-  status: 'pending' | 'in_progress' | 'completed';
-  activeForm?: string;
-}
-
-// Circular progress component
-function ProgressCircle({ completed, total }: { completed: number; total: number }) {
-  const size = 14;
-  const strokeWidth = 2;
-  const radius = (size - strokeWidth) / 2;
-  const circumference = 2 * Math.PI * radius;
-  const progress = total > 0 ? completed / total : 0;
-  const strokeDashoffset = circumference * (1 - progress);
-
-  return (
-    <svg width={size} height={size} className="flex-shrink-0">
-      {/* Background circle */}
-      <circle
-        cx={size / 2}
-        cy={size / 2}
-        r={radius}
-        fill="none"
-        stroke="currentColor"
-        strokeWidth={strokeWidth}
-        className="text-claude-border"
-      />
-      {/* Progress circle */}
-      <circle
-        cx={size / 2}
-        cy={size / 2}
-        r={radius}
-        fill="none"
-        stroke="currentColor"
-        strokeWidth={strokeWidth}
-        strokeDasharray={circumference}
-        strokeDashoffset={strokeDashoffset}
-        strokeLinecap="round"
-        className={progress === 1 ? 'text-green-500' : 'text-claude-accent'}
-        style={{ transform: 'rotate(-90deg)', transformOrigin: 'center' }}
-      />
-    </svg>
-  );
-}
 
 // Permission mode config for UI - using terminal-style prompts
 const PERMISSION_MODE_CONFIG: Record<PermissionMode, { prompt: string; label: string; color: string; description: string }> = {
@@ -133,7 +88,6 @@ export default function InputArea({ sessionId, disabled, systemInfo, isStreaming
   const [mentionQuery, setMentionQuery] = useState('');
   const [mentionPosition, setMentionPosition] = useState({ top: 0, left: 0 });
   const [mentionStartIndex, setMentionStartIndex] = useState(-1);
-  const [showTodoList, setShowTodoList] = useState(false);
   const [escapeKeyCount, setEscapeKeyCount] = useState(0);
   const [escapeTimeout, setEscapeTimeout] = useState<NodeJS.Timeout | null>(null);
   const [showEscapeWarning, setShowEscapeWarning] = useState(false);
@@ -149,7 +103,7 @@ export default function InputArea({ sessionId, disabled, systemInfo, isStreaming
   const voiceModeRef = useRef<VoiceModeHandle>(null);
 
   // Voice mode state (CMD shortcuts disabled - users click microphone button)
-  const { sendMessage, interruptAndSend, isStreaming, permissionMode, cyclePermissionMode, thinkingMode, cycleThinkingMode, currentToolCalls, messages, sessions, messageQueue, selectedModel, setSelectedModel, availableModels, loadAvailableModels } = useSessionStore();
+  const { sendMessage, interruptAndSend, isStreaming, permissionMode, cyclePermissionMode, thinkingMode, cycleThinkingMode, sessions, messageQueue, selectedModel, setSelectedModel, availableModels, loadAvailableModels } = useSessionStore();
   const { selectedElement, setSelectedElement, sessionInspectorActive, setSessionInspectorActive, toggleBrowserPanel } = useUIStore();
   const { settings: audioSettings, setAudioMode, voiceModeStates } = useAudioStore();
 
@@ -351,82 +305,6 @@ export default function InputArea({ sessionId, disabled, systemInfo, isStreaming
     window.addEventListener('grep-send-annotation', handleSendAnnotation as EventListener);
     return () => window.removeEventListener('grep-send-annotation', handleSendAnnotation as EventListener);
   }, [sessionId, sendMessage]);
-
-  // Extract current todos from the most recent TodoWrite tool call
-  const currentTodos = useMemo((): TodoItem[] => {
-    // First check current streaming tool calls
-    const streamingToolCalls = currentToolCalls[sessionId] || [];
-    const streamingTodoWrite = [...streamingToolCalls]
-      .reverse()
-      .find(tc => tc.name === 'TodoWrite');
-
-    if (streamingTodoWrite?.input?.todos) {
-      return streamingTodoWrite.input.todos as TodoItem[];
-    }
-
-    // If no streaming todos, check messages for previous TodoWrite calls
-    const sessionMessages = messages[sessionId] || [];
-    for (let i = sessionMessages.length - 1; i >= 0; i--) {
-      const msg = sessionMessages[i];
-      if (msg.toolCalls) {
-        const todoWrite = [...msg.toolCalls]
-          .reverse()
-          .find(tc => tc.name === 'TodoWrite');
-        if (todoWrite?.input?.todos) {
-          return todoWrite.input.todos as TodoItem[];
-        }
-      }
-    }
-
-    return [];
-  }, [sessionId, currentToolCalls, messages]);
-
-  // Get the current in-progress task
-  const activeTask = useMemo(() => {
-    return currentTodos.find(t => t.status === 'in_progress');
-  }, [currentTodos]);
-
-  // Calculate todo stats
-  const todoStats = useMemo(() => {
-    if (currentTodos.length === 0) return null;
-    const completed = currentTodos.filter(t => t.status === 'completed').length;
-    const total = currentTodos.length;
-    return { completed, total };
-  }, [currentTodos]);
-
-  // Helper function to extract subagent type from Task tool input
-  const getSubagentType = (input: Record<string, unknown>): string | null => {
-    const description = (input.description as string) || '';
-    const prompt = (input.prompt as string) || '';
-    const combined = `${description} ${prompt}`.toLowerCase();
-
-    if (combined.includes('explore') || combined.includes('search')) return 'EXPLORE';
-    if (combined.includes('plan')) return 'PLAN';
-    if (combined.includes('implement') || combined.includes('code') || combined.includes('bond')) return 'IMPLEMENT';
-    if (combined.includes('document') || combined.includes('moneypenny')) return 'DOCUMENT';
-    if (combined.includes('test') || combined.includes('verify') || combined.includes('scaramanga')) return 'TEST';
-    if (combined.includes('q') || combined.includes('briefing')) return 'BRIEF';
-
-    if (input.subagent_type) {
-      return (input.subagent_type as string).toUpperCase();
-    }
-
-    return null;
-  };
-
-  // Detect active subagent (Task tool)
-  const activeSubagent = useMemo(() => {
-    const streamingToolCalls = currentToolCalls[sessionId] || [];
-    const activeTask = streamingToolCalls.find(tc =>
-      tc.name === 'Task' && (tc.status === 'running' || tc.status === 'pending')
-    );
-    if (activeTask) {
-      const type = getSubagentType(activeTask.input);
-      const description = (activeTask.input.description as string) || (activeTask.input.prompt as string) || '';
-      return { type, description };
-    }
-    return null;
-  }, [sessionId, currentToolCalls]);
 
   // Handle selected element from browser inspector
   useEffect(() => {
@@ -1448,61 +1326,7 @@ export default function InputArea({ sessionId, disabled, systemInfo, isStreaming
         {isStreamingProp && (
           <span className="text-amber-400">⌘↵ INTERRUPT</span>
         )}
-
-        {/* Subagent status or Task progress */}
-        {activeSubagent ? (
-          <div className="flex items-center gap-1.5 text-purple-400">
-            <div className="w-3 h-3 border-2 border-purple-400 border-t-transparent rounded-full animate-spin" />
-            <span>
-              {activeSubagent.type ? `[${activeSubagent.type}]` : 'AGENT'}
-              {activeSubagent.description && ` ${activeSubagent.description.slice(0, 40)}${activeSubagent.description.length > 40 ? '...' : ''}`}
-            </span>
-          </div>
-        ) : todoStats ? (
-          <button
-            onClick={() => setShowTodoList(!showTodoList)}
-            className="flex items-center gap-1.5 hover:text-claude-text transition-colors"
-            title="Click to view all tasks"
-          >
-            <ProgressCircle completed={todoStats.completed} total={todoStats.total} />
-            <span className={todoStats.completed === todoStats.total ? 'text-green-500' : 'text-claude-accent'}>
-              {activeTask ? (activeTask.activeForm || activeTask.content) : `${todoStats.completed}/${todoStats.total}`}
-            </span>
-          </button>
-        ) : null}
       </div>
-
-      {/* Expandable task list */}
-      {showTodoList && todoStats && (
-        <div className="mt-2 p-2 border border-claude-border bg-claude-bg text-xs font-mono" style={{ borderRadius: 0 }}>
-          <div className="flex items-center justify-between mb-2 pb-1 border-b border-claude-border">
-            <span className="text-claude-text-secondary" style={{ letterSpacing: '0.05em' }}>TASKS</span>
-            <span className="text-claude-text-secondary">{todoStats.completed}/{todoStats.total}</span>
-          </div>
-          <div className="space-y-1 max-h-32 overflow-y-auto">
-            {currentTodos.map((todo, index) => (
-              <div key={index} className="flex items-center gap-2">
-                {todo.status === 'completed' ? (
-                  <span className="text-green-500">✓</span>
-                ) : todo.status === 'in_progress' ? (
-                  <span className="text-claude-accent animate-pulse">●</span>
-                ) : (
-                  <span className="text-claude-text-secondary">○</span>
-                )}
-                <span className={
-                  todo.status === 'completed'
-                    ? 'text-claude-text-secondary line-through'
-                    : todo.status === 'in_progress'
-                    ? 'text-claude-text'
-                    : 'text-claude-text-secondary'
-                }>
-                  {todo.content}
-                </span>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
       </div>
     </>
   );

@@ -29,13 +29,11 @@ const config: ForgeConfig = {
     // macOS specific
     darwinDarkModeSupport: true,
     appCategoryType: 'public.app-category.developer-tools',
-    // macOS entitlements for microphone access
-    osxSign: {
-      optionsForFile: () => ({
-        entitlements: './entitlements.mac.plist',
-        'entitlements-inherit': './entitlements.mac.plist',
-      }),
-    },
+    // Disable signing during packaging - the postPackage hook copies
+    // additional files which would invalidate the signature.
+    // For development builds, adhoc signing is sufficient.
+    // For distribution, sign manually after postPackage completes.
+    osxSign: false as any,
   },
   rebuildConfig: {},
   hooks: {
@@ -69,6 +67,20 @@ const config: ForgeConfig = {
           await fs.ensureDir(path.dirname(dest));
           await fs.copy(dep.source, dest);
           console.log(`[Packaging] Copied ${dep.name} to ${dest}`);
+        }
+
+        // Sign the app with adhoc signature after all modifications
+        // This must happen after copying dependencies to ensure valid signature
+        if (options.platform === 'darwin') {
+          const { execSync } = require('child_process');
+          const appPath = path.join(outputPath, 'Grep Build.app');
+          console.log(`[Packaging] Signing app with adhoc signature: ${appPath}`);
+          try {
+            execSync(`codesign --force --deep --sign - "${appPath}"`, { stdio: 'inherit' });
+            console.log('[Packaging] App signed successfully');
+          } catch (err) {
+            console.error('[Packaging] Warning: Failed to sign app:', err);
+          }
         }
       }
     },

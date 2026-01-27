@@ -13,6 +13,7 @@ export interface Command {
 export interface Skill {
   name: string;
   path: string;
+  content: string;
   description?: string;
   scope: 'user' | 'project';
 }
@@ -168,8 +169,23 @@ export class ExtensionService {
       const entries = await fs.readdir(dir, { withFileTypes: true });
 
       for (const entry of entries) {
-        if (entry.isDirectory()) {
+        // Handle both directories and symlinks to directories
+        const isDir = entry.isDirectory();
+        const isSymlink = entry.isSymbolicLink();
+
+        if (isDir || isSymlink) {
           const skillDir = path.join(dir, entry.name);
+
+          // For symlinks, verify the target is a directory
+          if (isSymlink) {
+            try {
+              const stat = await fs.stat(skillDir); // fs.stat follows symlinks
+              if (!stat.isDirectory()) continue;
+            } catch {
+              continue; // Broken symlink or inaccessible target
+            }
+          }
+
           const skillFile = path.join(skillDir, 'SKILL.md');
 
           try {
@@ -178,7 +194,7 @@ export class ExtensionService {
             const firstLine = lines[0]?.trim();
             const description = firstLine?.startsWith('#') ? firstLine.replace(/^#+\s*/, '') : undefined;
 
-            skills.push({ name: entry.name, path: skillDir, description, scope });
+            skills.push({ name: entry.name, path: skillDir, content, description, scope });
           } catch (err) {
             const subSkills = await this.scanSkillsRec(skillDir, scope);
             skills.push(...subSkills);

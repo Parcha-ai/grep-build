@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { Terminal, FileText, Search, FolderOpen, Play, Edit2, Globe, Code, HelpCircle, ListTodo, Loader2, ChevronRight, ChevronDown, CheckCircle2, Circle, Clock, ExternalLink } from 'lucide-react';
+import { Terminal, FileText, Search, FolderOpen, Play, Edit2, Globe, Code, HelpCircle, ListTodo, Loader2, ChevronRight, ChevronDown, CheckCircle2, Circle, Clock, ExternalLink, ListPlus, ListChecks, FileSearch, List, ArrowUpRight } from 'lucide-react';
 import { LazyMonacoEditor, LazyDiffEditor } from './LazyMonacoEditor';
 import type { ToolCall } from '../../../shared/types';
 import { useEditorStore } from '../../stores/editor.store';
@@ -10,6 +10,7 @@ interface ToolCallCardProps {
   isLatestToolCall?: boolean; // Alias for isLatest
   isStreaming?: boolean; // If currently streaming
   defaultCollapsed?: boolean; // If true, start collapsed (for old messages to improve performance)
+  onBackground?: (toolCall: ToolCall) => void; // Callback to background a running Bash command
 }
 
 interface TodoItem {
@@ -44,6 +45,35 @@ const TOOL_CONFIG: Record<string, {
     iconSize: 18
   },
   TodoWrite: { icon: ListTodo, label: 'Todo', color: 'text-amber-400' },
+  // New SDK Tasks system
+  TaskCreate: {
+    icon: ListPlus,
+    label: 'Create Task',
+    color: 'text-green-400',
+    bgGradient: 'from-green-900/20 to-emerald-900/20',
+    borderColor: 'border-green-500/50',
+  },
+  TaskUpdate: {
+    icon: ListChecks,
+    label: 'Update Task',
+    color: 'text-blue-400',
+    bgGradient: 'from-blue-900/20 to-cyan-900/20',
+    borderColor: 'border-blue-500/50',
+  },
+  TaskGet: {
+    icon: FileSearch,
+    label: 'Get Task',
+    color: 'text-purple-400',
+    bgGradient: 'from-purple-900/20 to-violet-900/20',
+    borderColor: 'border-purple-500/50',
+  },
+  TaskList: {
+    icon: List,
+    label: 'List Tasks',
+    color: 'text-amber-400',
+    bgGradient: 'from-amber-900/20 to-yellow-900/20',
+    borderColor: 'border-amber-500/50',
+  },
   AskUserQuestion: { icon: HelpCircle, label: 'Ask', color: 'text-rose-400' },
   // Browser automation tools (Stagehand MCP)
   BrowserSnapshot: { icon: Globe, label: 'BrowserSnapshot', color: 'text-cyan-400' },
@@ -122,6 +152,29 @@ function formatToolInput(name: string, input: Record<string, unknown>): string {
       const pending = todos.filter(t => t.status === 'pending').length;
       return `${completed}/${todos.length} done${inProgress > 0 ? `, ${inProgress} active` : ''}${pending > 0 ? `, ${pending} pending` : ''}`;
     }
+    // New SDK Tasks system
+    case 'TaskCreate': {
+      const subject = input.subject as string;
+      return subject ? `Creating: "${subject.slice(0, 50)}${subject.length > 50 ? '...' : ''}"` : 'Creating task...';
+    }
+    case 'TaskUpdate': {
+      const taskId = input.taskId as string;
+      const status = input.status as string;
+      const subject = input.subject as string;
+      if (status) {
+        return `Task #${taskId}: ${status}`;
+      }
+      if (subject) {
+        return `Task #${taskId}: "${subject.slice(0, 30)}${subject.length > 30 ? '...' : ''}"`;
+      }
+      return `Updating task #${taskId}`;
+    }
+    case 'TaskGet': {
+      const taskId = input.taskId as string;
+      return `Getting task #${taskId}`;
+    }
+    case 'TaskList':
+      return 'Listing tasks';
     // Browser automation tools (Stagehand MCP)
     case 'BrowserSnapshot':
     case 'BrowserNavigate':
@@ -630,7 +683,7 @@ function ExpandedContent({ toolCall, priority = false }: { toolCall: ToolCall; p
   );
 }
 
-export default function ToolCallCard({ toolCall, isLatest = false, isLatestToolCall = false, defaultCollapsed = false }: ToolCallCardProps) {
+export default function ToolCallCard({ toolCall, isLatest = false, isLatestToolCall = false, defaultCollapsed = false, onBackground }: ToolCallCardProps) {
   // Start collapsed for old messages (performance optimization) - otherwise expanded by default
   const [isExpanded, setIsExpanded] = useState(!defaultCollapsed);
   // Track if content has ever been rendered (to prevent Monaco disposal errors on collapse)
@@ -658,6 +711,10 @@ export default function ToolCallCard({ toolCall, isLatest = false, isLatestToolC
   // Detect if this is a Task tool (subagent)
   const isTaskTool = baseToolName === 'Task';
   const subagentType = isTaskTool ? getSubagentType(toolCall.input) : null;
+
+  // Detect if this is a running Bash command that can be backgrounded
+  const isBashTool = baseToolName === 'Bash';
+  const canBackground = isBashTool && isRunning && onBackground;
 
   // Status dot color
   const dotColor = isRunning ? 'bg-yellow-500' : 'bg-green-500';
@@ -712,6 +769,22 @@ export default function ToolCallCard({ toolCall, isLatest = false, isLatestToolC
         {/* Loading spinner for running tools */}
         {isRunning && (
           <Loader2 size={12} className="text-yellow-500 animate-spin flex-shrink-0" />
+        )}
+
+        {/* Background button for running Bash commands */}
+        {canBackground && (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onBackground(toolCall);
+            }}
+            className="ml-1 px-1.5 py-0.5 text-[10px] font-bold bg-cyan-500/20 hover:bg-cyan-500/30 text-cyan-400 border border-cyan-500/30 flex items-center gap-1"
+            style={{ borderRadius: 0 }}
+            title="Move to background (Cmd+B)"
+          >
+            <ArrowUpRight size={10} />
+            <span>BG</span>
+          </button>
         )}
       </button>
 

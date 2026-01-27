@@ -1,6 +1,18 @@
 import { type IpcMain } from 'electron';
+import { spawn } from 'child_process';
 import { extensionService } from '../services/extension.service';
 import { IPC_CHANNELS } from '../../shared/constants/channels';
+
+interface SkillInstallResult {
+  success: boolean;
+  output: string;
+  error?: string;
+}
+
+interface AvailableSkill {
+  name: string;
+  description?: string;
+}
 
 export function registerExtensionHandlers(ipcMain: IpcMain): void {
   // Scan for slash commands
@@ -46,4 +58,148 @@ export function registerExtensionHandlers(ipcMain: IpcMain): void {
       throw error;
     }
   });
+
+  // Install a skill using npx add-skill
+  ipcMain.handle(
+    IPC_CHANNELS.EXTENSION_INSTALL_SKILL,
+    async (_event, source: string, options?: { global?: boolean; skills?: string[]; projectPath?: string }): Promise<SkillInstallResult> => {
+      return new Promise((resolve) => {
+        const args = ['add-skill', source];
+
+        // Add --yes flag for non-interactive mode
+        args.push('-y');
+
+        // Add global flag if specified
+        if (options?.global) {
+          args.push('-g');
+        }
+
+        // Add specific skills if provided
+        if (options?.skills && options.skills.length > 0) {
+          for (const skill of options.skills) {
+            args.push('--skill', skill);
+          }
+        }
+
+        // Target claude-code agent
+        args.push('-a', 'claude-code');
+
+        console.log('[Extension IPC] Running: npx', args.join(' '));
+
+        const cwd = options?.projectPath || process.cwd();
+        let output = '';
+        let errorOutput = '';
+
+        const child = spawn('npx', args, {
+          cwd,
+          shell: true,
+          env: { ...process.env, FORCE_COLOR: '0' }, // Disable colors for cleaner output
+        });
+
+        child.stdout?.on('data', (data: Buffer) => {
+          const text = data.toString();
+          output += text;
+          console.log('[Extension IPC] stdout:', text);
+        });
+
+        child.stderr?.on('data', (data: Buffer) => {
+          const text = data.toString();
+          errorOutput += text;
+          console.log('[Extension IPC] stderr:', text);
+        });
+
+        child.on('close', (code) => {
+          if (code === 0) {
+            resolve({
+              success: true,
+              output: output || 'Skill installed successfully',
+            });
+          } else {
+            resolve({
+              success: false,
+              output,
+              error: errorOutput || `Process exited with code ${code}`,
+            });
+          }
+        });
+
+        child.on('error', (err) => {
+          resolve({
+            success: false,
+            output: '',
+            error: err.message,
+          });
+        });
+      });
+    }
+  );
+
+  // List available skills from a source
+  ipcMain.handle(
+    IPC_CHANNELS.EXTENSION_LIST_AVAILABLE_SKILLS,
+    async (_event, source: string): Promise<{ success: boolean; skills?: AvailableSkill[]; error?: string }> => {
+      return new Promise((resolve) => {
+        const args = ['add-skill', source, '--list'];
+
+        console.log('[Extension IPC] Running: npx', args.join(' '));
+
+        let output = '';
+        let errorOutput = '';
+
+        const child = spawn('npx', args, {
+          shell: true,
+          env: { ...process.env, FORCE_COLOR: '0' },
+        });
+
+        child.stdout?.on('data', (data: Buffer) => {
+          output += data.toString();
+        });
+
+        child.stderr?.on('data', (data: Buffer) => {
+          errorOutput += data.toString();
+        });
+
+        child.on('close', (code) => {
+          if (code === 0) {
+            // Parse the output to extract skill names
+            // The output format varies, but typically lists skills line by line
+            const lines = output.split('\n').filter(line => line.trim());
+            const skills: AvailableSkill[] = [];
+
+            for (const line of lines) {
+              // Try to parse skill entries (format varies by tool version)
+              // Common formats: "- skill-name: description" or just "skill-name"
+              const match = line.match(/^\s*[-•]\s*(\S+)(?:\s*[-:]\s*(.*))?$/);
+              if (match) {
+                skills.push({
+                  name: match[1],
+                  description: match[2]?.trim(),
+                });
+              } else if (line.trim() && !line.includes('Available skills') && !line.includes('---')) {
+                // Fallback: treat the whole line as a skill name
+                skills.push({ name: line.trim() });
+              }
+            }
+
+            resolve({
+              success: true,
+              skills,
+            });
+          } else {
+            resolve({
+              success: false,
+              error: errorOutput || `Process exited with code ${code}`,
+            });
+          }
+        });
+
+        child.on('error', (err) => {
+          resolve({
+            success: false,
+            error: err.message,
+          });
+        });
+      });
+    }
+  );
 }

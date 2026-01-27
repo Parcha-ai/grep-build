@@ -6,6 +6,25 @@ type SplitRatio = 'equal' | 'main-focus' | 'side-focus';
 // Browser viewport mode: 'desktop' = full width, 'mobile' = 375px width (iPhone)
 type ViewportMode = 'desktop' | 'mobile';
 
+// Default mobile browser height (iPhone frame)
+const DEFAULT_MOBILE_BROWSER_HEIGHT = 667;
+
+// Load persisted mobile browser height from localStorage
+const getPersistedMobileBrowserHeight = (): number => {
+  try {
+    const stored = localStorage.getItem('grep-mobile-browser-height');
+    if (stored) {
+      const height = parseInt(stored, 10);
+      if (!isNaN(height) && height >= 400 && height <= 900) {
+        return height;
+      }
+    }
+  } catch (e) {
+    // Ignore localStorage errors
+  }
+  return DEFAULT_MOBILE_BROWSER_HEIGHT;
+};
+
 interface UIState {
   isSidebarOpen: boolean;
   sidebarWidth: number;
@@ -22,6 +41,7 @@ interface UIState {
   selectedElement: unknown | null;
   splitRatio: SplitRatio;
   viewportMode: ViewportMode;
+  mobileBrowserHeight: number; // Height of mobile browser frame, persisted
 
   // Multi-session browser support: track which sessions have browsers enabled
   sessionBrowsersEnabled: Record<string, boolean>;
@@ -47,6 +67,7 @@ interface UIState {
   setSplitRatio: (ratio: SplitRatio) => void;
   toggleViewportMode: () => void;
   setViewportMode: (mode: ViewportMode) => void;
+  setMobileBrowserHeight: (height: number) => void;
   openSettings: () => void;
   closeSettings: () => void;
   checkApiKey: () => Promise<boolean>;
@@ -80,6 +101,7 @@ export const useUIStore = create<UIState>((set, get) => ({
   selectedElement: null,
   splitRatio: 'equal',
   viewportMode: 'desktop',
+  mobileBrowserHeight: getPersistedMobileBrowserHeight(),
 
   // Multi-session browser state
   sessionBrowsersEnabled: {},
@@ -109,6 +131,15 @@ export const useUIStore = create<UIState>((set, get) => ({
     viewportMode: state.viewportMode === 'desktop' ? 'mobile' : 'desktop',
   })),
   setViewportMode: (mode) => set({ viewportMode: mode }),
+  setMobileBrowserHeight: (height) => {
+    const clampedHeight = Math.max(400, Math.min(900, height));
+    try {
+      localStorage.setItem('grep-mobile-browser-height', String(clampedHeight));
+    } catch (e) {
+      // Ignore localStorage errors
+    }
+    set({ mobileBrowserHeight: clampedHeight });
+  },
   openSettings: () => set({ isSettingsOpen: true }),
   closeSettings: () => set({ isSettingsOpen: false }),
   checkApiKey: async () => {

@@ -15,6 +15,18 @@ export type PermissionMode = 'default' | 'acceptEdits' | 'bypassPermissions' | '
 // Thinking modes: off (0), thinking (10k tokens), ultrathink (100k tokens)
 export type ThinkingMode = 'off' | 'thinking' | 'ultrathink';
 
+// Background task for backgrounded Bash commands
+export interface BackgroundTask {
+  id: string;              // Tool call ID
+  sessionId: string;       // Parent session
+  command: string;         // The bash command
+  outputFile?: string;     // Path from SDK result
+  output: string;          // Accumulated output
+  status: 'running' | 'completed' | 'error';
+  startedAt: Date;
+  completedAt?: Date;
+}
+
 // Chronological event for rendering in order
 export interface StreamEvent {
   id: string;
@@ -57,6 +69,7 @@ interface SessionState {
     attachments?: unknown[];
     timestamp: number;
   }>>;
+  backgroundTasks: Record<string, BackgroundTask[]>;
 
   setActiveSession: (sessionId: string | null) => void;
   addSession: (session: Session) => void;
@@ -112,6 +125,11 @@ interface SessionState {
   // Setup progress
   setSetupProgress: (sessionId: string, progress: SetupProgressEvent | null) => void;
   subscribeToSetupProgress: () => () => void;
+  // Background tasks
+  addBackgroundTask: (sessionId: string, task: BackgroundTask) => void;
+  updateBackgroundTask: (sessionId: string, taskId: string, updates: Partial<BackgroundTask>) => void;
+  removeBackgroundTask: (sessionId: string, taskId: string) => void;
+  subscribeToBackgroundTasks: () => () => void;
   // Compaction status (Smart Compact feature)
   setCompactionStatus: (sessionId: string, status: CompactionStatus | null) => void;
   subscribeToCompaction: () => () => void;
@@ -143,6 +161,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   setupProgress: {},
   compactionStatus: {},
   messageQueue: {},
+  backgroundTasks: {},
 
   setActiveSession: async (sessionId) => {
     const { loadMessages, startSession } = get();
@@ -1188,6 +1207,58 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     });
 
     return unsubscribe;
+  },
+
+  // Background task methods
+  addBackgroundTask: (sessionId, task) => {
+    set((state) => ({
+      backgroundTasks: {
+        ...state.backgroundTasks,
+        [sessionId]: [...(state.backgroundTasks[sessionId] || []), task],
+      },
+    }));
+    console.log('[SessionStore] Added background task:', task.id, task.command.slice(0, 50));
+  },
+
+  updateBackgroundTask: (sessionId, taskId, updates) => {
+    set((state) => ({
+      backgroundTasks: {
+        ...state.backgroundTasks,
+        [sessionId]: (state.backgroundTasks[sessionId] || []).map((task) =>
+          task.id === taskId ? { ...task, ...updates } : task
+        ),
+      },
+    }));
+  },
+
+  removeBackgroundTask: (sessionId, taskId) => {
+    set((state) => ({
+      backgroundTasks: {
+        ...state.backgroundTasks,
+        [sessionId]: (state.backgroundTasks[sessionId] || []).filter((task) => task.id !== taskId),
+      },
+    }));
+    console.log('[SessionStore] Removed background task:', taskId);
+  },
+
+  subscribeToBackgroundTasks: () => {
+    if (!hasElectronAPI) return () => {};
+
+    const { updateBackgroundTask } = get();
+
+    // Subscribe to background task output updates
+    const unsubscribeOutput = window.electronAPI.claude.onBackgroundTaskOutput?.((data) => {
+      console.log('[SessionStore] Background task output received:', data.taskId);
+      updateBackgroundTask(data.sessionId, data.taskId, {
+        output: data.output,
+        status: data.status,
+        completedAt: data.completedAt ? new Date(data.completedAt) : undefined,
+      });
+    });
+
+    return () => {
+      unsubscribeOutput?.();
+    };
   },
 
   // Smart Compact / Compaction status methods

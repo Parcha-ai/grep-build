@@ -1245,6 +1245,18 @@ export class ClaudeService {
       return;
     }
 
+    // Validate message is not empty to prevent API error "text content blocks must be non-empty"
+    if (!userMessage || userMessage.trim() === '') {
+      // Check if we have image attachments - if so, use a placeholder message
+      const hasImages = attachments?.some(a => a.type === 'image');
+      if (!hasImages) {
+        yield { type: 'error', error: 'Please enter a message before sending.' };
+        return;
+      }
+      // For image-only messages, use a minimal placeholder
+      userMessage = 'Please analyze this image.';
+    }
+
     // Get session for working directory
     const session = this.sessionStore.get(`sessions.${sessionId}`) as Session | undefined;
     if (!session) {
@@ -1929,15 +1941,27 @@ You are intelligent enough to determine what URLs to test based on the project s
             // Result message may contain errors from the API
             const resultMsg = msg as SDKMessage & { is_error?: boolean; result?: string };
 
-            // Check for corrupted transcript error
+            // Check for empty text content blocks error
             if (resultMsg.is_error && resultMsg.result?.includes('text content blocks must be non-empty')) {
-              console.error('[Claude SDK] Corrupted transcript detected - clearing SDK session ID for:', sessionId);
-              // Clear the SDK session ID so next message starts fresh
-              this.sessionStore.delete(`sessions.${sessionId}.sdkSessionId`);
-              yield {
-                type: 'error',
-                error: 'Session transcript was corrupted. Please try sending your message again - a fresh session will be started.'
-              };
+              console.error('[Claude SDK] Empty text content blocks detected in transcript for:', sessionId);
+              const sdkSessionId = this.sessionStore.get(`sessions.${sessionId}.sdkSessionId`) as string | undefined;
+
+              // Attempt to repair the transcript by removing entries with empty text
+              const repaired = await this.repairEmptyTextBlocks(sessionId, sdkSessionId);
+
+              if (repaired) {
+                yield {
+                  type: 'error',
+                  error: '⚠️ Empty text content was found in the session transcript. The transcript has been repaired - please try sending your message again.'
+                };
+              } else {
+                // If repair failed, clear SDK session ID to start fresh
+                this.sessionStore.delete(`sessions.${sessionId}.sdkSessionId`);
+                yield {
+                  type: 'error',
+                  error: 'Session transcript was corrupted with empty content. Please try sending your message again - a fresh session will be started.'
+                };
+              }
               return;
             }
 
@@ -2088,6 +2112,17 @@ You are intelligent enough to determine what URLs to test based on the project s
       return false;
     }
 
+    // Validate message is not empty to prevent API error
+    let safeMessage = message;
+    const hasImages = attachments?.some(a => a.type === 'image');
+    if (!message || message.trim() === '') {
+      if (!hasImages) {
+        console.log('[Claude Service] injectMessage: Empty message with no images, skipping');
+        return false;
+      }
+      safeMessage = 'Please analyze this image.';
+    }
+
     console.log('[Claude Service] injectMessage: Injecting message into active query for session', sessionId);
 
     try {
@@ -2095,11 +2130,11 @@ You are intelligent enough to determine what URLs to test based on the project s
       async function* createMessageStream(): AsyncIterable<SDKUserMessage> {
         // Build content with any image attachments
         const imageAttachments = attachments?.filter(a => a.type === 'image') || [];
-        const hasImages = imageAttachments.length > 0;
+        const hasImagesLocal = imageAttachments.length > 0;
 
-        if (hasImages) {
+        if (hasImagesLocal) {
           const content: Array<{ type: 'text'; text: string } | { type: 'image'; source: { type: 'base64'; media_type: string; data: string } }> = [
-            { type: 'text', text: message }
+            { type: 'text', text: safeMessage }
           ];
 
           for (const attachment of imageAttachments) {
@@ -2133,7 +2168,7 @@ You are intelligent enough to determine what URLs to test based on the project s
             type: 'user',
             message: {
               role: 'user',
-              content: message,
+              content: safeMessage,
             },
             parent_tool_use_id: null,
             session_id: '',
@@ -2273,6 +2308,159 @@ You are intelligent enough to determine what URLs to test based on the project s
       return true;
     } catch (error) {
       console.error('[Claude] Error repairing transcript:', error);
+      return false;
+    }
+  }
+
+  /**
+   * Repair a transcript that contains empty text content blocks.
+   *
+   * The error "text content blocks must be non-empty" means the transcript
+   * contains entries with empty text. We repair by either:
+   * 1. Removing entries with empty text content
+   * 2. Fixing the empty text by replacing with a placeholder
+   */
+  private async repairEmptyTextBlocks(sessionId: string, sdkSessionId?: string): Promise<boolean> {
+    try {
+      // Resolve the SDK session ID
+      const resolvedSdkSessionId = sdkSessionId
+        || this.sessionStore.get(`sdkSessionMappings.${sessionId}`) as string | undefined
+        || this.sessionStore.get(`sessions.${sessionId}.sdkSessionId`) as string | undefined;
+
+      if (!resolvedSdkSessionId) {
+        console.log('[Claude] No SDK session ID found, cannot repair empty text blocks');
+        return false;
+      }
+
+      // Find the transcript file
+      const claudeDir = path.join(os.homedir(), '.claude', 'projects');
+      const transcriptFilename = `${resolvedSdkSessionId}.jsonl`;
+
+      if (!fs.existsSync(claudeDir)) {
+        console.log('[Claude] Claude projects directory not found:', claudeDir);
+        return false;
+      }
+
+      // Search for the transcript file
+      let transcriptPath: string | null = null;
+      const projectDirs = fs.readdirSync(claudeDir);
+      for (const projectDir of projectDirs) {
+        const candidatePath = path.join(claudeDir, projectDir, transcriptFilename);
+        if (fs.existsSync(candidatePath)) {
+          transcriptPath = candidatePath;
+          break;
+        }
+      }
+
+      if (!transcriptPath) {
+        console.log('[Claude] Transcript file not found:', transcriptFilename);
+        return false;
+      }
+
+      console.log('[Claude] Repairing empty text blocks in transcript:', transcriptPath);
+
+      // Read the transcript file
+      const content = fs.readFileSync(transcriptPath, 'utf-8');
+      const lines = content.trim().split('\n');
+
+      if (lines.length === 0) {
+        console.log('[Claude] Transcript is empty, nothing to repair');
+        return false;
+      }
+
+      // Helper to check if an entry has empty text content
+      const hasEmptyTextContent = (entry: Record<string, unknown>): boolean => {
+        // Check message.content array for empty text blocks
+        const message = entry.message as Record<string, unknown> | undefined;
+        if (message?.content) {
+          const contentArray = message.content as Array<{ type?: string; text?: string }>;
+          if (Array.isArray(contentArray)) {
+            for (const block of contentArray) {
+              if (block.type === 'text' && (block.text === '' || block.text === undefined)) {
+                return true;
+              }
+            }
+          }
+        }
+        // Check direct content property
+        if (entry.content) {
+          const contentArray = entry.content as Array<{ type?: string; text?: string }>;
+          if (Array.isArray(contentArray)) {
+            for (const block of contentArray) {
+              if (block.type === 'text' && (block.text === '' || block.text === undefined)) {
+                return true;
+              }
+            }
+          }
+        }
+        return false;
+      };
+
+      // Helper to fix empty text content by replacing with placeholder
+      const fixEmptyTextContent = (entry: Record<string, unknown>): Record<string, unknown> => {
+        const fixed = JSON.parse(JSON.stringify(entry)); // Deep clone
+
+        const fixContent = (content: Array<{ type?: string; text?: string }>) => {
+          for (const block of content) {
+            if (block.type === 'text' && (block.text === '' || block.text === undefined)) {
+              block.text = '[empty]'; // Replace with placeholder
+            }
+          }
+        };
+
+        if (fixed.message?.content && Array.isArray(fixed.message.content)) {
+          fixContent(fixed.message.content);
+        }
+        if (fixed.content && Array.isArray(fixed.content)) {
+          fixContent(fixed.content);
+        }
+
+        return fixed;
+      };
+
+      // Parse and fix entries
+      let modified = false;
+      const repairedLines: string[] = [];
+
+      for (const line of lines) {
+        if (!line.trim()) continue;
+
+        try {
+          const parsed = JSON.parse(line);
+
+          if (hasEmptyTextContent(parsed)) {
+            console.log('[Claude] Found entry with empty text content, fixing...');
+            const fixed = fixEmptyTextContent(parsed);
+            repairedLines.push(JSON.stringify(fixed));
+            modified = true;
+          } else {
+            repairedLines.push(line);
+          }
+        } catch {
+          // Keep unparseable lines as-is
+          repairedLines.push(line);
+        }
+      }
+
+      if (!modified) {
+        console.log('[Claude] No empty text blocks found in transcript');
+        // Fall back to removing last assistant turn as a more aggressive fix
+        return this.repairCorruptedTranscript(sessionId, sdkSessionId);
+      }
+
+      // Create backup before modifying
+      const backupPath = transcriptPath + '.backup.' + Date.now();
+      fs.copyFileSync(transcriptPath, backupPath);
+      console.log('[Claude] Created transcript backup:', backupPath);
+
+      // Write repaired transcript
+      const repairedContent = repairedLines.join('\n') + '\n';
+      fs.writeFileSync(transcriptPath, repairedContent);
+      console.log('[Claude] Transcript repaired - fixed empty text blocks');
+
+      return true;
+    } catch (error) {
+      console.error('[Claude] Error repairing empty text blocks:', error);
       return false;
     }
   }
