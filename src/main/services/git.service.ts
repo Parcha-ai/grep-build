@@ -90,7 +90,7 @@ export class GitService {
     };
   }
 
-  async getLog(sessionId: string, limit: number = 50): Promise<Commit[]> {
+  async getLog(sessionId: string, limit = 50): Promise<Commit[]> {
     const git = this.getGit(sessionId);
     const log = await git.log({ maxCount: limit });
 

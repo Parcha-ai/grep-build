@@ -46,13 +46,22 @@ export default function MessageList({
     return map;
   }, [currentToolCalls]);
 
-  // Sort messages by timestamp and filter out system messages
+  // Sort messages by timestamp, show setup system messages but filter other system messages
   const sortedMessages = React.useMemo(() => {
     return [...messages]
-      .filter(msg => msg.role !== 'system') // Don't show system messages in chat
+      .filter(msg => {
+        // Skip undefined/null messages
+        if (!msg) return false;
+        // Show setup-related system messages (they start with "setup-" id)
+        if (msg.role === 'system' && msg.id?.startsWith('setup-')) {
+          return true;
+        }
+        // Filter out other system messages
+        return msg.role !== 'system';
+      })
       .sort((a, b) => {
-        const timeA = new Date(a.timestamp).getTime();
-        const timeB = new Date(b.timestamp).getTime();
+        const timeA = new Date(a?.timestamp || 0).getTime();
+        const timeB = new Date(b?.timestamp || 0).getTime();
         return timeA - timeB;
       });
   }, [messages]);

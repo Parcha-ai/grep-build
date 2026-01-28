@@ -1,15 +1,33 @@
 import React from 'react';
-import { Play, Square, Trash2, GitBranch } from 'lucide-react';
+import { Play, Square, Trash2, GitBranch, GitFork } from 'lucide-react';
 import { useSessionStore } from '../../stores/session.store';
 import type { Session } from '../../../shared/types';
+
+// Format date as relative time (e.g., "2h ago", "3d ago", "Jan 15")
+function formatRelativeDate(date: Date): string {
+  const now = new Date();
+  const diffMs = now.getTime() - date.getTime();
+  const diffMins = Math.floor(diffMs / 60000);
+  const diffHours = Math.floor(diffMs / 3600000);
+  const diffDays = Math.floor(diffMs / 86400000);
+
+  if (diffMins < 1) return 'now';
+  if (diffMins < 60) return `${diffMins}m`;
+  if (diffHours < 24) return `${diffHours}h`;
+  if (diffDays < 7) return `${diffDays}d`;
+
+  // For older dates, show month and day
+  return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+}
 
 interface SessionCardProps {
   session: Session;
   isActive: boolean;
   onClick: () => void;
+  isFork?: boolean;
 }
 
-export default function SessionCard({ session, isActive, onClick }: SessionCardProps) {
+export default function SessionCard({ session, isActive, onClick, isFork = false }: SessionCardProps) {
   const { startSession, stopSession, deleteSession } = useSessionStore();
 
   const getStatusColor = () => {
@@ -73,12 +91,20 @@ export default function SessionCard({ session, isActive, onClick }: SessionCardP
         {/* Content */}
         <div className="flex-1 min-w-0">
           <h4 className={`text-xs font-bold truncate ${isActive ? 'text-claude-text' : 'text-claude-text-secondary'}`}>
-            {session.name}
+            {/* Use forkName for forks, otherwise session name */}
+            {session.forkName || session.name}
           </h4>
           <div className="flex items-center gap-1 mt-0.5 text-claude-text-secondary">
-            <GitBranch size={10} />
+            {isFork || session.isWorktree ? (
+              <GitFork size={10} className="text-emerald-400 flex-shrink-0" />
+            ) : (
+              <GitBranch size={10} className="flex-shrink-0" />
+            )}
             <span className="text-[10px] truncate">
               {session.branch}
+            </span>
+            <span className="text-[10px] text-claude-text-secondary/60">
+              · {formatRelativeDate(new Date(session.updatedAt))}
             </span>
           </div>
         </div>

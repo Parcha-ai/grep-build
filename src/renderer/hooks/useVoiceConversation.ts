@@ -252,6 +252,14 @@ export const useVoiceConversation = ({
       const audioBuffer = playbackContextRef.current.createBuffer(1, float32Array.length, 16000);
       audioBuffer.copyToChannel(float32Array, 0);
 
+      // Immediately set speaking flag when first audio chunk arrives
+      // This must happen BEFORE pushing to queue to prevent any race conditions
+      // where mic audio might be sent during the transition
+      if (!isSpeakingRef.current) {
+        console.log('[VoiceConversation] AI starting to speak - muting mic input');
+        isSpeakingRef.current = true;
+      }
+
       audioQueueRef.current.push(audioBuffer);
       setState(s => ({ ...s, isSpeaking: true }));
       isSpeakingRef.current = true;  // Mute mic input while speaking
@@ -268,13 +276,18 @@ export const useVoiceConversation = ({
     if (isPlayingRef.current || audioQueueRef.current.length === 0) {
       if (audioQueueRef.current.length === 0) {
         setState(s => ({ ...s, isSpeaking: false }));
-        // Add a small delay before re-enabling mic to avoid echo/feedback
+        // Delay before re-enabling mic to allow:
+        // - Audio to fully stop playing through speakers
+        // - Room echo/reverb to dissipate
+        // - ElevenLabs server-side VAD to reset
+        // 1000ms is conservative to prevent false triggers from echo
         setTimeout(() => {
           // Only re-enable if still not speaking (no new audio queued)
           if (audioQueueRef.current.length === 0 && !isPlayingRef.current) {
+            console.log('[VoiceConversation] Re-enabling mic input after speech finished (1s delay)');
             isSpeakingRef.current = false;
           }
-        }, 300);
+        }, 1000);
       }
       return;
     }
@@ -405,11 +418,13 @@ export const useVoiceConversation = ({
         }
       }
 
-      // Request microphone
+      // Request microphone with audio processing to reduce echo/feedback
+      // Note: Browser echo cancellation has limitations - we also mute mic during playback
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
           echoCancellation: true,
           noiseSuppression: true,
+          autoGainControl: true,  // Helps prevent mic from picking up loud sounds
           sampleRate: 16000, // ElevenLabs expects 16kHz
         },
       });

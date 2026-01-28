@@ -29,7 +29,7 @@ export interface AgentDefinition {
 
 export class ExtensionService {
   // Find all .claude directories recursively within a project
-  private async findClaudeDirs(rootPath: string, maxDepth: number = 3): Promise<string[]> {
+  private async findClaudeDirs(rootPath: string, maxDepth = 3): Promise<string[]> {
     const claudeDirs: string[] = [];
 
     const scan = async (dir: string, depth: number) => {

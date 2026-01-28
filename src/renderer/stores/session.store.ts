@@ -1193,20 +1193,54 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   subscribeToSetupProgress: () => {
     if (!hasElectronAPI) return () => {};
 
-    const unsubscribe = window.electronAPI.dev.onSetupProgress((progress) => {
-      const { setSetupProgress } = get();
+    const handleProgress = (progress: { sessionId: string; status: 'running' | 'completed' | 'error'; message?: string; output?: string; error?: string }) => {
+      const { setupProgress, setSetupProgress, addMessage } = get();
       console.log('[SessionStore] Setup progress received:', progress);
-      setSetupProgress(progress.sessionId, progress);
 
-      // If setup completed or errored, clear the progress after a delay
+      // Get existing progress for this session to accumulate output
+      const existing = setupProgress[progress.sessionId];
+
+      // Accumulate output if we have existing output and new output
+      let accumulatedOutput = progress.output || '';
+      if (existing?.output && progress.output) {
+        accumulatedOutput = existing.output + progress.output;
+      } else if (existing?.output && !progress.output) {
+        accumulatedOutput = existing.output;
+      }
+
+      setSetupProgress(progress.sessionId, {
+        ...progress,
+        output: accumulatedOutput,
+      });
+
+      // If setup completed or errored, add output as a system message in chat and clear progress
       if (progress.status === 'completed' || progress.status === 'error') {
+        // Add setup output as a system message at the top of chat
+        if (accumulatedOutput) {
+          const statusEmoji = progress.status === 'completed' ? '✓' : '✗';
+          const statusText = progress.status === 'completed' ? 'Setup completed' : 'Setup failed';
+          addMessage(progress.sessionId, {
+            id: `setup-${Date.now()}`,
+            role: 'system',
+            content: `**${statusEmoji} ${statusText}**\n\n\`\`\`\n${accumulatedOutput.trim()}\n\`\`\`${progress.error ? `\n\n**Error:** ${progress.error}` : ''}`,
+            timestamp: new Date(),
+          });
+        }
+
         setTimeout(() => {
           setSetupProgress(progress.sessionId, null);
-        }, 3000);
+        }, progress.status === 'error' ? 10000 : 1000); // Shorter delay since we now show in chat
       }
-    });
+    };
 
-    return unsubscribe;
+    // Subscribe to both dev and SSH setup progress
+    const unsubscribeDev = window.electronAPI.dev.onSetupProgress(handleProgress);
+    const unsubscribeSSH = window.electronAPI.ssh.onSetupProgress(handleProgress);
+
+    return () => {
+      unsubscribeDev();
+      unsubscribeSSH();
+    };
   },
 
   // Background task methods

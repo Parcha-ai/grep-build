@@ -1,5 +1,29 @@
 // Core Types for Grep
 
+// SSH configuration for remote execution
+export interface SSHConfig {
+  host: string;
+  port: number;           // Default: 22
+  username: string;
+  privateKeyPath: string; // Path to local private key
+  remoteWorkdir: string;  // Working directory on remote machine
+  passphrase?: string;    // Encrypted passphrase for private key
+  worktreeScript?: string; // Optional script to run on remote to set up worktree
+  syncSettings?: boolean;  // If true, sync ~/.claude settings to remote before starting
+}
+
+// Saved SSH config (persisted to electron-store, no passphrase)
+export interface SavedSSHConfig {
+  host: string;
+  port: string;
+  username: string;
+  privateKeyPath: string;
+  remoteWorkdir: string;
+  sessionName: string;
+  worktreeScript: string;
+  syncSettings: boolean;
+}
+
 export interface Session {
   id: string;
   name: string;
@@ -7,6 +31,7 @@ export interface Session {
   worktreePath: string;
   branch: string;
   containerId?: string;
+  sshConfig?: SSHConfig;  // Present if this is an SSH remote session
   status: SessionStatus;
   ports: PortAllocation;
   createdAt: Date;
@@ -19,6 +44,11 @@ export interface Session {
   worktreeInstructions?: string; // Setup instructions to send to Claude when session starts
   worktreeInstructionsSent?: boolean; // Track if instructions have been sent
   errorMessage?: string; // Error message when status is 'error'
+  setupOutput?: string; // Output from worktree setup script (for SSH sessions)
+  // Fork/worktree relationship
+  isWorktree?: boolean; // True if this is a worktree fork of another repo
+  parentRepoPath?: string; // Path to the parent repo this was forked from
+  forkName?: string; // Silly memorable name for this fork (e.g., "fuzzy-tiger")
 }
 
 export type SessionStatus = 'creating' | 'starting' | 'setup' | 'running' | 'stopping' | 'stopped' | 'error';

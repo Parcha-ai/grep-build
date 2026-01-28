@@ -1,0 +1,448 @@
+import React, { useState, useEffect } from 'react';
+import { Loader2, CheckCircle, XCircle, Server, Key, Folder, AlertTriangle, Terminal, Settings, Wifi, Wrench } from 'lucide-react';
+import type { SSHConfig, SavedSSHConfig } from '../../../shared/types';
+
+interface SSHConfigFormProps {
+  onBack: () => void;
+  onConnect: (config: SSHConfig, name: string) => Promise<void>;
+}
+
+type TabId = 'connection' | 'setup';
+
+export default function SSHConfigForm({ onBack, onConnect }: SSHConfigFormProps) {
+  // Tab state
+  const [activeTab, setActiveTab] = useState<TabId>('connection');
+  const [isLoading, setIsLoading] = useState(true);
+
+  // Connection settings
+  const [host, setHost] = useState('');
+  const [port, setPort] = useState('22');
+  const [username, setUsername] = useState('');
+  const [privateKeyPath, setPrivateKeyPath] = useState('');
+  const [passphrase, setPassphrase] = useState(''); // Never save passphrase
+
+  // Setup settings
+  const [remoteWorkdir, setRemoteWorkdir] = useState('');
+  const [sessionName, setSessionName] = useState('');
+  const [worktreeScript, setWorktreeScript] = useState('');
+  const [syncSettings, setSyncSettings] = useState(true);
+
+  // Status
+  const [isTesting, setIsTesting] = useState(false);
+  const [testResult, setTestResult] = useState<{
+    success: boolean;
+    error?: string;
+    claudeCodeVersion?: string;
+    hostname?: string;
+  } | null>(null);
+  const [isCreating, setIsCreating] = useState(false);
+  const [createError, setCreateError] = useState<string | null>(null);
+
+  // Load saved config on mount
+  useEffect(() => {
+    const loadConfig = async () => {
+      try {
+        const saved = await window.electronAPI.ssh.getSavedConfig();
+        if (saved) {
+          setHost(saved.host || '');
+          setPort(saved.port || '22');
+          setUsername(saved.username || '');
+          setPrivateKeyPath(saved.privateKeyPath || '');
+          setRemoteWorkdir(saved.remoteWorkdir || '');
+          setSessionName(saved.sessionName || '');
+          setWorktreeScript(saved.worktreeScript || '');
+          setSyncSettings(saved.syncSettings ?? true);
+        }
+      } catch (error) {
+        console.error('Failed to load saved SSH config:', error);
+      } finally {
+        setIsLoading(false);
+      }
+    };
+    loadConfig();
+  }, []);
+
+  // Reset test result when connection fields change
+  useEffect(() => {
+    if (testResult) {
+      setTestResult(null);
+    }
+  }, [host, port, username, privateKeyPath, passphrase]);
+
+  // Auto-test connection when all required fields are filled
+  useEffect(() => {
+    // Don't auto-test while loading saved config or if already testing
+    if (isLoading || isTesting) return;
+
+    // Check if all required fields are filled
+    const hasAllFields = host && username && privateKeyPath && remoteWorkdir;
+    if (!hasAllFields) return;
+
+    // Debounce the test to avoid rapid re-testing while typing
+    const timeoutId = setTimeout(() => {
+      handleTestConnection();
+    }, 800);
+
+    return () => clearTimeout(timeoutId);
+  }, [host, port, username, privateKeyPath, remoteWorkdir, passphrase, isLoading]);
+
+  const handleSelectKeyFile = async () => {
+    const homePath = await window.electronAPI.app.getPath('home');
+    const result = await window.electronAPI.app.showDialog({
+      properties: ['openFile'],
+      filters: [{ name: 'All Files', extensions: ['*'] }],
+      defaultPath: `${homePath}/.ssh`,
+    }) as { canceled: boolean; filePaths: string[] };
+
+    if (!result.canceled && result.filePaths.length > 0) {
+      setPrivateKeyPath(result.filePaths[0]);
+    }
+  };
+
+  const handleTestConnection = async () => {
+    if (!host || !username || !privateKeyPath || !remoteWorkdir) {
+      setTestResult({
+        success: false,
+        error: 'Please fill in all required fields (host, username, key, remote directory)',
+      });
+      return;
+    }
+
+    setIsTesting(true);
+    setTestResult(null);
+
+    try {
+      const config: SSHConfig = {
+        host,
+        port: parseInt(port) || 22,
+        username,
+        privateKeyPath,
+        remoteWorkdir,
+        passphrase: passphrase || undefined,
+      };
+
+      const result = await window.electronAPI.ssh.testConnection(config);
+      setTestResult(result);
+
+      if (result.success && !sessionName && result.hostname) {
+        setSessionName(`SSH: ${result.hostname}`);
+      }
+    } catch (error) {
+      setTestResult({
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown error',
+      });
+    } finally {
+      setIsTesting(false);
+    }
+  };
+
+  const handleCreate = async () => {
+    if (!testResult?.success) {
+      setCreateError('Please test the connection first');
+      return;
+    }
+
+    setIsCreating(true);
+    setCreateError(null);
+
+    try {
+      const config: SSHConfig = {
+        host,
+        port: parseInt(port) || 22,
+        username,
+        privateKeyPath,
+        remoteWorkdir,
+        passphrase: passphrase || undefined,
+        worktreeScript: worktreeScript || undefined,
+        syncSettings,
+      };
+
+      // Save config via IPC (persisted to electron-store)
+      await window.electronAPI.ssh.saveConfig({ host, port, username, privateKeyPath, remoteWorkdir, sessionName, worktreeScript, syncSettings });
+      await onConnect(config, sessionName || `SSH: ${host}`);
+    } catch (error) {
+      setCreateError(error instanceof Error ? error.message : 'Failed to create session');
+    } finally {
+      setIsCreating(false);
+    }
+  };
+
+  const isConnectionValid = host && username && privateKeyPath;
+  const isSetupValid = remoteWorkdir;
+  const canTest = isConnectionValid && isSetupValid;
+  const canCreate = testResult?.success;
+
+  const tabs: { id: TabId; label: string; icon: React.ReactNode }[] = [
+    { id: 'connection', label: 'Connection', icon: <Wifi size={12} /> },
+    { id: 'setup', label: 'Setup', icon: <Wrench size={12} /> },
+  ];
+
+  // Show loading spinner while fetching saved config
+  if (isLoading) {
+    return (
+      <div className="flex flex-col h-full items-center justify-center">
+        <Loader2 size={24} className="animate-spin text-claude-text-secondary" />
+        <span className="mt-2 text-[10px] text-claude-text-secondary">Loading saved config...</span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-col h-full">
+      {/* Tab Header */}
+      <div className="flex border-b border-claude-border mb-3">
+        {tabs.map((tab) => (
+          <button
+            key={tab.id}
+            onClick={() => setActiveTab(tab.id)}
+            className={`flex items-center gap-1.5 px-4 py-2 text-[10px] font-bold transition-colors ${
+              activeTab === tab.id
+                ? 'text-claude-accent border-b-2 border-claude-accent -mb-[1px]'
+                : 'text-claude-text-secondary hover:text-claude-text'
+            }`}
+            style={{ letterSpacing: '0.1em' }}
+          >
+            {tab.icon}
+            {tab.label.toUpperCase()}
+          </button>
+        ))}
+      </div>
+
+      {/* Tab Content */}
+      <div className="flex-1 overflow-y-auto space-y-3">
+        {activeTab === 'connection' && (
+          <>
+            {/* Host & Port */}
+            <div className="flex gap-3">
+              <div className="flex-1">
+                <label className="block text-[10px] font-bold mb-1 text-claude-text-secondary" style={{ letterSpacing: '0.1em' }}>
+                  HOST
+                </label>
+                <div className="relative">
+                  <Server size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-claude-text-secondary" />
+                  <input
+                    type="text"
+                    value={host}
+                    onChange={(e) => setHost(e.target.value)}
+                    placeholder="hostname or IP"
+                    className="w-full pl-9 pr-3 py-1.5 text-sm font-mono focus:outline-none focus:border-claude-accent bg-claude-bg border border-claude-border text-claude-text"
+                    style={{ borderRadius: 0 }}
+                  />
+                </div>
+              </div>
+              <div className="w-16">
+                <label className="block text-[10px] font-bold mb-1 text-claude-text-secondary" style={{ letterSpacing: '0.1em' }}>
+                  PORT
+                </label>
+                <input
+                  type="text"
+                  value={port}
+                  onChange={(e) => setPort(e.target.value)}
+                  placeholder="22"
+                  className="w-full px-2 py-1.5 text-sm font-mono focus:outline-none focus:border-claude-accent bg-claude-bg border border-claude-border text-claude-text text-center"
+                  style={{ borderRadius: 0 }}
+                />
+              </div>
+            </div>
+
+            {/* Username */}
+            <div>
+              <label className="block text-[10px] font-bold mb-1 text-claude-text-secondary" style={{ letterSpacing: '0.1em' }}>
+                USERNAME
+              </label>
+              <input
+                type="text"
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
+                placeholder="ubuntu"
+                className="w-full px-3 py-1.5 text-sm font-mono focus:outline-none focus:border-claude-accent bg-claude-bg border border-claude-border text-claude-text"
+                style={{ borderRadius: 0 }}
+              />
+            </div>
+
+            {/* Private Key */}
+            <div>
+              <label className="block text-[10px] font-bold mb-1 text-claude-text-secondary" style={{ letterSpacing: '0.1em' }}>
+                PRIVATE KEY
+              </label>
+              <div className="flex gap-2">
+                <div className="flex-1 relative">
+                  <Key size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-claude-text-secondary" />
+                  <input
+                    type="text"
+                    value={privateKeyPath}
+                    readOnly
+                    placeholder="~/.ssh/id_ed25519"
+                    onClick={handleSelectKeyFile}
+                    className="w-full pl-9 pr-3 py-1.5 text-sm font-mono focus:outline-none bg-claude-bg border border-claude-border text-claude-text cursor-pointer truncate"
+                    style={{ borderRadius: 0 }}
+                  />
+                </div>
+                <button
+                  onClick={handleSelectKeyFile}
+                  className="px-3 py-1.5 text-[10px] font-bold bg-claude-bg hover:bg-claude-surface border border-claude-border text-claude-text"
+                  style={{ borderRadius: 0 }}
+                >
+                  ...
+                </button>
+              </div>
+            </div>
+
+            {/* Passphrase */}
+            <div>
+              <label className="block text-[10px] font-bold mb-1 text-claude-text-secondary" style={{ letterSpacing: '0.1em' }}>
+                KEY PASSPHRASE <span className="font-normal opacity-60">(if encrypted)</span>
+              </label>
+              <input
+                type="password"
+                value={passphrase}
+                onChange={(e) => setPassphrase(e.target.value)}
+                placeholder="Leave empty if none"
+                className="w-full px-3 py-1.5 text-sm font-mono focus:outline-none focus:border-claude-accent bg-claude-bg border border-claude-border text-claude-text"
+                style={{ borderRadius: 0 }}
+              />
+            </div>
+          </>
+        )}
+
+        {activeTab === 'setup' && (
+          <>
+            {/* Remote Working Directory */}
+            <div>
+              <label className="block text-[10px] font-bold mb-1 text-claude-text-secondary" style={{ letterSpacing: '0.1em' }}>
+                REMOTE WORKING DIRECTORY
+              </label>
+              <div className="relative">
+                <Folder size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-claude-text-secondary" />
+                <input
+                  type="text"
+                  value={remoteWorkdir}
+                  onChange={(e) => setRemoteWorkdir(e.target.value)}
+                  placeholder="/home/ubuntu/project"
+                  className="w-full pl-9 pr-3 py-1.5 text-sm font-mono focus:outline-none focus:border-claude-accent bg-claude-bg border border-claude-border text-claude-text"
+                  style={{ borderRadius: 0 }}
+                />
+              </div>
+              <p className="text-[9px] text-claude-text-secondary mt-1">Where Claude will execute tools</p>
+            </div>
+
+            {/* Session Name */}
+            <div>
+              <label className="block text-[10px] font-bold mb-1 text-claude-text-secondary" style={{ letterSpacing: '0.1em' }}>
+                SESSION NAME <span className="font-normal opacity-60">(optional)</span>
+              </label>
+              <input
+                type="text"
+                value={sessionName}
+                onChange={(e) => setSessionName(e.target.value)}
+                placeholder="Auto-generated from hostname"
+                className="w-full px-3 py-1.5 text-sm focus:outline-none focus:border-claude-accent bg-claude-bg border border-claude-border text-claude-text"
+                style={{ borderRadius: 0 }}
+              />
+            </div>
+
+            {/* Worktree Setup Script */}
+            <div>
+              <label className="block text-[10px] font-bold mb-1 text-claude-text-secondary" style={{ letterSpacing: '0.1em' }}>
+                SETUP SCRIPT <span className="font-normal opacity-60">(optional)</span>
+              </label>
+              <div className="relative">
+                <Terminal size={14} className="absolute left-3 top-2.5 text-claude-text-secondary" />
+                <textarea
+                  value={worktreeScript}
+                  onChange={(e) => setWorktreeScript(e.target.value)}
+                  placeholder="./setup-worktree.sh my-branch"
+                  rows={2}
+                  className="w-full pl-9 pr-3 py-1.5 text-sm font-mono focus:outline-none focus:border-claude-accent bg-claude-bg border border-claude-border text-claude-text resize-none"
+                  style={{ borderRadius: 0 }}
+                />
+              </div>
+              <p className="text-[9px] text-claude-text-secondary mt-1">Runs before Claude starts (e.g., clone repo, create worktree)</p>
+            </div>
+
+            {/* Sync Settings */}
+            <div className="flex items-center gap-2 py-1">
+              <input
+                type="checkbox"
+                id="syncSettings"
+                checked={syncSettings}
+                onChange={(e) => setSyncSettings(e.target.checked)}
+                className="w-3.5 h-3.5 accent-claude-accent"
+              />
+              <label htmlFor="syncSettings" className="text-[11px] text-claude-text cursor-pointer flex items-center gap-1.5">
+                <Settings size={11} className="text-claude-text-secondary" />
+                Sync settings to remote (~/.claude/agents, commands, CLAUDE.md)
+              </label>
+            </div>
+          </>
+        )}
+      </div>
+
+      {/* Status Section - Always visible */}
+      <div className="mt-3 space-y-2">
+        {/* Test Button */}
+        <button
+          onClick={handleTestConnection}
+          disabled={!canTest || isTesting}
+          className="w-full py-2 text-[10px] font-bold bg-claude-bg hover:bg-claude-surface border border-claude-border text-claude-text disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+          style={{ borderRadius: 0, letterSpacing: '0.1em' }}
+        >
+          {isTesting && <Loader2 size={12} className="animate-spin" />}
+          {isTesting ? 'TESTING...' : 'TEST CONNECTION'}
+        </button>
+
+        {/* Test Result */}
+        {testResult && (
+          <div className={`p-2 border text-[10px] ${testResult.success ? 'bg-green-500/10 border-green-500/30' : 'bg-red-500/10 border-red-500/30'}`}>
+            <div className="flex items-center gap-2">
+              {testResult.success ? (
+                <CheckCircle size={14} className="text-green-400" />
+              ) : (
+                <XCircle size={14} className="text-red-400" />
+              )}
+              <span className={testResult.success ? 'text-green-400' : 'text-red-400'}>
+                {testResult.success ? `Connected! ${testResult.claudeCodeVersion || ''}` : testResult.error}
+              </span>
+            </div>
+          </div>
+        )}
+
+        {/* Create Error */}
+        {createError && (
+          <div className="p-2 bg-red-500/20 border border-red-500/50 text-[10px] text-red-400">
+            {createError}
+          </div>
+        )}
+
+        {/* Requirements Note */}
+        {!testResult?.success && (
+          <div className="p-2 bg-amber-400/10 border border-amber-400/30 text-[9px] text-claude-text-secondary flex items-start gap-2">
+            <AlertTriangle size={12} className="text-amber-400 mt-0.5 shrink-0" />
+            <span>Requires <code className="bg-claude-bg px-1">claude</code> CLI on remote</span>
+          </div>
+        )}
+
+        {/* Footer */}
+        <div className="flex items-center justify-between pt-2 border-t border-claude-border">
+          <button
+            onClick={onBack}
+            className="px-3 py-1.5 text-[10px] font-bold hover:bg-claude-bg transition-colors text-claude-text-secondary"
+            style={{ letterSpacing: '0.05em', borderRadius: 0 }}
+          >
+            BACK
+          </button>
+          <button
+            onClick={handleCreate}
+            disabled={!canCreate || isCreating}
+            className="px-4 py-1.5 text-[10px] font-bold text-white flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed bg-claude-accent hover:bg-claude-accent-hover"
+            style={{ letterSpacing: '0.05em', borderRadius: 0 }}
+          >
+            {isCreating && <Loader2 size={12} className="animate-spin" />}
+            {isCreating ? 'CREATING...' : 'CREATE SESSION'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}

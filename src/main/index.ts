@@ -14,7 +14,7 @@ import { registerAuthHandlers } from './ipc/auth.ipc';
 import { registerSessionHandlers } from './ipc/session.ipc';
 import { registerGitHandlers } from './ipc/git.ipc';
 import { registerTerminalHandlers } from './ipc/terminal.ipc';
-import { registerClaudeHandlers } from './ipc/claude.ipc';
+import { registerClaudeHandlers , claudeService } from './ipc/claude.ipc';
 import { registerSettingsHandlers } from './ipc/settings.ipc';
 import { registerDevHandlers } from './ipc/dev.ipc';
 import { registerFsHandlers } from './ipc/fs.ipc';
@@ -23,8 +23,8 @@ import { registerRealtimeHandlers } from './ipc/realtime.ipc';
 import { registerVoiceHandlers } from './ipc/voice.ipc';
 import { registerExtensionHandlers } from './ipc/extension.ipc';
 import { registerBrowserHandlers } from './ipc/browser.ipc';
+import { registerSSHHandlers } from './ipc/ssh.ipc';
 import { IPC_CHANNELS } from '../shared/constants/channels';
-import { claudeService } from './ipc/claude.ipc';
 import { cdpProxyService } from './services/cdp-proxy.service';
 
 // Global error handlers to prevent crashes from broken pipes and other uncaught errors
@@ -222,11 +222,11 @@ const createWindow = (): void => {
         ...details.responseHeaders,
         'Content-Security-Policy': [
           "default-src 'self' 'unsafe-inline' 'unsafe-eval' data: blob: monaco-asset:",
-          "script-src 'self' 'unsafe-inline' 'unsafe-eval' monaco-asset:",
-          "style-src 'self' 'unsafe-inline' monaco-asset:",
-          "connect-src 'self' https://api.anthropic.com https://api.github.com https://api.elevenlabs.io https://api.openai.com ws://localhost:* http://localhost:* monaco-asset:",
+          "script-src 'self' 'unsafe-inline' 'unsafe-eval' blob: data: monaco-asset:",
+          "style-src 'self' 'unsafe-inline' monaco-asset: https://fonts.googleapis.com",
+          "connect-src 'self' https://api.anthropic.com https://api.github.com https://api.elevenlabs.io https://*.elevenlabs.io https://api.openai.com wss://*.livekit.cloud wss://*.elevenlabs.io ws://localhost:* wss://localhost:* http://localhost:* https://localhost:* monaco-asset:",
           "img-src 'self' data: https: blob:",
-          "font-src 'self' data: monaco-asset:",
+          "font-src 'self' data: monaco-asset: https://fonts.gstatic.com",
           "worker-src 'self' blob: data: monaco-asset:",
         ].join('; ')
       }
@@ -582,6 +582,7 @@ function registerIPCHandlers(): void {
   registerVoiceHandlers(ipcMain);
   registerExtensionHandlers(ipcMain);
   registerBrowserHandlers(ipcMain);
+  registerSSHHandlers(ipcMain);
 }
 
 // This method will be called when Electron has finished initialization

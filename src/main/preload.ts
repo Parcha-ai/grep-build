@@ -11,7 +11,8 @@ import type {
   DOMElementContext,
   TranscriptionResult,
   TTSRequest,
-  AudioSettings
+  AudioSettings,
+  SSHConfig
 } from '../shared/types';
 
 // Type-safe API for renderer process
@@ -569,6 +570,8 @@ const electronAPI = {
       ipcRenderer.invoke(IPC_CHANNELS.VOICE_SEND_TEXT, text),
     endInput: (): Promise<{ success: boolean; error?: string }> =>
       ipcRenderer.invoke(IPC_CHANNELS.VOICE_END_INPUT),
+    clearAudioBuffer: (): Promise<{ success: boolean; error?: string }> =>
+      ipcRenderer.invoke(IPC_CHANNELS.VOICE_CLEAR_AUDIO_BUFFER),
     sendContextUpdate: (context: string): Promise<{ success: boolean; error?: string }> =>
       ipcRenderer.invoke(IPC_CHANNELS.VOICE_CONTEXT_UPDATE, context),
     onConnected: (callback: () => void) => {
@@ -622,6 +625,49 @@ const electronAPI = {
       ipcRenderer.invoke(IPC_CHANNELS.VOICE_UPDATE_AGENT_PROMPT, data),
     sendUserActivity: (): Promise<{ success: boolean; error?: string }> =>
       ipcRenderer.invoke(IPC_CHANNELS.VOICE_USER_ACTIVITY),
+    // Get signed URL for SDK-based WebSocket connection
+    getSignedUrl: (config: { agentId: string }): Promise<{ success: boolean; signedUrl?: string; error?: string }> =>
+      ipcRenderer.invoke(IPC_CHANNELS.VOICE_GET_SIGNED_URL, config),
+    // Get conversation token for SDK-based WebRTC connection (better echo cancellation)
+    getConversationToken: (config: { agentId: string }): Promise<{ success: boolean; conversationToken?: string; error?: string }> =>
+      ipcRenderer.invoke(IPC_CHANNELS.VOICE_GET_CONVERSATION_TOKEN, config),
+  },
+
+  // SSH Remote Sessions
+  ssh: {
+    testConnection: (config: SSHConfig): Promise<{
+      success: boolean;
+      error?: string;
+      claudeCodeVersion?: string;
+      hostname?: string;
+    }> => ipcRenderer.invoke(IPC_CHANNELS.SSH_TEST_CONNECTION, config),
+    createSession: (data: { name: string; sshConfig: SSHConfig }): Promise<Session> =>
+      ipcRenderer.invoke(IPC_CHANNELS.SSH_CREATE_SESSION, data),
+    getSavedConfig: (): Promise<{
+      host: string;
+      port: string;
+      username: string;
+      privateKeyPath: string;
+      remoteWorkdir: string;
+      sessionName: string;
+      worktreeScript: string;
+      syncSettings: boolean;
+    } | null> => ipcRenderer.invoke(IPC_CHANNELS.SSH_GET_SAVED_CONFIG),
+    saveConfig: (config: {
+      host: string;
+      port: string;
+      username: string;
+      privateKeyPath: string;
+      remoteWorkdir: string;
+      sessionName: string;
+      worktreeScript: string;
+      syncSettings: boolean;
+    }): Promise<void> => ipcRenderer.invoke(IPC_CHANNELS.SSH_SAVE_CONFIG, config),
+    onSetupProgress: (callback: (data: { sessionId: string; status: 'running' | 'completed' | 'error'; message?: string; output?: string; error?: string }) => void) => {
+      const handler = (_: IpcRendererEvent, data: { sessionId: string; status: 'running' | 'completed' | 'error'; message?: string; output?: string; error?: string }) => callback(data);
+      ipcRenderer.on(IPC_CHANNELS.SSH_SETUP_PROGRESS, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.SSH_SETUP_PROGRESS, handler);
+    },
   },
 };
 

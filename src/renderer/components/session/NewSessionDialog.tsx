@@ -1,8 +1,10 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
-import { X, Search, Loader2, GitBranch, Lock, Globe, Folder, Github, Zap, ChevronDown, AlertTriangle, Edit3, Eye, FileText, Terminal as TerminalIcon } from 'lucide-react';
+import { X, Search, Loader2, GitBranch, Lock, Globe, Folder, Github, Zap, ChevronDown, AlertTriangle, Edit3, Eye, FileText, Terminal as TerminalIcon, Server } from 'lucide-react';
 import { useAuthStore } from '../../stores/auth.store';
 import { useSessionStore } from '../../stores/session.store';
+import SSHConfigForm from './SSHConfigForm';
+import type { SSHConfig } from '../../../shared/types';
 
 interface NewSessionDialogProps {
   isOpen: boolean;
@@ -15,7 +17,7 @@ export default function NewSessionDialog({ isOpen, onClose, initialPath, initial
   const { repos } = useAuthStore();
   const { createSession, setActiveSession, addSession } = useSessionStore();
 
-  const [step, setStep] = useState<'source' | 'repo' | 'folder' | 'config' | 'teleport'>('source');
+  const [step, setStep] = useState<'source' | 'repo' | 'folder' | 'config' | 'teleport' | 'ssh-config'>('source');
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedRepo, setSelectedRepo] = useState<typeof repos[0] | null>(null);
   const [selectedFolder, setSelectedFolder] = useState<string>('');
@@ -128,11 +130,13 @@ export default function NewSessionDialog({ isOpen, onClose, initialPath, initial
     );
   }, [availableBranches, branchFilter]);
 
-  const handleSelectSource = (source: 'github' | 'local' | 'teleport') => {
+  const handleSelectSource = (source: 'github' | 'local' | 'teleport' | 'ssh') => {
     if (source === 'github') {
       setStep('repo');
     } else if (source === 'teleport') {
       setStep('teleport');
+    } else if (source === 'ssh') {
+      setStep('ssh-config');
     } else {
       // Open folder dialog
       handleSelectFolder();
@@ -286,6 +290,29 @@ export default function NewSessionDialog({ isOpen, onClose, initialPath, initial
     }
   };
 
+  const handleSSHConnect = async (sshConfig: SSHConfig, name: string) => {
+    setIsCreating(true);
+    setCreateError(null);
+
+    try {
+      const session = await window.electronAPI.ssh.createSession({
+        name,
+        sshConfig,
+      });
+
+      if (session) {
+        addSession(session);
+        setActiveSession(session.id);
+        handleClose();
+      }
+    } catch (error) {
+      console.error('Failed to create SSH session:', error);
+      throw error;
+    } finally {
+      setIsCreating(false);
+    }
+  };
+
   const handleCreate = async () => {
     if (!selectedRepo && !selectedFolder) return;
 
@@ -411,6 +438,7 @@ export default function NewSessionDialog({ isOpen, onClose, initialPath, initial
               {step === 'folder' && 'SELECT FOLDER'}
               {step === 'config' && 'CONFIGURE SESSION'}
               {step === 'teleport' && 'TELEPORT SESSION'}
+              {step === 'ssh-config' && 'SSH REMOTE SESSION'}
             </Dialog.Title>
             <Dialog.Close asChild>
               <button
@@ -474,6 +502,27 @@ export default function NewSessionDialog({ isOpen, onClose, initialPath, initial
                     </div>
                   </button>
 
+                  {/* SSH Remote option */}
+                  <button
+                    onClick={() => handleSelectSource('ssh')}
+                    className="w-full p-4 text-left hover:bg-claude-bg transition-colors border border-claude-border group"
+                    style={{ borderRadius: 0 }}
+                  >
+                    <div className="flex items-start gap-3">
+                      <div className="p-2 bg-claude-bg group-hover:bg-claude-surface transition-colors">
+                        <Server size={20} className="text-blue-400" />
+                      </div>
+                      <div className="flex-1">
+                        <h4 className="text-sm font-bold text-claude-text mb-1">
+                          Remote SSH Server
+                        </h4>
+                        <p className="text-xs text-claude-text-secondary">
+                          Connect to a remote machine via SSH
+                        </p>
+                      </div>
+                    </div>
+                  </button>
+
                   {/* Teleport option */}
                   <button
                     onClick={() => handleSelectSource('teleport')}
@@ -520,6 +569,11 @@ export default function NewSessionDialog({ isOpen, onClose, initialPath, initial
                   )}
                 </div>
               </>
+            ) : step === 'ssh-config' ? (
+              <SSHConfigForm
+                onBack={() => setStep('source')}
+                onConnect={handleSSHConnect}
+              />
             ) : step === 'teleport' ? (
               <>
                 {/* Teleport Session UI */}
@@ -1137,7 +1191,8 @@ export default function NewSessionDialog({ isOpen, onClose, initialPath, initial
             )}
           </div>
 
-          {/* Footer */}
+          {/* Footer - hide for ssh-config as it has its own footer */}
+          {step !== 'ssh-config' && (
           <div className="flex items-center justify-between p-4 border-t border-claude-border">
             {step === 'config' && !initialPath && (
               <button
@@ -1199,6 +1254,7 @@ export default function NewSessionDialog({ isOpen, onClose, initialPath, initial
               )}
             </div>
           </div>
+          )}
         </Dialog.Content>
       </Dialog.Portal>
     </Dialog.Root>

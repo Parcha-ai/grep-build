@@ -223,6 +223,7 @@ function TextContentBlock({
 
 function MessageBubble({ message, isStreaming, streamingToolCalls, isLatestMessage = false, isOldMessage = false }: MessageBubbleProps) {
   const isUser = message.role === 'user';
+  const isSystem = message.role === 'system';
   const openFile = useEditorStore((state) => state.openFile);
   const { toggleBrowserPanel, isBrowserPanelOpen } = useUIStore();
   const { activeSessionId, updateSession, sessions } = useSessionStore();
@@ -237,7 +238,23 @@ function MessageBubble({ message, isStreaming, streamingToolCalls, isLatestMessa
     <div className="flex gap-2 min-w-0">
       {/* Content */}
       <div className="flex-1 min-w-0">
-        {isUser ? (
+        {isSystem ? (
+          // System messages (setup output) - distinct styling with terminal look
+          <div className="border border-claude-border bg-claude-bg">
+            <div className="px-3 py-1.5 border-b border-claude-border bg-claude-surface flex items-center gap-2">
+              <span className="text-[10px] font-bold text-claude-text-secondary" style={{ letterSpacing: '0.1em' }}>
+                SETUP OUTPUT
+              </span>
+            </div>
+            <div className="p-3 max-h-96 overflow-y-auto">
+              <div className="prose prose-invert max-w-none font-mono text-claude-text text-sm">
+                <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                  {message.content || ''}
+                </ReactMarkdown>
+              </div>
+            </div>
+          </div>
+        ) : isUser ? (
           // User messages - left border accent with subtle background
           <div className="border-l-2 border-blue-500 pl-3 py-1 bg-blue-500/5">
             <p className="whitespace-pre-wrap text-claude-text font-mono text-base">

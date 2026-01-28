@@ -148,6 +148,16 @@ export function registerVoiceHandlers(ipcMain: IpcMain): void {
     }
   });
 
+  ipcMain.handle(IPC_CHANNELS.VOICE_CLEAR_AUDIO_BUFFER, async () => {
+    try {
+      voiceService.clearAudioBuffer();
+      return { success: true };
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      return { success: false, error: errorMessage };
+    }
+  });
+
   ipcMain.handle(IPC_CHANNELS.VOICE_CONTEXT_UPDATE, async (_, context: string) => {
     console.log('[Voice IPC] Context update received, length:', context.length, 'preview:', context.slice(0, 100));
     try {
@@ -192,6 +202,32 @@ export function registerVoiceHandlers(ipcMain: IpcMain): void {
       return { success: true };
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      return { success: false, error: errorMessage };
+    }
+  });
+
+  // Get signed URL for SDK-based WebSocket connection
+  ipcMain.handle(IPC_CHANNELS.VOICE_GET_SIGNED_URL, async (_, config: { agentId: string }) => {
+    try {
+      console.log('[Voice IPC] Getting signed URL for agent:', config.agentId);
+      const signedUrl = await voiceService.getSignedUrlForAgent(config.agentId);
+      return { success: true, signedUrl };
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      console.error('[Voice IPC] Get signed URL error:', errorMessage);
+      return { success: false, error: errorMessage };
+    }
+  });
+
+  // Get conversation token for SDK-based WebRTC connection (better echo cancellation)
+  ipcMain.handle(IPC_CHANNELS.VOICE_GET_CONVERSATION_TOKEN, async (_, config: { agentId: string }) => {
+    try {
+      console.log('[Voice IPC] Getting conversation token for agent:', config.agentId);
+      const conversationToken = await voiceService.getConversationToken(config.agentId);
+      return { success: true, conversationToken };
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      console.error('[Voice IPC] Get conversation token error:', errorMessage);
       return { success: false, error: errorMessage };
     }
   });

@@ -33,8 +33,8 @@ const IGNORED_DIRS = new Set([
 async function listFilesRecursive(
   dirPath: string,
   basePath: string,
-  maxDepth: number = 30,  // Deep traversal for complex project structures
-  currentDepth: number = 0
+  maxDepth = 30,  // Deep traversal for complex project structures
+  currentDepth = 0
 ): Promise<FileEntry[]> {
   if (currentDepth >= maxDepth) return [];
 

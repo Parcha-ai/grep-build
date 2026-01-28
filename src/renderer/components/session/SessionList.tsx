@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { ChevronRight, ChevronDown, Folder, Plus, Zap, Loader2, Search } from 'lucide-react';
+import { ChevronRight, ChevronDown, Folder, Plus, Zap, Loader2, Search, GitFork } from 'lucide-react';
 import { useSessionStore } from '../../stores/session.store';
 import SessionCard from './SessionCard';
 import NewSessionDialog from './NewSessionDialog';
@@ -10,6 +10,7 @@ interface ProjectGroup {
   name: string;
   sessions: Session[];
   mostRecentUpdate: Date;
+  forks: ProjectGroup[]; // Worktree forks of this project (as nested groups)
 }
 
 export default function SessionList() {
@@ -37,16 +38,25 @@ export default function SessionList() {
     if (sessions.length === 0) return [];
 
     const projectGroups = new Map<string, ProjectGroup>();
+    const forkSessions: Session[] = []; // Collect fork sessions for second pass
 
+    // First pass: create project groups for non-fork sessions
     sessions.forEach(session => {
+      // Collect fork sessions for second pass
+      if (session.isWorktree && session.parentRepoPath) {
+        forkSessions.push(session);
+        return;
+      }
+
       const projectPath = session.worktreePath;
       if (!projectGroups.has(projectPath)) {
-        // Determine if this is a Claudette-managed worktree
-        const isClaudetteWorktree = projectPath.includes('.claudette-worktrees/');
+        // Determine if this is a Claudette-managed worktree (old style without parent tracking)
+        const isClaudetteWorktree = projectPath.includes('.claudette-worktrees/') ||
+                                    projectPath.includes('.claudette/worktrees/');
 
         let projectName: string;
         if (isClaudetteWorktree) {
-          // For Claudette worktrees, use the AI-generated session name
+          // For old-style Claudette worktrees, use the session name
           projectName = session.name;
         } else {
           // For regular directories, use the directory name
@@ -59,16 +69,61 @@ export default function SessionList() {
           name: projectName,
           sessions: [],
           mostRecentUpdate: new Date(session.updatedAt),
+          forks: [],
         });
       }
 
       const group = projectGroups.get(projectPath)!;
       group.sessions.push(session);
 
-      // Track most recent update
       const sessionDate = new Date(session.updatedAt);
       if (sessionDate > group.mostRecentUpdate) {
         group.mostRecentUpdate = sessionDate;
+      }
+    });
+
+    // Second pass: group fork sessions under their parent projects
+    forkSessions.forEach(session => {
+      const parentPath = session.parentRepoPath!;
+      const parentGroup = projectGroups.get(parentPath);
+
+      if (parentGroup) {
+        // Check if we already have a fork group for this worktree path
+        let forkGroup = parentGroup.forks.find(f => f.path === session.worktreePath);
+        if (!forkGroup) {
+          // Use the session's descriptive name (AI-generated)
+          forkGroup = {
+            path: session.worktreePath,
+            name: session.name, // Use the descriptive session name
+            sessions: [],
+            mostRecentUpdate: new Date(session.updatedAt),
+            forks: [], // Forks don't have sub-forks
+          };
+          parentGroup.forks.push(forkGroup);
+        }
+        forkGroup.sessions.push(session);
+
+        // Update timestamps
+        const sessionDate = new Date(session.updatedAt);
+        if (sessionDate > forkGroup.mostRecentUpdate) {
+          forkGroup.mostRecentUpdate = sessionDate;
+        }
+        if (sessionDate > parentGroup.mostRecentUpdate) {
+          parentGroup.mostRecentUpdate = sessionDate;
+        }
+      } else {
+        // Orphan fork - parent not in our list, create a standalone group
+        const projectPath = session.worktreePath;
+        if (!projectGroups.has(projectPath)) {
+          projectGroups.set(projectPath, {
+            path: projectPath,
+            name: session.name,
+            sessions: [],
+            mostRecentUpdate: new Date(session.updatedAt),
+            forks: [],
+          });
+        }
+        projectGroups.get(projectPath)!.sessions.push(session);
       }
     });
 
@@ -77,12 +132,19 @@ export default function SessionList() {
       b.mostRecentUpdate.getTime() - a.mostRecentUpdate.getTime()
     );
 
-    // Sort sessions within each project by last used (newest first)
-    // This ensures most recently worked-on sessions appear at the top
+    // Sort sessions and forks within each project by last used (newest first)
     sorted.forEach(project => {
       project.sessions.sort((a, b) =>
         new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
       );
+      project.forks.sort((a, b) =>
+        b.mostRecentUpdate.getTime() - a.mostRecentUpdate.getTime()
+      );
+      project.forks.forEach(fork => {
+        fork.sessions.sort((a, b) =>
+          new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
+        );
+      });
     });
 
     return sorted;
@@ -175,6 +237,7 @@ export default function SessionList() {
                 session={session}
                 isActive={session.id === activeSessionId}
                 onClick={() => setActiveSession(session.id)}
+                isFork={session.isWorktree}
               />
             ))}
 
@@ -203,7 +266,9 @@ export default function SessionList() {
           </div>
           {sortedProjects.map((project) => {
             const isExpanded = expandedProjects.has(project.path);
-            const hasActiveSession = project.sessions.some(s => s.id === activeSessionId);
+            const hasActiveSession = project.sessions.some(s => s.id === activeSessionId) ||
+                                     project.forks.some(f => f.sessions.some(s => s.id === activeSessionId));
+            const totalSessions = project.sessions.length + project.forks.reduce((sum, f) => sum + f.sessions.length, 0);
 
             return (
               <div key={project.path} className="mb-1">
@@ -229,7 +294,7 @@ export default function SessionList() {
                         {project.name}
                       </span>
                       <span className="text-[10px] text-claude-text-secondary">
-                        {project.sessions.length} session{project.sessions.length !== 1 ? 's' : ''}
+                        {totalSessions} session{totalSessions !== 1 ? 's' : ''}
                       </span>
                     </div>
                   </button>
@@ -246,9 +311,49 @@ export default function SessionList() {
                   </button>
                 </div>
 
-                {/* Sessions under this project */}
+                {/* Sessions and forks under this project */}
                 {isExpanded && (
-                  <div className="ml-6">
+                  <div className="ml-6 relative">
+                    {/* Worktrees section - shown FIRST, flat list with tree branch lines */}
+                    {project.forks.length > 0 && (() => {
+                      const allWorktreeSessions = project.forks.flatMap(fork => fork.sessions);
+                      return (
+                        <div className="relative mb-2">
+                          {/* Worktrees label */}
+                          <div className="px-2 py-1 flex items-center gap-2">
+                            <GitFork size={10} className="text-emerald-400" />
+                            <span className="text-[9px] font-bold text-emerald-400 uppercase tracking-wider">
+                              Worktrees
+                            </span>
+                          </div>
+
+                          {/* Vertical line from label down through all sessions */}
+                          <div
+                            className="absolute left-4 top-6 w-px bg-emerald-500/50"
+                            style={{ height: `calc(100% - 24px)` }}
+                          />
+
+                          {/* Flat list of all worktree sessions with branch lines */}
+                          {allWorktreeSessions.map((session, idx) => (
+                            <div key={session.id} className="relative">
+                              {/* Horizontal branch line */}
+                              <div className="absolute left-4 top-4 w-3 h-px bg-emerald-500/50" />
+
+                              <div className="ml-5">
+                                <SessionCard
+                                  session={session}
+                                  isActive={session.id === activeSessionId}
+                                  onClick={() => setActiveSession(session.id)}
+                                  isFork={true}
+                                />
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      );
+                    })()}
+
+                    {/* Regular sessions - shown AFTER worktrees */}
                     {project.sessions.map((session) => (
                       <SessionCard
                         key={session.id}

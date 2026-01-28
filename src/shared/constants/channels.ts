@@ -163,12 +163,22 @@ export const IPC_CHANNELS = {
   AUTO_RESUME_CLEAR_STATE: 'auto-resume:clear-state',
   AUTO_RESUME_TRIGGER: 'auto-resume:trigger',
 
+  // SSH channels
+  SSH_TEST_CONNECTION: 'ssh:test-connection',
+  SSH_CREATE_SESSION: 'ssh:create-session',
+  SSH_SYNC_SETTINGS: 'ssh:sync-settings',
+  SSH_RUN_WORKTREE_SCRIPT: 'ssh:run-worktree-script',
+  SSH_GET_SAVED_CONFIG: 'ssh:get-saved-config',
+  SSH_SAVE_CONFIG: 'ssh:save-config',
+  SSH_SETUP_PROGRESS: 'ssh:setup-progress',
+
   // Voice mode channels (ElevenLabs Conversational AI)
   VOICE_CONNECT: 'voice:connect',
   VOICE_DISCONNECT: 'voice:disconnect',
   VOICE_SEND_AUDIO: 'voice:send-audio',
   VOICE_SEND_TEXT: 'voice:send-text',
   VOICE_END_INPUT: 'voice:end-input',
+  VOICE_CLEAR_AUDIO_BUFFER: 'voice:clear-audio-buffer', // Clear server-side audio buffer to prevent echo
   VOICE_CONTEXT_UPDATE: 'voice:context-update',
   VOICE_CONNECTED: 'voice:connected',
   VOICE_DISCONNECTED: 'voice:disconnected',
@@ -182,6 +192,8 @@ export const IPC_CHANNELS = {
   VOICE_TOOL_RESULT: 'voice:tool-result',
   VOICE_UPDATE_AGENT_PROMPT: 'voice:update-agent-prompt',
   VOICE_USER_ACTIVITY: 'voice:user-activity',
+  VOICE_GET_SIGNED_URL: 'voice:get-signed-url', // Get signed URL for SDK-based WebSocket connection
+  VOICE_GET_CONVERSATION_TOKEN: 'voice:get-conversation-token', // Get conversation token for WebRTC connection (better echo cancellation)
 } as const;
 
 export type IPCChannel = typeof IPC_CHANNELS[keyof typeof IPC_CHANNELS];

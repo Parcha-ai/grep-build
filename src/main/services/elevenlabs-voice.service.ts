@@ -163,6 +163,54 @@ export class ElevenLabsVoiceService extends EventEmitter {
 
   /**
    * Get a signed URL for WebSocket connection (for private agents)
+   * This is used internally and can be exposed for SDK-based connections
+   */
+  async getSignedUrlForAgent(agentId: string): Promise<string> {
+    return this.getSignedUrl(agentId);
+  }
+
+  /**
+   * Get a conversation token for WebRTC connection (for private agents)
+   * WebRTC provides hardware-level echo cancellation and better audio quality
+   * Token is valid for 10 minutes.
+   */
+  async getConversationToken(agentId: string): Promise<string> {
+    const apiKey = this.getApiKey();
+    if (!apiKey) {
+      throw new Error('ElevenLabs API key not configured');
+    }
+
+    console.log('[ElevenLabsVoice] Getting conversation token for WebRTC, agentId:', agentId);
+
+    const response = await fetch(
+      `https://api.elevenlabs.io/v1/convai/conversation/token?agent_id=${agentId}`,
+      {
+        method: 'GET',
+        headers: {
+          'xi-api-key': apiKey,
+        },
+      }
+    );
+
+    if (!response.ok) {
+      const error = await response.text();
+      console.error('[ElevenLabsVoice] Failed to get conversation token:', error);
+      throw new Error(`Failed to get conversation token: ${error}`);
+    }
+
+    const data = await response.json();
+    console.log('[ElevenLabsVoice] Got conversation token response:', JSON.stringify(data));
+    // ElevenLabs returns the token as "signed_url" or "token" - check both
+    const token = data.signed_url || data.token || data.conversation_token;
+    if (!token) {
+      console.error('[ElevenLabsVoice] No token in response:', data);
+      throw new Error('No token in API response');
+    }
+    return token;
+  }
+
+  /**
+   * Get a signed URL for WebSocket connection (for private agents)
    */
   private async getSignedUrl(agentId: string): Promise<string> {
     const apiKey = this.getApiKey();
@@ -459,6 +507,19 @@ export class ElevenLabsVoiceService extends EventEmitter {
     this.sendMessage({
       type: 'user_input_complete',
     });
+  }
+
+  /**
+   * Clear the audio input buffer on the server
+   * NOTE: ElevenLabs does NOT support this message type (unlike OpenAI Realtime API).
+   * This method is a no-op but kept for potential future use.
+   * Echo prevention is handled client-side by muting mic during playback.
+   */
+  clearAudioBuffer(): void {
+    // ElevenLabs WebSocket API does not have a clear_input_audio_buffer message type
+    // The server will simply ignore unknown message types
+    // Echo prevention is handled by muting mic input during agent speech
+    console.log('[ElevenLabsVoice] clearAudioBuffer called (no-op - not supported by ElevenLabs API)');
   }
 
   /**

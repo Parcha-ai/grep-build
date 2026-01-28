@@ -264,6 +264,9 @@ export function registerDevHandlers(ipcMain: IpcMain): void {
     const sessionId = uuid();
     let worktreePath = data.repoPath;
     let worktreeInstructions: string | undefined;
+    let isWorktree = false;
+    let parentRepoPath: string | undefined;
+    let forkName: string | undefined;
 
     // If creating a worktree, set up a new worktree directory
     if (data.createWorktree) {
@@ -274,11 +277,13 @@ export function registerDevHandlers(ipcMain: IpcMain): void {
         const isGit = await git.checkIsRepo();
 
         if (isGit) {
-          // Use central location: ~/.claudette/worktrees/{repo-hash}/worktree-{session-id}
+          // Use the session ID prefix for the worktree directory name
+          const worktreeDirName = `wt-${sessionId.substring(0, 8)}`;
+
+          // Use central location: ~/.claudette/worktrees/{repo-hash}/{worktree-dir}
           const repoHash = getPathHash(mainRepoPath);
           const centralWorktreesDir = path.join(os.homedir(), '.claudette', 'worktrees', repoHash);
-          const worktreeName = `worktree-${sessionId.substring(0, 8)}`;
-          worktreePath = path.join(centralWorktreesDir, worktreeName);
+          worktreePath = path.join(centralWorktreesDir, worktreeDirName);
 
           // Ensure the central directory exists
           await fs.mkdir(centralWorktreesDir, { recursive: true });
@@ -286,6 +291,10 @@ export function registerDevHandlers(ipcMain: IpcMain): void {
           // Create the worktree FROM THE MAIN REPO (prevents nesting issues)
           console.log(`[Worktree] Creating worktree at ${worktreePath} from main repo ${mainRepoPath}`);
           await git.raw(['worktree', 'add', worktreePath, data.branch]);
+
+          // Track the worktree relationship
+          isWorktree = true;
+          parentRepoPath = mainRepoPath;
 
           // Execute worktree setup if configured
           const claudetteDir = path.join(data.repoPath, '.claudette');
@@ -322,9 +331,12 @@ export function registerDevHandlers(ipcMain: IpcMain): void {
       }
     }
 
+    // For worktrees, use the fork name as the session name
+    const sessionName = isWorktree && forkName ? forkName : data.name;
+
     const session: Session = {
       id: sessionId,
-      name: data.name,
+      name: sessionName,
       repoPath: data.repoPath,
       worktreePath: worktreePath,
       branch: data.branch,
@@ -340,6 +352,10 @@ export function registerDevHandlers(ipcMain: IpcMain): void {
       isDevMode: true, // Flag for dev mode sessions
       worktreeInstructions, // Setup instructions to send to Claude
       worktreeInstructionsSent: false, // Track if instructions have been sent
+      // Fork/worktree tracking
+      isWorktree,
+      parentRepoPath,
+      forkName,
     };
 
     // Save session

@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { Mic, MicOff, Phone, PhoneOff, Volume2, Loader2 } from 'lucide-react';
-import { useVoiceConversation } from '../../hooks/useVoiceConversation';
+import { useVoiceConversationSDK } from '../../hooks/useVoiceConversationSDK';
 import { useSessionStore } from '../../stores/session.store';
 
 interface VoiceModeProps {
@@ -15,7 +15,7 @@ interface VoiceModeProps {
  * Voice Mode Component
  *
  * Provides a voice conversation interface using ElevenLabs Conversational AI.
- * Users can speak naturally and receive spoken responses.
+ * Uses the official @elevenlabs/client SDK with WebRTC for built-in echo cancellation.
  */
 export const VoiceMode: React.FC<VoiceModeProps> = ({
   sessionId,
@@ -33,11 +33,12 @@ export const VoiceMode: React.FC<VoiceModeProps> = ({
     isSpeaking,
     currentTranscript,
     error,
+    audioLevel,
     connect,
     disconnect,
     startRecording,
     stopRecording,
-  } = useVoiceConversation({
+  } = useVoiceConversationSDK({
     agentId,
     sessionId,
     systemPrompt: `You are a helpful AI assistant integrated with Claude Code.

@@ -41,10 +41,10 @@ export class SessionService extends EventEmitter {
   private gitService: GitService;
   private sessionsPath: string;
   private discoveredSessionsCache: Map<string, Session> = new Map();
-  private lastDiscoveryTime: number = 0;
+  private lastDiscoveryTime = 0;
   private readonly DISCOVERY_CACHE_TTL = 60000; // 1 minute cache
-  private isInitialLoadDone: boolean = false;
-  private discoveryInProgress: boolean = false;
+  private isInitialLoadDone = false;
+  private discoveryInProgress = false;
 
   constructor() {
     super();
@@ -65,9 +65,72 @@ export class SessionService extends EventEmitter {
     const persisted = this.store.get('discoveredSessions') as Record<string, Session> | undefined;
     if (persisted) {
       Object.values(persisted).forEach(session => {
+        // Fix SSH session names that have full paths - convert to host:folder format
+        if (session.sshConfig && session.name.includes(':/')) {
+          const parts = session.name.split(':');
+          if (parts.length === 2 && parts[1].startsWith('/')) {
+            const host = parts[0];
+            const folderName = parts[1].split('/').filter(Boolean).pop() || parts[1];
+            session.name = `${host}:${folderName}`;
+          }
+        }
         this.discoveredSessionsCache.set(session.id, session);
       });
       console.log('[Session] Loaded', this.discoveredSessionsCache.size, 'persisted sessions from cache');
+    }
+
+    // Migrate stored sessions with worktree paths to have proper fork metadata
+    this.migrateWorktreeSessions();
+  }
+
+  /**
+   * Migrate existing worktree sessions to have proper fork metadata (isWorktree, parentRepoPath)
+   * Note: We preserve the existing AI-generated descriptive session names, we do NOT replace them
+   */
+  private migrateWorktreeSessions(): void {
+    const storedSessions = this.store.get('sessions') as Record<string, Session> | undefined;
+    if (!storedSessions) return;
+
+    let migrated = 0;
+
+    // Migrate worktrees without fork metadata
+    Object.values(storedSessions).forEach(session => {
+      // Check if this is a worktree that needs migration
+      // Look for paths like ~/.claudette/worktrees/ or old .claudette-worktrees/
+      const worktreePath = session.worktreePath || '';
+      const isClaudetteWorktree = worktreePath.includes('.claudette/worktrees/') ||
+                                  worktreePath.includes('.claudette-worktrees/');
+
+      if (isClaudetteWorktree && !session.isWorktree) {
+        // Extract parent repo path from the worktree path
+        // Path format: ~/.claudette/worktrees/{repo-hash}/{fork-name}
+        // Old format: /path/to/repo/.claudette-worktrees/worktree-{session-id}
+        let parentRepoPath: string | undefined;
+
+        if (worktreePath.includes('.claudette-worktrees/')) {
+          // Old format - parent is the directory containing .claudette-worktrees
+          const idx = worktreePath.indexOf('.claudette-worktrees/');
+          parentRepoPath = worktreePath.substring(0, idx - 1); // Remove trailing slash
+        } else {
+          // New central format - use repoPath if available, otherwise try to determine
+          parentRepoPath = session.repoPath !== worktreePath ? session.repoPath : undefined;
+        }
+
+        // Update the session with fork metadata
+        // IMPORTANT: We preserve the existing session.name (AI-generated descriptive name)
+        // We do NOT replace it with silly random names
+        session.isWorktree = true;
+        session.parentRepoPath = parentRepoPath;
+
+        this.store.set(`sessions.${session.id}`, session);
+        migrated++;
+
+        console.log(`[Session Migration] Migrated worktree "${session.name}" (parent: ${parentRepoPath || 'unknown'})`);
+      }
+    });
+
+    if (migrated > 0) {
+      console.log(`[Session Migration] Migrated ${migrated} worktree sessions with fork metadata`);
     }
   }
 
@@ -283,20 +346,18 @@ Only return the title, nothing else.`
 
   async listSessions(): Promise<Session[]> {
     // If we have cached sessions, return them immediately
-    // and trigger background discovery for updates
-    if (this.discoveredSessionsCache.size > 0 && !this.isInitialLoadDone) {
-      this.isInitialLoadDone = true;
-      // Trigger background discovery without blocking
-      this.backgroundDiscoverSessions();
+    // and trigger background discovery for updates (non-blocking)
+    if (this.discoveredSessionsCache.size > 0) {
+      const now = Date.now();
+      // Only trigger background discovery if cache is stale, but NEVER block
+      if (now - this.lastDiscoveryTime > this.DISCOVERY_CACHE_TTL) {
+        this.backgroundDiscoverSessions();
+      }
       return this.getMergedSessions();
     }
 
-    // If cache is empty or stale, do full discovery
-    const now = Date.now();
-    if (this.discoveredSessionsCache.size === 0 || now - this.lastDiscoveryTime > this.DISCOVERY_CACHE_TTL) {
-      await this.discoverAndCacheSessions();
-    }
-
+    // Only do blocking discovery if cache is completely empty
+    await this.discoverAndCacheSessions();
     return this.getMergedSessions();
   }
 

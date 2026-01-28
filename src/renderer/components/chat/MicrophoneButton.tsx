@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useRef, forwardRef, useImperativeHandle } from 'react';
 import { Mic, Loader2 } from 'lucide-react';
-import { useVoiceConversation } from '../../hooks/useVoiceConversation';
+import { useVoiceConversationSDK } from '../../hooks/useVoiceConversationSDK';
 import { useAudioStore } from '../../stores/audio.store';
 import { useSessionStore } from '../../stores/session.store';
 
@@ -150,7 +150,7 @@ ${messageSummary || 'No messages yet'}`;
     startRecording,
     updateContext,
     speak,
-  } = useVoiceConversation({
+  } = useVoiceConversationSDK({
     agentId,
     sessionId,
     // No systemPrompt - use agent's main prompt configured via ElevenLabs API

@@ -12,6 +12,7 @@ import { IPC_CHANNELS } from '../../shared/constants/channels';
 import { browserService } from './browser.service';
 import { stagehandService } from './stagehand.service';
 import { documentService } from './document.service';
+import { sshService } from './ssh.service';
 
 interface StreamEvent {
   type: 'text_delta' | 'thinking_delta' | 'tool_use' | 'tool_result' | 'message_complete' | 'error' | 'system' | 'permission_request' | 'compaction_status' | 'compaction_complete' | 'plan_content';
@@ -179,6 +180,82 @@ export class ClaudeService {
         description: 'Fastest model - best for simple tasks'
       },
     ];
+  }
+
+  /**
+   * Build the system prompt append section based on session type
+   * Includes SSH context for remote sessions
+   */
+  private buildSystemPromptAppend(session: Session): string {
+    let append = `
+## Grep Build Agent
+
+You are the Grep Build agent, an AI development assistant running inside the Grep desktop application. You have access to a browser preview panel via MCP tools (claudette-browser) that allows you to test changes you make to web applications in real-time.
+
+### Browser Testing Capabilities
+
+When you make changes to frontend code or start development servers, you can:
+- Navigate to localhost URLs to test the application
+- Take screenshots to verify UI changes
+- Inspect the DOM and check element states
+- Monitor network requests and console output
+
+### Proactive Testing
+
+At the start of each session, ask the user: "Would you like me to help test your changes in the browser as we work?"
+
+If the user agrees:
+- After making UI changes, navigate to the appropriate URL and take a screenshot to verify the changes
+- When starting dev servers, wait for them to be ready then navigate to test the application
+- Report any visual issues, console errors, or unexpected behavior you observe
+- Be proactive about suggesting which URLs to test based on the files being modified
+
+You are intelligent enough to determine what URLs to test based on the project structure, development server configuration, and the specific files being modified.
+`;
+
+    // Add SSH remote execution context if this is an SSH session
+    if (session.sshConfig) {
+      append += `
+
+## Remote Execution Context
+
+You are executing commands on a REMOTE machine via SSH. All file operations, bash commands, and tool executions happen on the remote server, not locally.
+
+### Remote Connection Details
+- **Host**: ${session.sshConfig.host}
+- **Username**: ${session.sshConfig.username}
+- **Working Directory**: ${session.worktreePath || session.sshConfig.remoteWorkdir}
+${session.branch ? `- **Git Branch**: ${session.branch}` : ''}
+
+### Important Notes
+- All paths are relative to the remote working directory
+- The browser preview tools run LOCALLY but your code changes are on the remote machine
+- If you need to test a web application, remember it's running on the remote server (you may need to use the remote server's hostname or IP)
+`;
+
+      // Add worktree setup output if available
+      if (session.setupOutput) {
+        // Clean up ANSI codes from the output
+        const cleanOutput = session.setupOutput
+          .replace(/\x1b\[[0-9;]*m/g, '') // Remove ANSI color codes
+          .replace(/___WORKDIR_END___/g, '') // Remove our internal marker
+          .trim();
+
+        if (cleanOutput) {
+          append += `
+### Worktree Setup Output
+
+The following is the output from the worktree setup script that ran when this session was created. This provides context about the environment setup:
+
+\`\`\`
+${cleanOutput}
+\`\`\`
+`;
+        }
+      }
+    }
+
+    return append;
   }
 
   // Get or create MCP server with browser snapshot tool for session
@@ -683,7 +760,7 @@ export class ClaudeService {
           const { selector } = args;
           console.log('[Claude Service] Getting DOM via Stagehand:', selector || 'full page');
 
-          let html = await stagehandService.getHTML();
+          const html = await stagehandService.getHTML();
           if (!html) {
             return {
               content: [{
@@ -1387,31 +1464,7 @@ export class ClaudeService {
           systemPrompt: {
             type: 'preset',
             preset: 'claude_code',
-            append: `
-## Grep Build Agent
-
-You are the Grep Build agent, an AI development assistant running inside the Grep desktop application. You have access to a browser preview panel via MCP tools (claudette-browser) that allows you to test changes you make to web applications in real-time.
-
-### Browser Testing Capabilities
-
-When you make changes to frontend code or start development servers, you can:
-- Navigate to localhost URLs to test the application
-- Take screenshots to verify UI changes
-- Inspect the DOM and check element states
-- Monitor network requests and console output
-
-### Proactive Testing
-
-At the start of each session, ask the user: "Would you like me to help test your changes in the browser as we work?"
-
-If the user agrees:
-- After making UI changes, navigate to the appropriate URL and take a screenshot to verify the changes
-- When starting dev servers, wait for them to be ready then navigate to test the application
-- Report any visual issues, console errors, or unexpected behavior you observe
-- Be proactive about suggesting which URLs to test based on the files being modified
-
-You are intelligent enough to determine what URLs to test based on the project structure, development server configuration, and the specific files being modified.
-`,
+            append: this.buildSystemPromptAppend(session),
           },
           // Enable CLAUDE.md reading from project directory
           settingSources: ['project'],
@@ -1426,6 +1479,18 @@ You are intelligent enough to determine what URLs to test based on the project s
           mcpServers: {
             'claudette-browser': this.getBrowserMcpServer(sessionId),
           },
+          // SSH remote execution: spawn Claude Code on remote machine instead of locally
+          ...(session.sshConfig ? {
+            spawnClaudeCodeProcess: (options: { command: string; args: string[]; cwd?: string; env: Record<string, string | undefined>; signal: AbortSignal }) => {
+              console.log('[Claude Service] Creating SSH remote process for session:', sessionId);
+              console.log('[Claude Service] SDK spawn options:', { command: options.command, args: options.args, cwd: options.cwd });
+              return sshService.createRemoteProcess(
+                sessionId,
+                session.sshConfig!,
+                options
+              );
+            },
+          } : {}),
           // Handle tool permission requests
           canUseTool: async (toolName: string, input: Record<string, unknown>, _options: any) => {
             console.log(`[Claude Service] canUseTool called for: ${toolName}, mode: ${sdkPermissionMode}`);
@@ -2483,6 +2548,55 @@ You are intelligent enough to determine what URLs to test based on the project s
       || this.sessionStore.get(`sessions.${sessionId}.sdkSessionId`) as string | undefined
       || sessionId; // If no mapping, use sessionId itself as the transcript filename
 
+    // For SSH sessions, fetch transcript from the remote machine
+    if (session?.sshConfig) {
+      console.log('[Claude] SSH session - fetching transcript from remote:', sdkSessionId);
+      try {
+        const remoteContent = await sshService.fetchRemoteTranscript(
+          sessionId,
+          session.sshConfig,
+          sdkSessionId,
+          session.sshConfig.remoteWorkdir
+        );
+
+        if (remoteContent) {
+          console.log('[Claude] Parsing remote transcript, length:', remoteContent.length);
+          return this.parseTranscriptContent(remoteContent);
+        }
+
+        // If no transcript found with SDK session ID, try listing available transcripts
+        console.log('[Claude] No transcript found with SDK ID, listing available transcripts...');
+        const transcripts = await sshService.listRemoteTranscripts(
+          sessionId,
+          session.sshConfig,
+          session.sshConfig.remoteWorkdir
+        );
+
+        if (transcripts.length > 0) {
+          // Use the most recent transcript
+          const mostRecent = transcripts[0];
+          console.log('[Claude] Using most recent transcript:', mostRecent.filename);
+          const content = await sshService.fetchRemoteTranscript(
+            sessionId,
+            session.sshConfig,
+            mostRecent.sessionId,
+            session.sshConfig.remoteWorkdir
+          );
+          if (content) {
+            // Store the mapping for future use
+            this.sessionStore.set(`sdkSessionMappings.${sessionId}`, mostRecent.sessionId);
+            return this.parseTranscriptContent(content);
+          }
+        }
+
+        console.log('[Claude] No remote transcript found');
+        return [];
+      } catch (error) {
+        console.error('[Claude] Error fetching remote transcript:', error);
+        return [];
+      }
+    }
+
     // Look for transcript files in ~/.claude/projects/ - search all project directories
     const claudeDir = path.join(os.homedir(), '.claude', 'projects');
     const transcriptFilename = `${sdkSessionId}.jsonl`;
@@ -2509,6 +2623,62 @@ You are intelligent enough to determine what URLs to test based on the project s
       console.error('Error reading transcripts:', error);
       return [];
     }
+  }
+
+  /**
+   * Parse transcript content (JSONL string) into ChatMessages
+   */
+  private parseTranscriptContent(content: string): ChatMessage[] {
+    const messages: ChatMessage[] = [];
+    const seenIds = new Set<string>();
+    const messageMap = new Map<string, ChatMessage>();
+    const lines = content.split('\n').filter(line => line.trim());
+
+    for (const line of lines) {
+      try {
+        const entry = JSON.parse(line);
+        const result = this.parseTranscriptEntry(entry);
+        if (!result) continue;
+
+        // parseTranscriptEntry returns { msg, messageId }
+        const { msg, messageId } = result;
+
+        // Check if we already have a message with this Claude message ID
+        const existing = messageMap.get(messageId);
+        if (existing) {
+          // Merge content: only add if the new content is different and non-empty
+          if (msg.content && msg.content !== existing.content) {
+            if (!existing.content) {
+              existing.content = msg.content;
+            } else if (msg.content.length > existing.content.length) {
+              existing.content = msg.content;
+            }
+          }
+          // Merge tool calls
+          if (msg.toolCalls && msg.toolCalls.length > 0) {
+            if (!existing.toolCalls) {
+              existing.toolCalls = msg.toolCalls;
+            } else {
+              const existingIds = new Set(existing.toolCalls.map(tc => tc.id));
+              for (const tc of msg.toolCalls) {
+                if (!existingIds.has(tc.id)) {
+                  existing.toolCalls.push(tc);
+                }
+              }
+            }
+          }
+        } else {
+          // New message
+          messageMap.set(messageId, msg);
+          seenIds.add(msg.id);
+          messages.push(msg);
+        }
+      } catch {
+        // Skip malformed lines
+      }
+    }
+
+    return messages;
   }
 
   /**

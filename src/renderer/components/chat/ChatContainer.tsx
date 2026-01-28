@@ -70,7 +70,7 @@ export default function ChatContainer({ session }: ChatContainerProps) {
   const sessionBackgroundTasks = backgroundTasks[session.id] || [];
 
   // Check if any TTS is actively playing for messages in this session
-  const isTTSPlaying = sessionMessages.some(msg => ttsStates[msg.id]?.isPlaying);
+  const isTTSPlaying = sessionMessages.some(msg => msg?.id && ttsStates[msg.id]?.isPlaying);
 
   // Handler to background a running Bash command
   const handleBackgroundTask = useCallback((toolCall: ToolCall) => {
@@ -128,9 +128,9 @@ export default function ChatContainer({ session }: ChatContainerProps) {
     // Also check messages for task tool calls
     const messageTaskCalls: any[] = [];
     for (const msg of sessionMessages) {
-      if (msg.toolCalls) {
+      if (msg?.toolCalls) {
         for (const tc of msg.toolCalls) {
-          if (tc.name === 'TaskCreate' || tc.name === 'TaskUpdate' || tc.name === 'TaskList' || tc.name === 'TaskGet') {
+          if (tc?.name === 'TaskCreate' || tc?.name === 'TaskUpdate' || tc?.name === 'TaskList' || tc?.name === 'TaskGet') {
             messageTaskCalls.push({ name: tc.name, input: tc.input, result: tc.result });
           }
         }
@@ -174,9 +174,9 @@ export default function ChatContainer({ session }: ChatContainerProps) {
 
     // First, check message history for previous task tool calls
     for (const msg of sessionMessages) {
-      if (msg.toolCalls) {
+      if (msg?.toolCalls) {
         for (const tc of msg.toolCalls) {
-          if (tc.name === 'TaskCreate' && tc.result) {
+          if (tc?.name === 'TaskCreate' && tc.result) {
             const result = tc.result as any;
             if (result.id) {
               taskMap.set(result.id, {
@@ -286,10 +286,10 @@ export default function ChatContainer({ session }: ChatContainerProps) {
       // Check message history for TodoWrite
       for (let i = sessionMessages.length - 1; i >= 0; i--) {
         const msg = sessionMessages[i];
-        if (msg.toolCalls) {
+        if (msg?.toolCalls) {
           const todoWrite = [...msg.toolCalls]
             .reverse()
-            .find(tc => tc.name === 'TodoWrite');
+            .find(tc => tc?.name === 'TodoWrite');
           if (todoWrite?.input?.todos) {
             const todos = todoWrite.input.todos as any[];
             return todos.map((todo, index) => ({
