@@ -1367,13 +1367,27 @@ ${cleanOutput}
       // Map thinking mode to token counts
       // off = undefined (no extended thinking)
       // thinking = 10000 tokens
-      // ultrathink = 100000 tokens
+      // ultrathink = model-specific max (Opus 4.5: 60000, others: 100000)
+      //
+      // IMPORTANT: Opus 4.5 has a max output token limit of 64,000
+      // The thinking tokens count towards this limit, so we cap ultrathink at 60,000
+      // to leave room for the actual response (~4,000 tokens buffer)
+      const selectedModel = model || 'claude-opus-4-5-20251101';
+      const isOpus = selectedModel.includes('opus');
+
+      // Opus has stricter limits, other models can use full 100k
+      const ultrathinkTokens = isOpus ? 60000 : 100000;
+
       const thinkingTokensMap: Record<string, number | undefined> = {
         off: undefined,
         thinking: 10000,
-        ultrathink: 100000,
+        ultrathink: ultrathinkTokens,
       };
       const maxThinkingTokens = thinkingTokensMap[thinkingMode || 'thinking'];
+
+      if (thinkingMode === 'ultrathink' && isOpus) {
+        console.log(`[Claude Service] Ultrathink mode with Opus - capping thinking tokens to ${ultrathinkTokens} (model limit: 64,000)`);
+      }
 
       // Build prompt with attachments
       const imageAttachments = attachments?.filter(a => a.type === 'image') || [];
@@ -1466,8 +1480,10 @@ ${cleanOutput}
             preset: 'claude_code',
             append: this.buildSystemPromptAppend(session),
           },
-          // Enable CLAUDE.md reading from project directory
-          settingSources: ['project'],
+          // Enable CLAUDE.md and Skills from both user (~/.claude/) and project (.claude/)
+          // Skills are discovered automatically by the SDK from these filesystem locations
+          // User skills: ~/.claude/skills/, Project skills: .claude/skills/
+          settingSources: ['user', 'project'],
           // Pass environment with API key
           env: {
             ...process.env,
@@ -1480,11 +1496,14 @@ ${cleanOutput}
             'claudette-browser': this.getBrowserMcpServer(sessionId),
           },
           // SSH remote execution: spawn Claude Code on remote machine instead of locally
+          // Uses persistent tmux sessions so Claude can survive app restarts
           ...(session.sshConfig ? {
             spawnClaudeCodeProcess: (options: { command: string; args: string[]; cwd?: string; env: Record<string, string | undefined>; signal: AbortSignal }) => {
               console.log('[Claude Service] Creating SSH remote process for session:', sessionId);
               console.log('[Claude Service] SDK spawn options:', { command: options.command, args: options.args, cwd: options.cwd });
-              return sshService.createRemoteProcess(
+              // Use persistent tmux-based sessions for SSH connections
+              // This allows the Claude process to survive app restarts
+              return sshService.createPersistentRemoteProcess(
                 sessionId,
                 session.sshConfig!,
                 options
@@ -2544,12 +2563,23 @@ ${cleanOutput}
 
     // Get the stored SDK session ID for this session
     // Try new location first, then fall back to old location for backwards compatibility
-    const sdkSessionId = this.sessionStore.get(`sdkSessionMappings.${sessionId}`) as string | undefined
-      || this.sessionStore.get(`sessions.${sessionId}.sdkSessionId`) as string | undefined
-      || sessionId; // If no mapping, use sessionId itself as the transcript filename
+    // IMPORTANT: Track whether we have an EXPLICITLY stored SDK session ID (not just the session ID)
+    // This is critical for distinguishing between:
+    // 1. New SSH sessions (no stored ID) - should start fresh, NOT load old transcripts
+    // 2. Teleported/resumed sessions (have stored ID) - should find their specific transcript
+    const storedSdkSessionId = this.sessionStore.get(`sdkSessionMappings.${sessionId}`) as string | undefined
+      || this.sessionStore.get(`sessions.${sessionId}.sdkSessionId`) as string | undefined;
+    const hasStoredSdkSessionId = !!storedSdkSessionId;
+    const sdkSessionId = storedSdkSessionId || sessionId;
 
     // For SSH sessions, fetch transcript from the remote machine
     if (session?.sshConfig) {
+      // If this is a NEW SSH session (no stored SDK ID), start fresh - don't load old transcripts
+      if (!hasStoredSdkSessionId) {
+        console.log('[Claude] New SSH session without stored SDK ID - starting fresh');
+        return [];
+      }
+
       console.log('[Claude] SSH session - fetching transcript from remote:', sdkSessionId);
       try {
         const remoteContent = await sshService.fetchRemoteTranscript(
@@ -2564,8 +2594,9 @@ ${cleanOutput}
           return this.parseTranscriptContent(remoteContent);
         }
 
-        // If no transcript found with SDK session ID, try listing available transcripts
-        console.log('[Claude] No transcript found with SDK ID, listing available transcripts...');
+        // Only fall back to listing transcripts if we have a stored SDK ID
+        // This prevents new SSH sessions from picking up old conversations
+        console.log('[Claude] Stored SDK ID not found directly, listing available transcripts...');
         const transcripts = await sshService.listRemoteTranscripts(
           sessionId,
           session.sshConfig,
@@ -2573,23 +2604,25 @@ ${cleanOutput}
         );
 
         if (transcripts.length > 0) {
-          // Use the most recent transcript
-          const mostRecent = transcripts[0];
-          console.log('[Claude] Using most recent transcript:', mostRecent.filename);
-          const content = await sshService.fetchRemoteTranscript(
-            sessionId,
-            session.sshConfig,
-            mostRecent.sessionId,
-            session.sshConfig.remoteWorkdir
-          );
-          if (content) {
-            // Store the mapping for future use
-            this.sessionStore.set(`sdkSessionMappings.${sessionId}`, mostRecent.sessionId);
-            return this.parseTranscriptContent(content);
+          // Only use transcripts that match our stored SDK session ID
+          const matching = transcripts.find(t => t.sessionId === storedSdkSessionId);
+          if (matching) {
+            console.log('[Claude] Found matching transcript:', matching.filename);
+            const content = await sshService.fetchRemoteTranscript(
+              sessionId,
+              session.sshConfig,
+              matching.sessionId,
+              session.sshConfig.remoteWorkdir
+            );
+            if (content) {
+              return this.parseTranscriptContent(content);
+            }
+          } else {
+            console.log('[Claude] No transcript matching stored SDK ID:', storedSdkSessionId);
           }
         }
 
-        console.log('[Claude] No remote transcript found');
+        console.log('[Claude] No matching remote transcript found');
         return [];
       } catch (error) {
         console.error('[Claude] Error fetching remote transcript:', error);

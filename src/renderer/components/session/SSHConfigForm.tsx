@@ -1,15 +1,19 @@
 import React, { useState, useEffect } from 'react';
-import { Loader2, CheckCircle, XCircle, Server, Key, Folder, AlertTriangle, Terminal, Settings, Wifi, Wrench } from 'lucide-react';
-import type { SSHConfig, SavedSSHConfig } from '../../../shared/types';
+import { Loader2, CheckCircle, XCircle, Server, Key, Folder, AlertTriangle, Terminal, Settings, Wifi, Wrench, Upload } from 'lucide-react';
+import type { SSHConfig, SavedSSHConfig, Session } from '../../../shared/types';
 
 interface SSHConfigFormProps {
   onBack: () => void;
   onConnect: (config: SSHConfig, name: string) => Promise<void>;
+  // Teleport mode: when provided, shows source session info and teleports instead of creating
+  teleportSource?: Session;
+  onTeleport?: (config: SSHConfig) => Promise<void>;
 }
 
 type TabId = 'connection' | 'setup';
 
-export default function SSHConfigForm({ onBack, onConnect }: SSHConfigFormProps) {
+export default function SSHConfigForm({ onBack, onConnect, teleportSource, onTeleport }: SSHConfigFormProps) {
+  const isTeleportMode = !!teleportSource;
   // Tab state
   const [activeTab, setActiveTab] = useState<TabId>('connection');
   const [isLoading, setIsLoading] = useState(true);
@@ -160,9 +164,15 @@ export default function SSHConfigForm({ onBack, onConnect }: SSHConfigFormProps)
 
       // Save config via IPC (persisted to electron-store)
       await window.electronAPI.ssh.saveConfig({ host, port, username, privateKeyPath, remoteWorkdir, sessionName, worktreeScript, syncSettings });
-      await onConnect(config, sessionName || `SSH: ${host}`);
+
+      // In teleport mode, call onTeleport instead of onConnect
+      if (isTeleportMode && onTeleport) {
+        await onTeleport(config);
+      } else {
+        await onConnect(config, sessionName || `SSH: ${host}`);
+      }
     } catch (error) {
-      setCreateError(error instanceof Error ? error.message : 'Failed to create session');
+      setCreateError(error instanceof Error ? error.message : isTeleportMode ? 'Failed to teleport session' : 'Failed to create session');
     } finally {
       setIsCreating(false);
     }
@@ -178,6 +188,11 @@ export default function SSHConfigForm({ onBack, onConnect }: SSHConfigFormProps)
     { id: 'setup', label: 'Setup', icon: <Wrench size={12} /> },
   ];
 
+  // Action button text based on mode
+  const actionButtonText = isTeleportMode
+    ? (isCreating ? 'TELEPORTING...' : 'TELEPORT')
+    : (isCreating ? 'CREATING...' : 'CREATE SESSION');
+
   // Show loading spinner while fetching saved config
   if (isLoading) {
     return (
@@ -190,6 +205,18 @@ export default function SSHConfigForm({ onBack, onConnect }: SSHConfigFormProps)
 
   return (
     <div className="flex flex-col h-full">
+      {/* Teleport Source Info */}
+      {isTeleportMode && teleportSource && (
+        <div className="mb-3 p-3 bg-cyan-500/10 border border-cyan-500/30" style={{ borderRadius: 0 }}>
+          <div className="flex items-center gap-2 mb-1">
+            <Upload size={14} className="text-cyan-400" />
+            <span className="text-[10px] font-bold text-cyan-400 uppercase tracking-wider">TELEPORTING FROM LOCAL</span>
+          </div>
+          <div className="font-mono text-sm font-bold text-claude-text">{teleportSource.name}</div>
+          <div className="text-[10px] text-claude-text-secondary truncate mt-0.5">{teleportSource.worktreePath}</div>
+        </div>
+      )}
+
       {/* Tab Header */}
       <div className="flex border-b border-claude-border mb-3">
         {tabs.map((tab) => (
@@ -435,11 +462,14 @@ export default function SSHConfigForm({ onBack, onConnect }: SSHConfigFormProps)
           <button
             onClick={handleCreate}
             disabled={!canCreate || isCreating}
-            className="px-4 py-1.5 text-[10px] font-bold text-white flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed bg-claude-accent hover:bg-claude-accent-hover"
+            className={`px-4 py-1.5 text-[10px] font-bold text-white flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed ${
+              isTeleportMode ? 'bg-cyan-500 hover:bg-cyan-600' : 'bg-claude-accent hover:bg-claude-accent-hover'
+            }`}
             style={{ letterSpacing: '0.05em', borderRadius: 0 }}
           >
             {isCreating && <Loader2 size={12} className="animate-spin" />}
-            {isCreating ? 'CREATING...' : 'CREATE SESSION'}
+            {!isCreating && isTeleportMode && <Upload size={12} />}
+            {actionButtonText}
           </button>
         </div>
       </div>

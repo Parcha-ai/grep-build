@@ -61,13 +61,14 @@ export default function ExtensionsExplorer({ sessionId, projectPath }: Extension
   const [createResult, setCreateResult] = useState<{ success: boolean; message: string } | null>(null);
   const createNameInputRef = useRef<HTMLInputElement>(null);
 
-  // Load extensions
+  // Load extensions (supports SSH sessions via sessionId)
   useEffect(() => {
     setLoading(true);
+    const scanOptions = { sessionId, projectPath };
     Promise.all([
-      window.electronAPI.extensions.scanCommands(projectPath),
-      window.electronAPI.extensions.scanSkills(projectPath),
-      window.electronAPI.extensions.scanAgents(projectPath),
+      window.electronAPI.extensions.scanCommands(scanOptions),
+      window.electronAPI.extensions.scanSkills(scanOptions),
+      window.electronAPI.extensions.scanAgents(scanOptions),
     ])
       .then(([cmds, skls, agts]) => {
         setCommands(cmds);
@@ -80,7 +81,7 @@ export default function ExtensionsExplorer({ sessionId, projectPath }: Extension
       .finally(() => {
         setLoading(false);
       });
-  }, [projectPath]);
+  }, [sessionId, projectPath]);
 
   const toggleType = (type: ExtensionType) => {
     setExpandedType(expandedType === type ? null : type);
@@ -128,7 +129,7 @@ export default function ExtensionsExplorer({ sessionId, projectPath }: Extension
   // Refresh skills list
   const refreshSkills = async () => {
     try {
-      const skls = await window.electronAPI.extensions.scanSkills(projectPath);
+      const skls = await window.electronAPI.extensions.scanSkills({ sessionId, projectPath });
       setSkills(skls);
     } catch (err) {
       console.error('[Extensions Explorer] Error refreshing skills:', err);

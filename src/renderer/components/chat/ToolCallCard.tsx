@@ -256,6 +256,19 @@ function getMediaType(filePath: string): 'image' | 'video' | null {
   return null;
 }
 
+// Helper to try parsing a string as JSON
+function tryParseJSON(str: string): object | null {
+  if (typeof str !== 'string') return null;
+  const trimmed = str.trim();
+  // Quick check if it looks like JSON (starts with { or [)
+  if (!trimmed.startsWith('{') && !trimmed.startsWith('[')) return null;
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    return null;
+  }
+}
+
 // Helper to detect base64 image data in content
 function extractBase64Image(content: string): { type: string; data: string } | null {
   // Check for data URL format: data:image/xxx;base64,...
@@ -272,6 +285,45 @@ function extractBase64Image(content: string): { type: string; data: string } | n
   }
 
   return null;
+}
+
+// JSON result viewer using Monaco for syntax highlighting
+function JSONResultViewer({ data, toolCallId, priority = false }: { data: unknown; toolCallId: string; priority?: boolean }) {
+  const jsonString = typeof data === 'string' ? data : JSON.stringify(data, null, 2);
+
+  // For small JSON (under 500 chars), show inline formatted
+  if (jsonString.length < 500) {
+    return (
+      <pre className="whitespace-pre-wrap text-claude-text bg-claude-bg/50 p-2 overflow-x-auto max-h-60 overflow-y-auto font-mono text-[11px]">
+        {jsonString}
+      </pre>
+    );
+  }
+
+  // For larger JSON, use Monaco editor with proper syntax highlighting
+  return (
+    <div className="border border-claude-border overflow-hidden" style={{ borderRadius: 0 }}>
+      <LazyMonacoEditor
+        editorId={`json-${toolCallId}`}
+        height="300px"
+        language="json"
+        value={jsonString}
+        priority={priority}
+        options={{
+          readOnly: true,
+          minimap: { enabled: false },
+          scrollBeyondLastLine: false,
+          fontSize: 12,
+          lineNumbers: 'off',
+          folding: true,
+          renderLineHighlight: 'none',
+          contextmenu: false,
+          automaticLayout: true,
+          wordWrap: 'on',
+        }}
+      />
+    </div>
+  );
 }
 
 // Rich media preview component
@@ -464,9 +516,13 @@ function ExpandedContent({ toolCall, priority = false }: { toolCall: ToolCall; p
                 />
               </div>
             ) : (
-              <pre className="whitespace-pre-wrap text-claude-text bg-claude-bg/50 p-2 overflow-x-auto max-h-60 overflow-y-auto font-mono text-sm">
-                {typeof result === 'object' ? JSON.stringify(result, null, 2) : String(result)}
-              </pre>
+              typeof result === 'object' ? (
+                <JSONResultViewer data={result} toolCallId={toolCall.id} priority={priority} />
+              ) : (
+                <pre className="whitespace-pre-wrap text-claude-text bg-claude-bg/50 p-2 overflow-x-auto max-h-60 overflow-y-auto font-mono text-sm">
+                  {String(result)}
+                </pre>
+              )
             )}
           </div>
         ) : isRunning ? (
@@ -506,9 +562,15 @@ function ExpandedContent({ toolCall, priority = false }: { toolCall: ToolCall; p
         {result !== undefined ? (
           <div>
             <div className="text-claude-text-secondary mb-1 font-semibold">Output:</div>
-            <pre className="whitespace-pre-wrap text-claude-text bg-claude-bg/50 p-2 overflow-x-auto max-h-60 overflow-y-auto font-mono text-sm">
-              {typeof result === 'object' ? JSON.stringify(result, null, 2) : String(result)}
-            </pre>
+            {typeof result === 'object' ? (
+              <JSONResultViewer data={result} toolCallId={toolCall.id} priority={priority} />
+            ) : tryParseJSON(String(result)) ? (
+              <JSONResultViewer data={tryParseJSON(String(result))} toolCallId={toolCall.id} priority={priority} />
+            ) : (
+              <pre className="whitespace-pre-wrap text-claude-text bg-claude-bg/50 p-2 overflow-x-auto max-h-60 overflow-y-auto font-mono text-sm">
+                {String(result)}
+              </pre>
+            )}
           </div>
         ) : isRunning ? (
           <div className="flex items-center gap-2 text-claude-text-secondary">
@@ -640,9 +702,13 @@ function ExpandedContent({ toolCall, priority = false }: { toolCall: ToolCall; p
       {hasInput && (
         <div>
           <div className="text-claude-text-secondary mb-1 font-semibold">Input:</div>
-          <pre className="whitespace-pre-wrap text-claude-text bg-claude-bg/50 p-2 overflow-x-auto max-h-40 overflow-y-auto">
-            {typeof input === 'object' ? JSON.stringify(input, null, 2) : String(input)}
-          </pre>
+          {typeof input === 'object' ? (
+            <JSONResultViewer data={input} toolCallId={`${toolCall.id}-input`} priority={priority} />
+          ) : (
+            <pre className="whitespace-pre-wrap text-claude-text bg-claude-bg/50 p-2 overflow-x-auto max-h-40 overflow-y-auto">
+              {String(input)}
+            </pre>
+          )}
         </div>
       )}
 
@@ -661,20 +727,22 @@ function ExpandedContent({ toolCall, priority = false }: { toolCall: ToolCall; p
               <MediaPreview src={screenshotFromObject} type="image" alt="Screenshot" />
               {/* Show other fields from the object result */}
               {typeof result === 'object' && Object.keys(result as Record<string, unknown>).filter(k => !['screenshot', 'image', 'imageData'].includes(k)).length > 0 && (
-                <pre className="whitespace-pre-wrap text-claude-text bg-claude-bg/50 p-2 overflow-x-auto max-h-40 overflow-y-auto text-[11px]">
-                  {JSON.stringify(
-                    Object.fromEntries(
-                      Object.entries(result as Record<string, unknown>).filter(([k]) => !['screenshot', 'image', 'imageData'].includes(k))
-                    ),
-                    null,
-                    2
+                <JSONResultViewer
+                  data={Object.fromEntries(
+                    Object.entries(result as Record<string, unknown>).filter(([k]) => !['screenshot', 'image', 'imageData'].includes(k))
                   )}
-                </pre>
+                  toolCallId={`${toolCall.id}-fields`}
+                  priority={priority}
+                />
               )}
             </div>
+          ) : typeof result === 'object' ? (
+            <JSONResultViewer data={result} toolCallId={toolCall.id} priority={priority} />
+          ) : tryParseJSON(String(result)) ? (
+            <JSONResultViewer data={tryParseJSON(String(result))} toolCallId={toolCall.id} priority={priority} />
           ) : (
             <pre className="whitespace-pre-wrap text-claude-text bg-claude-bg/50 p-2 overflow-x-auto max-h-60 overflow-y-auto">
-              {typeof result === 'object' ? JSON.stringify(result, null, 2) : String(result)}
+              {String(result)}
             </pre>
           )}
         </div>

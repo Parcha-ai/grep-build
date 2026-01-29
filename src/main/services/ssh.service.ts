@@ -34,6 +34,16 @@ export interface SDKSpawnOptions {
 }
 
 /**
+ * Information about a persistent tmux session on the remote
+ */
+export interface PersistentSessionInfo {
+  tmuxSessionName: string;
+  isRunning: boolean;
+  claudeProcessPid?: number;
+  createdAt?: Date;
+}
+
+/**
  * Wraps an SSH exec channel to satisfy the SpawnedProcess interface
  */
 class RemoteSpawnedProcess extends EventEmitter implements SpawnedProcess {
@@ -1050,6 +1060,754 @@ export class SSHService {
     } catch (error) {
       console.error('[SSH Service] Failed to list remote transcripts:', error);
       return [];
+    }
+  }
+
+  /**
+   * Scan for commands on a remote machine via SSH
+   */
+  async scanRemoteCommands(
+    sessionId: string,
+    config: SSHConfig,
+    remoteWorkdir: string
+  ): Promise<Array<{ name: string; path: string; content: string; description?: string; scope: 'user' | 'project' }>> {
+    const commands: Array<{ name: string; path: string; content: string; description?: string; scope: 'user' | 'project' }> = [];
+
+    try {
+      const client = await this.getConnection(sessionId, config);
+
+      // Scan user commands (~/.claude/commands)
+      const userCommandsScript = `
+        find ~/.claude/commands -name "*.md" -type f 2>/dev/null | while read f; do
+          echo "___FILE_START___"
+          echo "$f"
+          cat "$f"
+          echo "___FILE_END___"
+        done
+      `;
+      const userResult = await this.execCommand(client, userCommandsScript);
+      commands.push(...this.parseRemoteCommands(userResult, 'user'));
+
+      // Scan project commands in remoteWorkdir
+      const projectCommandsScript = `
+        find "${remoteWorkdir}" -path "*/.claude/commands/*.md" -type f 2>/dev/null | while read f; do
+          echo "___FILE_START___"
+          echo "$f"
+          cat "$f"
+          echo "___FILE_END___"
+        done
+      `;
+      const projectResult = await this.execCommand(client, projectCommandsScript);
+      commands.push(...this.parseRemoteCommands(projectResult, 'project'));
+
+      console.log('[SSH Service] Found', commands.length, 'remote commands');
+      return commands;
+    } catch (error) {
+      console.error('[SSH Service] Failed to scan remote commands:', error);
+      return [];
+    }
+  }
+
+  /**
+   * Parse remote command output into Command objects
+   */
+  private parseRemoteCommands(
+    output: string,
+    scope: 'user' | 'project'
+  ): Array<{ name: string; path: string; content: string; description?: string; scope: 'user' | 'project' }> {
+    const commands: Array<{ name: string; path: string; content: string; description?: string; scope: 'user' | 'project' }> = [];
+
+    const files = output.split('___FILE_START___').filter(f => f.trim());
+    for (const fileBlock of files) {
+      const endIdx = fileBlock.indexOf('___FILE_END___');
+      if (endIdx === -1) continue;
+
+      const content = fileBlock.substring(0, endIdx);
+      const lines = content.trim().split('\n');
+      if (lines.length < 2) continue;
+
+      const filePath = lines[0].trim();
+      const fileContent = lines.slice(1).join('\n');
+
+      // Extract command name from path (e.g., /path/to/commands/foo.md -> foo)
+      const fileName = filePath.split('/').pop() || '';
+      const name = fileName.replace('.md', '');
+
+      // Extract description from first line if it's an HTML comment
+      const firstLine = fileContent.split('\n')[0]?.trim() || '';
+      const description = firstLine.startsWith('<!--') && firstLine.endsWith('-->')
+        ? firstLine.replace(/^<!--\s*/, '').replace(/\s*-->$/, '')
+        : undefined;
+
+      commands.push({ name, path: filePath, content: fileContent, description, scope });
+    }
+
+    return commands;
+  }
+
+  /**
+   * Scan for skills on a remote machine via SSH
+   */
+  async scanRemoteSkills(
+    sessionId: string,
+    config: SSHConfig,
+    remoteWorkdir: string
+  ): Promise<Array<{ name: string; path: string; content: string; description?: string; scope: 'user' | 'project' }>> {
+    const skills: Array<{ name: string; path: string; content: string; description?: string; scope: 'user' | 'project' }> = [];
+
+    try {
+      const client = await this.getConnection(sessionId, config);
+
+      // Scan user skills (~/.claude/skills/*/SKILL.md)
+      const userSkillsScript = `
+        find ~/.claude/skills -name "SKILL.md" -type f 2>/dev/null | while read f; do
+          echo "___FILE_START___"
+          echo "$f"
+          cat "$f"
+          echo "___FILE_END___"
+        done
+      `;
+      const userResult = await this.execCommand(client, userSkillsScript);
+      skills.push(...this.parseRemoteSkills(userResult, 'user'));
+
+      // Scan project skills
+      const projectSkillsScript = `
+        find "${remoteWorkdir}" -path "*/.claude/skills/*/SKILL.md" -type f 2>/dev/null | while read f; do
+          echo "___FILE_START___"
+          echo "$f"
+          cat "$f"
+          echo "___FILE_END___"
+        done
+      `;
+      const projectResult = await this.execCommand(client, projectSkillsScript);
+      skills.push(...this.parseRemoteSkills(projectResult, 'project'));
+
+      console.log('[SSH Service] Found', skills.length, 'remote skills');
+      return skills;
+    } catch (error) {
+      console.error('[SSH Service] Failed to scan remote skills:', error);
+      return [];
+    }
+  }
+
+  /**
+   * Parse remote skill output into Skill objects
+   */
+  private parseRemoteSkills(
+    output: string,
+    scope: 'user' | 'project'
+  ): Array<{ name: string; path: string; content: string; description?: string; scope: 'user' | 'project' }> {
+    const skills: Array<{ name: string; path: string; content: string; description?: string; scope: 'user' | 'project' }> = [];
+
+    const files = output.split('___FILE_START___').filter(f => f.trim());
+    for (const fileBlock of files) {
+      const endIdx = fileBlock.indexOf('___FILE_END___');
+      if (endIdx === -1) continue;
+
+      const content = fileBlock.substring(0, endIdx);
+      const lines = content.trim().split('\n');
+      if (lines.length < 2) continue;
+
+      const filePath = lines[0].trim();
+      const fileContent = lines.slice(1).join('\n');
+
+      // Extract skill name from path (e.g., /path/to/skills/my-skill/SKILL.md -> my-skill)
+      const pathParts = filePath.split('/');
+      const skillMdIndex = pathParts.findIndex(p => p === 'SKILL.md');
+      const name = skillMdIndex > 0 ? pathParts[skillMdIndex - 1] : 'unknown';
+      const skillDir = pathParts.slice(0, skillMdIndex).join('/');
+
+      // Extract description from first heading
+      const firstLine = fileContent.split('\n')[0]?.trim() || '';
+      const description = firstLine.startsWith('#') ? firstLine.replace(/^#+\s*/, '') : undefined;
+
+      skills.push({ name, path: skillDir, content: fileContent, description, scope });
+    }
+
+    return skills;
+  }
+
+  /**
+   * Scan for agents on a remote machine via SSH
+   */
+  async scanRemoteAgents(
+    sessionId: string,
+    config: SSHConfig,
+    remoteWorkdir: string
+  ): Promise<Array<{ name: string; description: string; systemPrompt: string; disallowedTools?: string[]; scope: 'user' | 'project' }>> {
+    const agents: Array<{ name: string; description: string; systemPrompt: string; disallowedTools?: string[]; scope: 'user' | 'project' }> = [];
+
+    try {
+      const client = await this.getConnection(sessionId, config);
+
+      // Scan user agents (~/.claude/agents/*.md)
+      const userAgentsScript = `
+        find ~/.claude/agents -name "*.md" -type f 2>/dev/null | while read f; do
+          echo "___FILE_START___"
+          echo "$f"
+          cat "$f"
+          echo "___FILE_END___"
+        done
+      `;
+      const userResult = await this.execCommand(client, userAgentsScript);
+      agents.push(...this.parseRemoteAgents(userResult, 'user'));
+
+      // Scan project agents
+      const projectAgentsScript = `
+        find "${remoteWorkdir}" -path "*/.claude/agents/*.md" -type f 2>/dev/null | while read f; do
+          echo "___FILE_START___"
+          echo "$f"
+          cat "$f"
+          echo "___FILE_END___"
+        done
+      `;
+      const projectResult = await this.execCommand(client, projectAgentsScript);
+      agents.push(...this.parseRemoteAgents(projectResult, 'project'));
+
+      console.log('[SSH Service] Found', agents.length, 'remote agents');
+      return agents;
+    } catch (error) {
+      console.error('[SSH Service] Failed to scan remote agents:', error);
+      return [];
+    }
+  }
+
+  /**
+   * Parse remote agent output into AgentDefinition objects
+   */
+  private parseRemoteAgents(
+    output: string,
+    scope: 'user' | 'project'
+  ): Array<{ name: string; description: string; systemPrompt: string; disallowedTools?: string[]; scope: 'user' | 'project' }> {
+    const agents: Array<{ name: string; description: string; systemPrompt: string; disallowedTools?: string[]; scope: 'user' | 'project' }> = [];
+
+    const files = output.split('___FILE_START___').filter(f => f.trim());
+    for (const fileBlock of files) {
+      const endIdx = fileBlock.indexOf('___FILE_END___');
+      if (endIdx === -1) continue;
+
+      const content = fileBlock.substring(0, endIdx);
+      const lines = content.trim().split('\n');
+      if (lines.length < 2) continue;
+
+      const filePath = lines[0].trim();
+      const fileContent = lines.slice(1).join('\n');
+
+      // Extract agent name from path
+      const fileName = filePath.split('/').pop() || '';
+      const name = fileName.replace('.md', '');
+
+      // Parse the agent markdown
+      const agent = this.parseAgentMarkdown(fileContent, name, scope);
+      if (agent) {
+        agents.push(agent);
+      }
+    }
+
+    return agents;
+  }
+
+  /**
+   * Parse agent markdown content
+   */
+  private parseAgentMarkdown(
+    content: string,
+    name: string,
+    scope: 'user' | 'project'
+  ): { name: string; description: string; systemPrompt: string; disallowedTools?: string[]; scope: 'user' | 'project' } | null {
+    const lines = content.split('\n');
+    let description = '';
+    let systemPrompt = '';
+    let currentSection = '';
+
+    for (const line of lines) {
+      const trimmed = line.trim();
+
+      if (trimmed.startsWith('# ')) {
+        currentSection = 'description';
+        continue;
+      } else if (trimmed.startsWith('## System Prompt') || trimmed.startsWith('## Prompt')) {
+        currentSection = 'systemPrompt';
+        continue;
+      }
+
+      if (currentSection === 'description' && trimmed) {
+        description += trimmed + ' ';
+      } else if (currentSection === 'systemPrompt') {
+        systemPrompt += line + '\n';
+      }
+    }
+
+    if (!description || !systemPrompt) {
+      return null;
+    }
+
+    return { name, description: description.trim(), systemPrompt: systemPrompt.trim(), scope };
+  }
+
+  // ============================================================================
+  // PERSISTENT SESSION MANAGEMENT (tmux-based)
+  // ============================================================================
+
+  /**
+   * Check if a persistent tmux session exists on the remote for this session
+   */
+  async checkPersistentSession(
+    sessionId: string,
+    config: SSHConfig
+  ): Promise<PersistentSessionInfo | null> {
+    try {
+      const client = await this.getConnection(sessionId, config);
+      const tmuxSessionName = `grep-${sessionId.substring(0, 8)}`;
+
+      // Check if tmux session exists
+      const checkResult = await this.execCommand(
+        client,
+        `tmux has-session -t "${tmuxSessionName}" 2>/dev/null && echo "EXISTS" || echo "NOT_FOUND"`
+      );
+
+      if (checkResult.trim() === 'NOT_FOUND') {
+        console.log(`[SSH Service] No persistent session found: ${tmuxSessionName}`);
+        return null;
+      }
+
+      // Session exists - check if Claude process is still running inside it
+      // We look for the claude process in the tmux session
+      const pidResult = await this.execCommand(
+        client,
+        `tmux list-panes -t "${tmuxSessionName}" -F "#{pane_pid}" 2>/dev/null | head -1`
+      );
+
+      const panePid = parseInt(pidResult.trim(), 10);
+      let claudeProcessPid: number | undefined;
+      let isRunning = false;
+
+      if (panePid) {
+        // Check if a claude process is running as a child of the pane
+        const claudePidResult = await this.execCommand(
+          client,
+          `pgrep -P ${panePid} -f "claude" 2>/dev/null || echo ""`
+        );
+        const claudePid = parseInt(claudePidResult.trim(), 10);
+        if (claudePid) {
+          claudeProcessPid = claudePid;
+          isRunning = true;
+        }
+      }
+
+      console.log(`[SSH Service] Found persistent session: ${tmuxSessionName}, running: ${isRunning}, pid: ${claudeProcessPid}`);
+
+      return {
+        tmuxSessionName,
+        isRunning,
+        claudeProcessPid,
+      };
+    } catch (error) {
+      console.error('[SSH Service] Failed to check persistent session:', error);
+      return null;
+    }
+  }
+
+  /**
+   * Kill a persistent tmux session on the remote
+   */
+  async killPersistentSession(
+    sessionId: string,
+    config: SSHConfig
+  ): Promise<{ success: boolean; error?: string }> {
+    try {
+      const client = await this.getConnection(sessionId, config);
+      const tmuxSessionName = `grep-${sessionId.substring(0, 8)}`;
+
+      // Kill the tmux session
+      await this.execCommand(
+        client,
+        `tmux kill-session -t "${tmuxSessionName}" 2>/dev/null || true`
+      );
+
+      // Clean up FIFO pipes
+      await this.execCommand(
+        client,
+        `rm -f /tmp/grep-${sessionId.substring(0, 8)}-in /tmp/grep-${sessionId.substring(0, 8)}-out 2>/dev/null || true`
+      );
+
+      console.log(`[SSH Service] Killed persistent session: ${tmuxSessionName}`);
+      return { success: true };
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      console.error('[SSH Service] Failed to kill persistent session:', errorMsg);
+      return { success: false, error: errorMsg };
+    }
+  }
+
+  /**
+   * Create a persistent remote process using tmux and FIFO pipes
+   * This allows the Claude process to survive app restarts
+   */
+  createPersistentRemoteProcess(
+    sessionId: string,
+    config: SSHConfig,
+    sdkOptions: SDKSpawnOptions
+  ): SpawnedProcess {
+    const passThrough = {
+      stdin: new PassThrough(),
+      stdout: new PassThrough(),
+    };
+
+    let killed = false;
+    let exitCode: number | null = null;
+    const emitter = new EventEmitter();
+    const tmuxSessionName = `grep-${sessionId.substring(0, 8)}`;
+    const fifoIn = `/tmp/grep-${sessionId.substring(0, 8)}-in`;
+    const fifoOut = `/tmp/grep-${sessionId.substring(0, 8)}-out`;
+
+    // Build environment exports
+    const includeVars = ['ANTHROPIC_API_KEY', 'CLAUDE_CODE_ENTRYPOINT', 'TERM', 'LANG'];
+    const envExports = Object.entries(sdkOptions.env)
+      .filter(([key, value]) => value !== undefined && includeVars.includes(key))
+      .map(([key, value]) => `export ${key}="${value?.replace(/"/g, '\\"')}"`)
+      .join('; ');
+
+    // Filter and escape args
+    const filteredArgs = sdkOptions.args.filter(arg => {
+      if (arg.includes('claude-agent-sdk') || arg.includes('cli.js') || arg.includes('node_modules')) {
+        return false;
+      }
+      return true;
+    });
+
+    const escapedArgs = filteredArgs.map(arg => {
+      if (arg.includes(' ') || arg.includes('"') || arg.includes("'") || arg.includes('{')) {
+        return `'${arg.replace(/'/g, "'\\''")}'`;
+      }
+      return arg;
+    }).join(' ');
+
+    const claudePaths = `/home/${config.username}/.local/bin:/home/${config.username}/bin:/usr/local/bin`;
+
+    // Handle abort signal
+    const abortHandler = () => {
+      console.log('[SSH Service] Abort signal received for persistent process');
+      killed = true;
+      // Don't kill the tmux session on abort - that's the point of persistence
+      // Just close our local streams
+      passThrough.stdout.end();
+    };
+    sdkOptions.signal.addEventListener('abort', abortHandler);
+
+    // Start async connection and tmux setup
+    (async () => {
+      try {
+        const client = await this.getConnection(sessionId, config);
+
+        // Check if tmux session already exists with a running Claude process
+        const existingSession = await this.checkPersistentSession(sessionId, config);
+
+        if (existingSession?.isRunning) {
+          console.log(`[SSH Service] Reattaching to existing persistent session: ${tmuxSessionName}`);
+          // Session exists and Claude is running - reattach to the FIFOs
+          await this.attachToExistingSession(client, fifoIn, fifoOut, passThrough, emitter, sdkOptions);
+        } else {
+          // Need to create a new tmux session
+          if (existingSession) {
+            // Session exists but Claude isn't running - kill it and recreate
+            console.log(`[SSH Service] Existing session found but Claude not running, recreating...`);
+            await this.killPersistentSession(sessionId, config);
+          }
+
+          console.log(`[SSH Service] Creating new persistent session: ${tmuxSessionName}`);
+          await this.createNewPersistentSession(
+            client, config, tmuxSessionName, fifoIn, fifoOut,
+            claudePaths, envExports, escapedArgs, passThrough, emitter, sdkOptions
+          );
+        }
+      } catch (error) {
+        emitter.emit('error', error instanceof Error ? error : new Error(String(error)));
+        passThrough.stdout.end();
+        sdkOptions.signal.removeEventListener('abort', abortHandler);
+      }
+    })();
+
+    return {
+      stdin: passThrough.stdin,
+      stdout: passThrough.stdout,
+      get killed() { return killed; },
+      get exitCode() { return exitCode; },
+      kill(signal: NodeJS.Signals): boolean {
+        if (killed) return false;
+        killed = true;
+        // Note: We intentionally don't kill the tmux session here
+        // The user can explicitly kill it via killPersistentSession
+        passThrough.stdout.end();
+        return true;
+      },
+      on(event: string, listener: (...args: unknown[]) => void) {
+        emitter.on(event, listener);
+      },
+      once(event: string, listener: (...args: unknown[]) => void) {
+        emitter.once(event, listener);
+      },
+      off(event: string, listener: (...args: unknown[]) => void) {
+        emitter.off(event, listener);
+      },
+    } as SpawnedProcess;
+  }
+
+  /**
+   * Attach to an existing tmux session's FIFO pipes
+   */
+  private async attachToExistingSession(
+    client: Client,
+    fifoIn: string,
+    fifoOut: string,
+    passThrough: { stdin: PassThrough; stdout: PassThrough },
+    emitter: EventEmitter,
+    sdkOptions: SDKSpawnOptions
+  ): Promise<void> {
+    // Open a channel to read from the output FIFO
+    const readCmd = `cat "${fifoOut}"`;
+    client.exec(readCmd, (err, readChannel) => {
+      if (err) {
+        emitter.emit('error', err);
+        return;
+      }
+
+      readChannel.on('data', (data: Buffer) => {
+        console.log('[SSH Service] Received from persistent session:', data.toString().substring(0, 200));
+        passThrough.stdout.write(data);
+      });
+
+      readChannel.on('close', () => {
+        console.log('[SSH Service] Read channel closed');
+        passThrough.stdout.end();
+      });
+
+      readChannel.on('error', (error: Error) => {
+        emitter.emit('error', error);
+      });
+    });
+
+    // Open a channel to write to the input FIFO
+    const writeCmd = `cat > "${fifoIn}"`;
+    client.exec(writeCmd, (err, writeChannel) => {
+      if (err) {
+        emitter.emit('error', err);
+        return;
+      }
+
+      // Pipe our stdin to the write channel
+      passThrough.stdin.on('data', (data: Buffer) => {
+        console.log('[SSH Service] Sending to persistent session:', data.toString().substring(0, 100));
+        writeChannel.stdin.write(data);
+      });
+
+      passThrough.stdin.on('end', () => {
+        writeChannel.stdin.end();
+      });
+
+      writeChannel.on('error', (error: Error) => {
+        console.error('[SSH Service] Write channel error:', error);
+      });
+    });
+  }
+
+  /**
+   * Create a new tmux session with FIFO pipes for Claude Code
+   */
+  private async createNewPersistentSession(
+    client: Client,
+    config: SSHConfig,
+    tmuxSessionName: string,
+    fifoIn: string,
+    fifoOut: string,
+    claudePaths: string,
+    envExports: string,
+    escapedArgs: string,
+    passThrough: { stdin: PassThrough; stdout: PassThrough },
+    emitter: EventEmitter,
+    sdkOptions: SDKSpawnOptions
+  ): Promise<void> {
+    // Create FIFOs and tmux session with Claude running inside
+    const setupScript = `
+      # Clean up any existing FIFOs
+      rm -f "${fifoIn}" "${fifoOut}" 2>/dev/null
+
+      # Create named pipes
+      mkfifo "${fifoIn}" "${fifoOut}"
+
+      # Start tmux session with Claude reading from input FIFO and writing to output FIFO
+      tmux new-session -d -s "${tmuxSessionName}" -c "${config.remoteWorkdir}" \
+        "export PATH=\\"${claudePaths}:\\$PATH\\"; ${envExports}; exec claude ${escapedArgs} < \\"${fifoIn}\\" > \\"${fifoOut}\\" 2>&1"
+
+      # Give tmux a moment to start
+      sleep 0.5
+
+      # Verify session was created
+      tmux has-session -t "${tmuxSessionName}" 2>/dev/null && echo "SESSION_CREATED" || echo "SESSION_FAILED"
+    `;
+
+    console.log('[SSH Service] Creating persistent session with script');
+
+    const setupResult = await this.execCommand(client, setupScript);
+
+    if (!setupResult.includes('SESSION_CREATED')) {
+      throw new Error(`Failed to create tmux session: ${setupResult}`);
+    }
+
+    console.log('[SSH Service] Persistent tmux session created, attaching to FIFOs...');
+
+    // Now attach to the FIFOs
+    await this.attachToExistingSession(client, fifoIn, fifoOut, passThrough, emitter, sdkOptions);
+  }
+
+  /**
+   * Teleport a local session to a remote SSH host
+   * Copies transcript files and syncs settings so Claude can resume with full context
+   */
+  async teleportSession(
+    localProjectPath: string,
+    sdkSessionId: string | undefined,
+    destinationConfig: SSHConfig,
+    onProgress?: (message: string) => void
+  ): Promise<{
+    success: boolean;
+    error?: string;
+  }> {
+    const teleportId = `teleport-${Date.now()}`;
+
+    try {
+      onProgress?.('Connecting to remote host...');
+      await this.connect(teleportId, destinationConfig);
+
+      const connInfo = this.connections.get(teleportId);
+      if (!connInfo) {
+        return { success: false, error: 'Failed to establish connection' };
+      }
+
+      const client = connInfo.client;
+
+      // 1. Create the remote project directory in Claude's format
+      // Claude Code stores transcripts in ~/.claude/projects/{escaped-path}/
+      const escapedRemotePath = destinationConfig.remoteWorkdir.replace(/\//g, '-').replace(/^-/, '');
+      const remoteProjectDir = `~/.claude/projects/-${escapedRemotePath}`;
+
+      onProgress?.('Creating remote project directory...');
+      await this.execCommand(client, `mkdir -p ${remoteProjectDir}`);
+
+      // 2. Find and upload transcript files
+      const path = await import('path');
+      const os = await import('os');
+      const fsPromises = await import('fs/promises');
+
+      // Escape the local project path in Claude's format
+      const escapedLocalPath = localProjectPath.replace(/\//g, '-').replace(/^-/, '');
+      const localClaudePath = path.join(os.homedir(), '.claude', 'projects', `-${escapedLocalPath}`);
+
+      onProgress?.('Checking for session transcripts...');
+
+      try {
+        const files = await fsPromises.readdir(localClaudePath);
+        const transcriptFiles = files.filter(f => f.endsWith('.jsonl'));
+
+        if (transcriptFiles.length === 0) {
+          onProgress?.('No transcript files found (new session will start fresh)');
+        } else {
+          onProgress?.(`Found ${transcriptFiles.length} transcript file(s), transferring...`);
+
+          // Upload each transcript file via SFTP
+          for (const filename of transcriptFiles) {
+            const localFilePath = path.join(localClaudePath, filename);
+            const remoteFilePath = `${remoteProjectDir}/${filename}`;
+
+            onProgress?.(`Uploading ${filename}...`);
+            await this.uploadFile(client, localFilePath, remoteFilePath);
+          }
+        }
+      } catch (err) {
+        // If local claude directory doesn't exist, that's fine - fresh session
+        console.log('[SSH Service] No local Claude project directory found:', localClaudePath);
+        onProgress?.('No existing transcripts (starting fresh)');
+      }
+
+      // 3. Sync settings if enabled
+      if (destinationConfig.syncSettings !== false) {
+        onProgress?.('Syncing Claude settings...');
+        try {
+          await this.syncSettingsInternal(client, destinationConfig);
+        } catch (err) {
+          console.warn('[SSH Service] Settings sync failed, continuing:', err);
+        }
+      }
+
+      onProgress?.('Teleportation complete!');
+      return { success: true };
+
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : 'Unknown error';
+      console.error('[SSH Service] Teleport failed:', errorMsg);
+      return { success: false, error: errorMsg };
+    } finally {
+      this.disconnect(teleportId);
+    }
+  }
+
+  /**
+   * Upload a file to the remote via SFTP
+   */
+  private uploadFile(client: Client, localPath: string, remotePath: string): Promise<void> {
+    return new Promise((resolve, reject) => {
+      client.sftp((err, sftp) => {
+        if (err) return reject(err);
+
+        const readStream = fs.createReadStream(localPath);
+        const writeStream = sftp.createWriteStream(remotePath);
+
+        writeStream.on('close', () => {
+          sftp.end();
+          resolve();
+        });
+
+        writeStream.on('error', (error: Error) => {
+          sftp.end();
+          reject(error);
+        });
+
+        readStream.on('error', (error: Error) => {
+          sftp.end();
+          reject(error);
+        });
+
+        readStream.pipe(writeStream);
+      });
+    });
+  }
+
+  /**
+   * Internal method to sync settings without creating a new connection
+   */
+  private async syncSettingsInternal(client: Client, config: SSHConfig): Promise<void> {
+    const path = await import('path');
+    const os = await import('os');
+    const fsPromises = await import('fs/promises');
+
+    // Read local settings
+    const localSettingsPath = path.join(os.homedir(), '.claude', 'settings.json');
+
+    try {
+      const settingsContent = await fsPromises.readFile(localSettingsPath, 'utf-8');
+
+      // Upload settings to remote
+      await this.execCommand(client, 'mkdir -p ~/.claude');
+
+      // Use a heredoc to write settings
+      const escapedContent = settingsContent.replace(/'/g, "'\\''");
+      await this.execCommand(client, `cat > ~/.claude/settings.json << 'SETTINGS_EOF'
+${settingsContent}
+SETTINGS_EOF`);
+
+      console.log('[SSH Service] Settings synced to remote');
+    } catch (err) {
+      console.warn('[SSH Service] Could not read local settings:', err);
     }
   }
 }

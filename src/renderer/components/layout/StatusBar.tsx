@@ -1,7 +1,26 @@
 import React, { useEffect, useState, useRef, useMemo } from 'react';
 import { useSessionStore } from '../../stores/session.store';
+import { useAuthStore } from '../../stores/auth.store';
 import { ChevronDown, Check } from 'lucide-react';
 import type { Branch } from '../../../shared/types';
+
+// Silly name generator for dev mode identification
+const SILLY_ADJECTIVES = [
+  'fuzzy', 'sparkly', 'bouncy', 'wobbly', 'zippy', 'snazzy', 'groovy', 'jazzy',
+  'perky', 'zesty', 'quirky', 'peppy', 'spiffy', 'nifty', 'dandy', 'swanky',
+  'cheeky', 'plucky', 'snappy', 'frisky', 'giddy', 'jolly', 'chipper', 'dapper'
+];
+const SILLY_NOUNS = [
+  'penguin', 'tiger', 'otter', 'panda', 'koala', 'badger', 'ferret', 'wombat',
+  'platypus', 'narwhal', 'capybara', 'axolotl', 'quokka', 'lemur', 'meerkat',
+  'hedgehog', 'sloth', 'mongoose', 'armadillo', 'chinchilla', 'ocelot', 'tapir'
+];
+
+// Generate a consistent silly name for this dev instance (generated once at module load)
+const DEV_INSTANCE_NAME = `${SILLY_ADJECTIVES[Math.floor(Math.random() * SILLY_ADJECTIVES.length)]}-${SILLY_NOUNS[Math.floor(Math.random() * SILLY_NOUNS.length)]}`;
+
+// Log the silly name so it can be identified in logs
+console.log(`[StatusBar] Dev instance name: ${DEV_INSTANCE_NAME}`);
 
 // Extract subagent type from Task tool input
 function getSubagentType(input: Record<string, unknown>): string | null {
@@ -26,6 +45,7 @@ function getSubagentType(input: Record<string, unknown>): string | null {
 
 export default function StatusBar() {
   const { activeSessionId, sessions, updateSession, refreshSessionBranch, currentToolCalls } = useSessionStore();
+  const { isDevMode } = useAuthStore();
   const [dockerStatus, setDockerStatus] = useState<{ available: boolean; version?: string } | null>(null);
   const [showBranchMenu, setShowBranchMenu] = useState(false);
   const [branches, setBranches] = useState<Branch[]>([]);
@@ -270,6 +290,11 @@ export default function StatusBar() {
 
         <div className="flex items-center gap-1.5">
           <span style={{ letterSpacing: '0.05em' }}>GREP BUILD v{appVersion}</span>
+          {isDevMode && (
+            <span className="text-amber-400 font-bold ml-1" style={{ letterSpacing: '0.05em' }}>
+              [{DEV_INSTANCE_NAME}]
+            </span>
+          )}
         </div>
       </div>
     </div>

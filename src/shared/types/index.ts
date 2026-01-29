@@ -49,6 +49,9 @@ export interface Session {
   isWorktree?: boolean; // True if this is a worktree fork of another repo
   parentRepoPath?: string; // Path to the parent repo this was forked from
   forkName?: string; // Silly memorable name for this fork (e.g., "fuzzy-tiger")
+  // Teleportation tracking
+  teleportedFrom?: string; // Original local session ID if teleported to SSH
+  sdkSessionId?: string; // Claude Agent SDK session ID for transcript resumption
 }
 
 export type SessionStatus = 'creating' | 'starting' | 'setup' | 'running' | 'stopping' | 'stopped' | 'error';

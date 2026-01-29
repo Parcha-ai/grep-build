@@ -171,6 +171,10 @@ export const IPC_CHANNELS = {
   SSH_GET_SAVED_CONFIG: 'ssh:get-saved-config',
   SSH_SAVE_CONFIG: 'ssh:save-config',
   SSH_SETUP_PROGRESS: 'ssh:setup-progress',
+  SSH_CHECK_PERSISTENT_SESSION: 'ssh:check-persistent-session',
+  SSH_KILL_PERSISTENT_SESSION: 'ssh:kill-persistent-session',
+  SSH_CHECK_CONNECTION: 'ssh:check-connection',
+  SSH_TELEPORT_SESSION: 'ssh:teleport-session',
 
   // Voice mode channels (ElevenLabs Conversational AI)
   VOICE_CONNECT: 'voice:connect',
