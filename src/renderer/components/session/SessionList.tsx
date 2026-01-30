@@ -91,9 +91,14 @@ export default function SessionList() {
           // For old-style Claudette worktrees, use the session name
           projectName = session.name;
         } else {
-          // For regular directories, use the directory name
-          const pathParts = projectPath.split('/');
-          projectName = pathParts[pathParts.length - 1] || 'Unknown';
+          // For regular directories, use parent/folder format for disambiguation
+          // e.g., "/Users/aj/dev/parcha/claudette" -> "parcha/claudette"
+          const pathParts = projectPath.split('/').filter(Boolean);
+          if (pathParts.length >= 2) {
+            projectName = `${pathParts[pathParts.length - 2]}/${pathParts[pathParts.length - 1]}`;
+          } else {
+            projectName = pathParts[pathParts.length - 1] || 'Unknown';
+          }
         }
 
         projectGroups.set(projectPath, {
