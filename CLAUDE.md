@@ -40,7 +40,17 @@ Never build a production version (`npm run make`) without:
 ## Slash Commands
 
 ### /build
-Build the production application. This command:
+Build the production application. This command has two modes:
+
+#### Standard Mode (`/build`)
+Requires QA approval before building:
+1. Start dev server with `npm run start`
+2. Ask user to test the changes in the dev build
+3. **WAIT FOR EXPLICIT QA APPROVAL** from user that dev version works
+4. Only after approval: bump version, run `npm run make`, create tag, open app
+
+#### Force Mode (`/build force`)
+Skips QA check and builds immediately:
 1. **BUMP THE VERSION** in `package.json` (increment patch version, e.g., 0.0.3 → 0.0.4)
 2. Run `npm run make` to create the distributable
 3. **CREATE A RELEASE TAG** with `git tag v{version}` (e.g., `git tag v0.0.4`)
@@ -52,7 +62,9 @@ Build the production application. This command:
 
 **CRITICAL: NEVER pkill or kill processes before building!** The user may have other Electron instances running in different worktrees. The build process works fine without killing anything.
 
-Usage: User says `/build` when ready to create a production build after dev testing is complete.
+Usage:
+- `/build` - Start dev server and get QA approval before building
+- `/build force` - Build immediately without QA check (when dev testing already done)
 
 ## Architecture
 

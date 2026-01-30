@@ -2,20 +2,42 @@
 
 Build the Grep Build production application for distribution.
 
-## Steps
+## Usage Modes
 
-1. **BUMP THE VERSION** in `package.json` (increment patch version, e.g., 0.0.17 → 0.0.18)
+### Standard Mode: `/build`
+Requires QA approval before building. This is the safe, recommended approach.
+
+**Workflow:**
+1. Start the dev server (`npm run start`)
+2. Wait for user to test and confirm everything works
+3. Ask explicitly: "Dev build is running. Please test and confirm when ready to build production."
+4. Only proceed with production build after explicit user approval
+
+### Force Mode: `/build force`
+Builds immediately without QA check. Use when you're confident the build is ready.
+
+**Workflow:**
+1. Bump version in `package.json`
+2. Run `npm run make` immediately
+3. Create git tag
+4. Merge to master
+5. Open built application
+
+## Build Steps (after QA approval or in force mode)
+
+1. **BUMP THE VERSION** in `package.json` (increment patch version, e.g., 0.0.22 → 0.0.23)
 2. Run `npm run make` to create the distributable application
-3. **CREATE A RELEASE TAG** with `git tag v{version}` (e.g., `git tag v0.0.18`)
-4. Open the built application from `out/Grep Build-darwin-arm64/Grep Build.app`
-5. Report the build status and location of the artifact
+3. **CREATE A RELEASE TAG** with `git tag v{version}` (e.g., `git tag v0.0.23`)
+4. **MERGE TO MASTER** - Push branch and merge to master (see Merge to Master section)
+5. Open the built application from `out/Grep Build-darwin-arm64/Grep Build.app`
+6. Report the build status and location of the artifact
 
-## Pre-flight Check
+## Pre-flight Check (Standard Mode)
 
 Before building, confirm:
 - The dev version has been tested and works correctly
 - All TypeScript errors have been resolved
-- The user has explicitly requested the build
+- The user has explicitly approved the production build
 
 ## CRITICAL: NEVER pkill
 
@@ -27,10 +49,29 @@ Before building, confirm:
 npm run make
 ```
 
+## Merge to Master
+
+After a successful build, merge the current branch to master:
+
+1. Push the current branch: `git push origin {branch-name}`
+2. Check if master is checked out in another worktree: `git worktree list`
+3. If master is in another worktree, use GitHub CLI to merge:
+   ```bash
+   gh pr create --base master --head {branch-name} --title "Release v{version}" --body "Production build v{version}"
+   gh pr merge --merge --delete-branch
+   ```
+4. If master is available locally:
+   ```bash
+   git checkout master
+   git merge {branch-name}
+   git push origin master
+   ```
+
 ## Post-build
 
-After successful build:
-- Create a git tag: `git tag v{version}` (e.g., `git tag v0.0.18`)
+After successful build and merge:
+- Create a git tag: `git tag v{version}` (e.g., `git tag v0.0.23`)
+- Push the tag: `git push origin v{version}`
 - Open the application: `open "out/Grep Build-darwin-arm64/Grep Build.app"`
 - Report the build artifacts location: `out/make/`
 

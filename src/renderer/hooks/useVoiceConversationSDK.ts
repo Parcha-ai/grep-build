@@ -25,6 +25,7 @@ interface VoiceConversationState {
   currentTranscript: string;
   error: string | null;
   audioLevel: number;
+  shouldReconnect: boolean; // Trigger for auto-reconnect
 }
 
 /**
@@ -52,6 +53,7 @@ export const useVoiceConversationSDK = ({
     currentTranscript: '',
     error: null,
     audioLevel: 0,
+    shouldReconnect: false,
   });
 
   // Conversation instance ref
@@ -73,12 +75,24 @@ export const useVoiceConversationSDK = ({
   // Audio level polling interval
   const audioLevelIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
+  // Track if disconnect was intentional (user-initiated)
+  const intentionalDisconnectRef = useRef(false);
+
+  // Track connection start time for token expiry detection
+  const connectionStartTimeRef = useRef<number | null>(null);
+
+  // Auto-reconnect state
+  const reconnectAttemptsRef = useRef(0);
+  const maxReconnectAttempts = 3;
+
   
   /**
    * Connect to ElevenLabs and start voice mode using the official SDK
    */
   const connect = useCallback(async () => {
     try {
+      // Reset intentional disconnect flag - we're trying to connect now
+      intentionalDisconnectRef.current = false;
       setState(s => ({ ...s, isConnecting: true, error: null }));
 
       // On macOS, check and request microphone permission first
@@ -147,18 +161,60 @@ export const useVoiceConversationSDK = ({
         onConnect: ({ conversationId }) => {
           console.log('[VoiceConversationSDK] Connected, conversationId:', conversationId);
           isConnectedRef.current = true;
+          connectionStartTimeRef.current = Date.now();
+          reconnectAttemptsRef.current = 0; // Reset reconnect attempts on successful connect
           setState(s => ({ ...s, isConnected: true, isConnecting: false }));
         },
 
         onDisconnect: (details) => {
-          console.log('[VoiceConversationSDK] Disconnected:', details);
+          console.log('[VoiceConversationSDK] Disconnected:', details, {
+            intentional: intentionalDisconnectRef.current,
+            connectionDuration: connectionStartTimeRef.current
+              ? Math.round((Date.now() - connectionStartTimeRef.current) / 1000) + 's'
+              : 'unknown',
+            reconnectAttempts: reconnectAttemptsRef.current,
+          });
+
           isConnectedRef.current = false;
+          conversationRef.current = null;
+          connectionStartTimeRef.current = null;
           setState(s => ({ ...s, isConnected: false, isRecording: false, isSpeaking: false }));
 
           // Clear audio level polling
           if (audioLevelIntervalRef.current) {
             clearInterval(audioLevelIntervalRef.current);
             audioLevelIntervalRef.current = null;
+          }
+
+          // Auto-reconnect if disconnect was NOT intentional (e.g., token expired, network blip)
+          // But not for explicit errors like quota exceeded
+          const detailsStr = JSON.stringify(details || {}).toLowerCase();
+          const isRecoverableDisconnect = !intentionalDisconnectRef.current &&
+            !detailsStr.includes('quota') &&
+            !detailsStr.includes('limit') &&
+            !detailsStr.includes('unauthorized') &&
+            reconnectAttemptsRef.current < maxReconnectAttempts;
+
+          if (isRecoverableDisconnect) {
+            reconnectAttemptsRef.current++;
+            console.log(`[VoiceConversationSDK] Auto-reconnecting (attempt ${reconnectAttemptsRef.current}/${maxReconnectAttempts})...`);
+            // Delay a bit before reconnecting to avoid rapid reconnect loops
+            const delay = 1000 * reconnectAttemptsRef.current; // Exponential backoff: 1s, 2s, 3s
+            setTimeout(() => {
+              // Only reconnect if we're still supposed to be connected (not intentionally disconnected)
+              if (!intentionalDisconnectRef.current) {
+                // Trigger reconnect via state - the effect below will handle the actual reconnection
+                setState(s => ({ ...s, shouldReconnect: true, error: `Reconnecting (attempt ${reconnectAttemptsRef.current})...` }));
+              }
+            }, delay);
+          } else if (!intentionalDisconnectRef.current) {
+            console.log('[VoiceConversationSDK] Not auto-reconnecting:', {
+              intentional: intentionalDisconnectRef.current,
+              hasQuotaError: detailsStr.includes('quota'),
+              hasLimitError: detailsStr.includes('limit'),
+              hasUnauthorized: detailsStr.includes('unauthorized'),
+              reconnectAttempts: reconnectAttemptsRef.current,
+            });
           }
         },
 
@@ -279,6 +335,10 @@ export const useVoiceConversationSDK = ({
    * Disconnect from voice mode
    */
   const disconnect = useCallback(async () => {
+    console.log('[VoiceConversationSDK] User-initiated disconnect');
+    // Mark disconnect as intentional to prevent auto-reconnect
+    intentionalDisconnectRef.current = true;
+
     // Clear audio level polling
     if (audioLevelIntervalRef.current) {
       clearInterval(audioLevelIntervalRef.current);
@@ -292,6 +352,7 @@ export const useVoiceConversationSDK = ({
     }
 
     isConnectedRef.current = false;
+    connectionStartTimeRef.current = null;
     setState({
       isConnected: false,
       isConnecting: false,
@@ -300,6 +361,7 @@ export const useVoiceConversationSDK = ({
       currentTranscript: '',
       error: null,
       audioLevel: 0,
+      shouldReconnect: false,
     });
   }, []);
 
@@ -348,6 +410,8 @@ export const useVoiceConversationSDK = ({
   useEffect(() => {
     if (previousSessionIdRef.current !== sessionId && conversationRef.current) {
       console.log('[VoiceConversationSDK] Session changed from', previousSessionIdRef.current, 'to', sessionId, '- disconnecting voice');
+      // Mark as intentional to prevent auto-reconnect
+      intentionalDisconnectRef.current = true;
       // Disconnect the old session's voice connection
       if (audioLevelIntervalRef.current) {
         clearInterval(audioLevelIntervalRef.current);
@@ -356,6 +420,7 @@ export const useVoiceConversationSDK = ({
       conversationRef.current.endSession();
       conversationRef.current = null;
       isConnectedRef.current = false;
+      connectionStartTimeRef.current = null;
       setState({
         isConnected: false,
         isConnecting: false,
@@ -364,14 +429,27 @@ export const useVoiceConversationSDK = ({
         currentTranscript: '',
         error: null,
         audioLevel: 0,
+        shouldReconnect: false,
       });
     }
     previousSessionIdRef.current = sessionId;
   }, [sessionId]);
 
+  // Auto-reconnect effect - triggered when shouldReconnect becomes true
+  useEffect(() => {
+    if (state.shouldReconnect && !state.isConnected && !state.isConnecting) {
+      console.log('[VoiceConversationSDK] Reconnect effect triggered');
+      // Reset the shouldReconnect flag and initiate connection
+      setState(s => ({ ...s, shouldReconnect: false }));
+      connect();
+    }
+  }, [state.shouldReconnect, state.isConnected, state.isConnecting, connect]);
+
   // Cleanup on unmount
   useEffect(() => {
     return () => {
+      // Mark as intentional so any pending reconnect attempts are cancelled
+      intentionalDisconnectRef.current = true;
       if (audioLevelIntervalRef.current) {
         clearInterval(audioLevelIntervalRef.current);
       }
