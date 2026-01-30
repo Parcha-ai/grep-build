@@ -69,6 +69,7 @@ export const IPC_CHANNELS = {
   CLAUDE_INJECT_MESSAGE: 'claude:inject-message', // Inject message into active query via streamInput
   CLAUDE_HAS_ACTIVE_QUERY: 'claude:has-active-query', // Check if session has active query
   CLAUDE_SET_PERMISSION_MODE: 'claude:set-permission-mode', // Update permission mode mid-stream (used by GREP IT! button)
+  CLAUDE_PERMISSION_MODE_CHANGED: 'claude:permission-mode-changed', // Notify renderer of permission mode change from main
   CLAUDE_BACKGROUND_TASK_OUTPUT: 'claude:background-task-output', // Output updates from backgrounded Bash commands
 
   // Browser preview channels

@@ -15,8 +15,14 @@ import type {
   SSHConfig
 } from '../shared/types';
 
+// App's working directory (for deterministic dev instance naming)
+const APP_CWD = process.cwd();
+
 // Type-safe API for renderer process
 const electronAPI = {
+  // App info
+  appCwd: APP_CWD,
+
   // Auth
   auth: {
     login: () => ipcRenderer.invoke(IPC_CHANNELS.AUTH_LOGIN),
@@ -221,6 +227,12 @@ const electronAPI = {
     // Update permission mode mid-stream (used by GREP IT! button)
     setPermissionMode: (sessionId: string, mode: string): Promise<void> =>
       ipcRenderer.invoke(IPC_CHANNELS.CLAUDE_SET_PERMISSION_MODE, sessionId, mode),
+    // Listen for permission mode changes from main process (e.g., after plan approval)
+    onPermissionModeChanged: (callback: (data: { sessionId: string; mode: string }) => void) => {
+      const handler = (_: IpcRendererEvent, data: { sessionId: string; mode: string }) => callback(data);
+      ipcRenderer.on(IPC_CHANNELS.CLAUDE_PERMISSION_MODE_CHANGED, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.CLAUDE_PERMISSION_MODE_CHANGED, handler);
+    },
     // Background task output listener
     onBackgroundTaskOutput: (callback: (data: { sessionId: string; taskId: string; output: string; status: 'running' | 'completed' | 'error'; completedAt?: string }) => void) => {
       const handler = (_: IpcRendererEvent, data: { sessionId: string; taskId: string; output: string; status: 'running' | 'completed' | 'error'; completedAt?: string }) => callback(data);

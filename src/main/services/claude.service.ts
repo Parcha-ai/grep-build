@@ -65,6 +65,7 @@ export class ClaudeService {
   private activeQueries: Map<string, AbortController> = new Map();
   private activeQueryObjects: Map<string, Query> = new Map(); // Store Query objects for streamInput
   private sessionPermissionModes: Map<string, string> = new Map(); // Track current permission mode per session
+  private prePlanPermissionModes: Map<string, string> = new Map(); // Track pre-plan mode for restoration after plan approval
   private pendingQuestions: Map<string, PendingQuestion> = new Map();
   private pendingPermissions: Map<string, PendingPermission> = new Map();
   private pendingPlanApprovals: Map<string, PendingPlanApproval> = new Map();
@@ -86,6 +87,14 @@ export class ClaudeService {
    */
   setSessionPermissionMode(sessionId: string, mode: string): void {
     console.log(`[Claude Service] Setting permission mode for ${sessionId}: ${mode}`);
+    // When entering plan mode, store the previous mode for restoration after plan approval
+    if (mode === 'plan') {
+      const currentMode = this.sessionPermissionModes.get(sessionId) || 'acceptEdits';
+      if (currentMode !== 'plan') {
+        this.prePlanPermissionModes.set(sessionId, currentMode);
+        console.log(`[Claude Service] Stored pre-plan mode for ${sessionId}: ${currentMode}`);
+      }
+    }
     this.sessionPermissionModes.set(sessionId, mode);
   }
 
@@ -1361,6 +1370,12 @@ ${cleanOutput}
       // Store the initial permission mode for this session (can be updated mid-stream via GREP IT!)
       this.sessionPermissionModes.set(sessionId, sdkPermissionMode);
 
+      // If starting in plan mode, store a default pre-plan mode for restoration after approval
+      if (sdkPermissionMode === 'plan' && !this.prePlanPermissionModes.has(sessionId)) {
+        this.prePlanPermissionModes.set(sessionId, 'acceptEdits');
+        console.log(`[Claude Service] Starting in plan mode, stored default pre-plan mode: acceptEdits`);
+      }
+
       // Check if bypassPermissions mode requires the danger flag
       const requiresDangerFlag = sdkPermissionMode === 'bypassPermissions';
 
@@ -1573,6 +1588,20 @@ ${cleanOutput}
 
                 if (approved) {
                   console.log('[Claude Service] Plan approved by user');
+                  // Restore the pre-plan permission mode so the agent can execute its plan
+                  const prePlanMode = this.prePlanPermissionModes.get(sessionId) || 'acceptEdits';
+                  this.sessionPermissionModes.set(sessionId, prePlanMode);
+                  this.prePlanPermissionModes.delete(sessionId); // Clean up
+                  console.log(`[Claude Service] Permission mode restored to ${prePlanMode} for plan execution`);
+
+                  // Notify the renderer to update its permission mode state
+                  if (this.mainWindow) {
+                    this.mainWindow.webContents.send(IPC_CHANNELS.CLAUDE_PERMISSION_MODE_CHANGED, {
+                      sessionId,
+                      mode: prePlanMode,
+                    });
+                  }
+
                   return { behavior: 'allow' as const, updatedInput: input };
                 } else {
                   console.log('[Claude Service] Plan rejected by user');
