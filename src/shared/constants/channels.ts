@@ -69,6 +69,7 @@ export const IPC_CHANNELS = {
   CLAUDE_INJECT_MESSAGE: 'claude:inject-message', // Inject message into active query via streamInput
   CLAUDE_HAS_ACTIVE_QUERY: 'claude:has-active-query', // Check if session has active query
   CLAUDE_SET_PERMISSION_MODE: 'claude:set-permission-mode', // Update permission mode mid-stream (used by GREP IT! button)
+  CLAUDE_PERMISSION_MODE_CHANGED: 'claude:permission-mode-changed', // Notify renderer of permission mode change from main
   CLAUDE_BACKGROUND_TASK_OUTPUT: 'claude:background-task-output', // Output updates from backgrounded Bash commands
 
   // Browser preview channels
@@ -171,6 +172,10 @@ export const IPC_CHANNELS = {
   SSH_GET_SAVED_CONFIG: 'ssh:get-saved-config',
   SSH_SAVE_CONFIG: 'ssh:save-config',
   SSH_SETUP_PROGRESS: 'ssh:setup-progress',
+  SSH_CHECK_PERSISTENT_SESSION: 'ssh:check-persistent-session',
+  SSH_KILL_PERSISTENT_SESSION: 'ssh:kill-persistent-session',
+  SSH_CHECK_CONNECTION: 'ssh:check-connection',
+  SSH_TELEPORT_SESSION: 'ssh:teleport-session',
 
   // Voice mode channels (ElevenLabs Conversational AI)
   VOICE_CONNECT: 'voice:connect',

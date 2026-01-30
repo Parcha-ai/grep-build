@@ -379,10 +379,15 @@ export default function InputArea({ sessionId, disabled, systemInfo, isStreaming
 
     const textBeforeCursor = value.slice(0, cursorPos);
 
-    // Check for slash commands at the start of input
-    if (value.startsWith('/') && cursorPos > 0) {
-      const commandText = textBeforeCursor.slice(1);
-      if (!/\s/.test(commandText)) {
+    // Check for slash commands anywhere in input (similar to @mention detection)
+    const lastSlashIndex = textBeforeCursor.lastIndexOf('/');
+    if (lastSlashIndex !== -1) {
+      const textAfterSlash = textBeforeCursor.slice(lastSlashIndex + 1);
+      const charBeforeSlash = value[lastSlashIndex - 1];
+      const isValidStart = lastSlashIndex === 0 || /\s/.test(charBeforeSlash);
+      const hasNoSpaces = !/\s/.test(textAfterSlash);
+
+      if (isValidStart && hasNoSpaces) {
         // Position autocomplete above the input container
         if (containerRef.current) {
           const containerRect = containerRef.current.getBoundingClientRect();
@@ -396,8 +401,8 @@ export default function InputArea({ sessionId, disabled, systemInfo, isStreaming
 
         setShowCommands(true);
         setCommandType('command');
-        setCommandQuery(commandText);
-        setCommandStartIndex(0);
+        setCommandQuery(textAfterSlash);
+        setCommandStartIndex(lastSlashIndex);
         setShowMentions(false);
         return;
       }
@@ -500,9 +505,10 @@ export default function InputArea({ sessionId, disabled, systemInfo, isStreaming
             const lines = content.split('\n');
             const cleanContent = lines.filter((l: string) => !l.trim().startsWith('<!--')).join('\n').trim();
 
-            // Replace /command with the command content
+            // Replace /command with the command content, preserving text before and after
+            const beforeCommand = message.slice(0, commandStartIndex);
             const afterCommand = message.slice(commandStartIndex + item.name.length + 1);
-            setMessage(cleanContent + (afterCommand ? ' ' + afterCommand : ''));
+            setMessage(beforeCommand + cleanContent + (afterCommand ? ' ' + afterCommand : ''));
           }
         } catch (err) {
           console.error('[InputArea] Error loading command:', err);

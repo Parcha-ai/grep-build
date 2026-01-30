@@ -162,6 +162,34 @@ export class ExtensionService {
     return skills;
   }
 
+  /**
+   * Scan root-level skills only (user's ~/.claude/skills and project's .claude/skills)
+   * This matches Claude Code's behavior - it only preloads root-level skills and
+   * discovers nested skills dynamically as needed.
+   */
+  async scanRootSkills(projectPath?: string): Promise<Skill[]> {
+    const skills: Skill[] = [];
+
+    // Scan user skills from ~/.claude/skills
+    const userSkillsDir = path.join(os.homedir(), '.claude', 'skills');
+    console.log('[ExtensionService] Scanning user root skills:', userSkillsDir);
+    const userSkills = await this.scanSkillsRec(userSkillsDir, 'user');
+    console.log('[ExtensionService] Found user root skills:', userSkills.length);
+    skills.push(...userSkills);
+
+    // Scan project skills from {projectPath}/.claude/skills ONLY (not nested)
+    if (projectPath) {
+      const projectSkillsDir = path.join(projectPath, '.claude', 'skills');
+      console.log('[ExtensionService] Scanning project root skills:', projectSkillsDir);
+      const projectSkills = await this.scanSkillsRec(projectSkillsDir, 'project');
+      console.log('[ExtensionService] Found project root skills:', projectSkills.length);
+      skills.push(...projectSkills);
+    }
+
+    console.log('[ExtensionService] Total root skills:', skills.length, skills.map(s => `${s.name} (${s.scope})`));
+    return skills;
+  }
+
   private async scanSkillsRec(dir: string, scope: 'user' | 'project'): Promise<Skill[]> {
     const skills: Skill[] = [];
 

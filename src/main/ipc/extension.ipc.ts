@@ -1,7 +1,21 @@
 import { type IpcMain } from 'electron';
 import { spawn } from 'child_process';
+import Store from 'electron-store';
 import { extensionService } from '../services/extension.service';
+import { sshService } from '../services/ssh.service';
 import { IPC_CHANNELS } from '../../shared/constants/channels';
+import type { Session } from '../../shared/types';
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const sessionStore: any = new Store({ name: 'claudette-sessions' });
+
+/**
+ * Get a session by ID from the store
+ */
+function getSession(sessionId: string): Session | null {
+  const sessions = sessionStore.get('sessions') || {};
+  return sessions[sessionId] || null;
+}
 
 interface SkillInstallResult {
   success: boolean;
@@ -15,9 +29,28 @@ interface AvailableSkill {
 }
 
 export function registerExtensionHandlers(ipcMain: IpcMain): void {
-  // Scan for slash commands
-  ipcMain.handle(IPC_CHANNELS.EXTENSION_SCAN_COMMANDS, async (_event, projectPath?: string) => {
+  // Scan for slash commands (supports SSH sessions via sessionId)
+  ipcMain.handle(IPC_CHANNELS.EXTENSION_SCAN_COMMANDS, async (_event, options?: { sessionId?: string; projectPath?: string } | string) => {
     try {
+      // Handle backwards compatibility - can be called with just projectPath string
+      const opts = typeof options === 'string' ? { projectPath: options } : options || {};
+      const { sessionId, projectPath } = opts;
+
+      // Check if this is an SSH session
+      if (sessionId) {
+        const session = getSession(sessionId);
+        if (session?.sshConfig) {
+          console.log('[Extension IPC] Scanning commands on remote SSH session:', sessionId);
+          const commands = await sshService.scanRemoteCommands(
+            sessionId,
+            session.sshConfig,
+            session.sshConfig.remoteWorkdir
+          );
+          return commands;
+        }
+      }
+
+      // Default to local scanning
       const commands = await extensionService.scanCommands(projectPath);
       return commands;
     } catch (error) {
@@ -26,9 +59,28 @@ export function registerExtensionHandlers(ipcMain: IpcMain): void {
     }
   });
 
-  // Scan for skills
-  ipcMain.handle(IPC_CHANNELS.EXTENSION_SCAN_SKILLS, async (_event, projectPath?: string) => {
+  // Scan for skills (supports SSH sessions via sessionId)
+  ipcMain.handle(IPC_CHANNELS.EXTENSION_SCAN_SKILLS, async (_event, options?: { sessionId?: string; projectPath?: string } | string) => {
     try {
+      // Handle backwards compatibility - can be called with just projectPath string
+      const opts = typeof options === 'string' ? { projectPath: options } : options || {};
+      const { sessionId, projectPath } = opts;
+
+      // Check if this is an SSH session
+      if (sessionId) {
+        const session = getSession(sessionId);
+        if (session?.sshConfig) {
+          console.log('[Extension IPC] Scanning skills on remote SSH session:', sessionId);
+          const skills = await sshService.scanRemoteSkills(
+            sessionId,
+            session.sshConfig,
+            session.sshConfig.remoteWorkdir
+          );
+          return skills;
+        }
+      }
+
+      // Default to local scanning
       const skills = await extensionService.scanSkills(projectPath);
       return skills;
     } catch (error) {
@@ -37,9 +89,28 @@ export function registerExtensionHandlers(ipcMain: IpcMain): void {
     }
   });
 
-  // Scan for agents
-  ipcMain.handle(IPC_CHANNELS.EXTENSION_SCAN_AGENTS, async (_event, projectPath?: string) => {
+  // Scan for agents (supports SSH sessions via sessionId)
+  ipcMain.handle(IPC_CHANNELS.EXTENSION_SCAN_AGENTS, async (_event, options?: { sessionId?: string; projectPath?: string } | string) => {
     try {
+      // Handle backwards compatibility - can be called with just projectPath string
+      const opts = typeof options === 'string' ? { projectPath: options } : options || {};
+      const { sessionId, projectPath } = opts;
+
+      // Check if this is an SSH session
+      if (sessionId) {
+        const session = getSession(sessionId);
+        if (session?.sshConfig) {
+          console.log('[Extension IPC] Scanning agents on remote SSH session:', sessionId);
+          const agents = await sshService.scanRemoteAgents(
+            sessionId,
+            session.sshConfig,
+            session.sshConfig.remoteWorkdir
+          );
+          return agents;
+        }
+      }
+
+      // Default to local scanning
       const agents = await extensionService.scanAgents(projectPath);
       return agents;
     } catch (error) {

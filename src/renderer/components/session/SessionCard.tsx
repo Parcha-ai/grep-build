@@ -1,5 +1,5 @@
 import React from 'react';
-import { Play, Square, Trash2, GitBranch, GitFork } from 'lucide-react';
+import { Play, Square, Trash2, GitBranch, GitFork, Server, Upload } from 'lucide-react';
 import { useSessionStore } from '../../stores/session.store';
 import type { Session } from '../../../shared/types';
 
@@ -25,10 +25,15 @@ interface SessionCardProps {
   isActive: boolean;
   onClick: () => void;
   isFork?: boolean;
+  onTeleportRequest?: (session: Session) => void;
 }
 
-export default function SessionCard({ session, isActive, onClick, isFork = false }: SessionCardProps) {
+export default function SessionCard({ session, isActive, onClick, isFork = false, onTeleportRequest }: SessionCardProps) {
   const { startSession, stopSession, deleteSession } = useSessionStore();
+
+  // Determine session type for icon display
+  const isSSH = !!session.sshConfig;
+  const isWorktree = isFork || session.isWorktree;
 
   const getStatusColor = () => {
     switch (session.status) {
@@ -64,6 +69,32 @@ export default function SessionCard({ session, isActive, onClick, isFork = false
     }
   };
 
+  const handleTeleport = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (onTeleportRequest && !isSSH) {
+      onTeleportRequest(session);
+    }
+  };
+
+  // Get the appropriate icon based on session type
+  const getSessionIcon = () => {
+    if (isSSH && isWorktree) {
+      // SSH + Worktree: Show server with small fork indicator
+      return (
+        <div className="relative flex-shrink-0">
+          <Server size={10} className="text-cyan-400" />
+          <GitFork size={6} className="absolute -bottom-0.5 -right-0.5 text-emerald-400" />
+        </div>
+      );
+    } else if (isSSH) {
+      return <Server size={10} className="text-cyan-400 flex-shrink-0" />;
+    } else if (isWorktree) {
+      return <GitFork size={10} className="text-emerald-400 flex-shrink-0" />;
+    } else {
+      return <GitBranch size={10} className="flex-shrink-0" />;
+    }
+  };
+
   const isAnimating =
     session.status === 'starting' ||
     session.status === 'stopping' ||
@@ -95,11 +126,7 @@ export default function SessionCard({ session, isActive, onClick, isFork = false
             {session.forkName || session.name}
           </h4>
           <div className="flex items-center gap-1 mt-0.5 text-claude-text-secondary">
-            {isFork || session.isWorktree ? (
-              <GitFork size={10} className="text-emerald-400 flex-shrink-0" />
-            ) : (
-              <GitBranch size={10} className="flex-shrink-0" />
-            )}
+            {getSessionIcon()}
             <span className="text-[10px] truncate">
               {session.branch}
             </span>
@@ -129,6 +156,17 @@ export default function SessionCard({ session, isActive, onClick, isFork = false
               title="Stop session"
             >
               <Square size={12} />
+            </button>
+          )}
+          {/* Teleport to SSH - only show for non-SSH sessions */}
+          {!isSSH && onTeleportRequest && (
+            <button
+              onClick={handleTeleport}
+              className="p-1 transition-colors hover:bg-cyan-500/20 text-cyan-400"
+              style={{ borderRadius: 0 }}
+              title="Teleport to SSH remote"
+            >
+              <Upload size={12} />
             </button>
           )}
           <button

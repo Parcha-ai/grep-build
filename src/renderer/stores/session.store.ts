@@ -899,6 +899,17 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       });
     });
 
+    // Subscribe to permission mode changes from main process (e.g., after plan approval)
+    const unsubPermissionModeChanged = window.electronAPI.claude.onPermissionModeChanged((data) => {
+      console.log('[Session Store] Permission mode changed from main:', data.sessionId, data.mode);
+      set((state) => ({
+        permissionMode: {
+          ...state.permissionMode,
+          [data.sessionId]: data.mode as PermissionMode,
+        },
+      }));
+    });
+
     return () => {
       unsubChunk();
       unsubThinking();
@@ -911,6 +922,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       unsubQuestion();
       unsubPlanContent();
       unsubPlanApproval();
+      unsubPermissionModeChanged();
     };
   },
 

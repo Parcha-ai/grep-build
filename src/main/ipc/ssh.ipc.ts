@@ -11,6 +11,18 @@ const sessionStore: any = new Store({ name: 'claudette-sessions' });
 const settingsStore: any = new Store({ name: 'claudette-settings' });
 
 /**
+ * Get the last N path segments from a path (truncate from left)
+ * e.g., "/home/ubuntu/dev/parcha/grep3" with 2 segments -> "parcha/grep3"
+ */
+function getPathTail(path: string, segments: number = 2): string {
+  const parts = path.split('/').filter(Boolean);
+  if (parts.length <= segments) {
+    return parts.join('/');
+  }
+  return parts.slice(-segments).join('/');
+}
+
+/**
  * Send setup progress to all renderer windows
  */
 function sendSetupProgress(sessionId: string, status: 'running' | 'completed' | 'error', message?: string, output?: string, error?: string): void {
@@ -61,9 +73,9 @@ export function registerSSHHandlers(ipcMain: IpcMain): void {
         const sessionId = uuid();
 
         // Create session object
-        // Use host:folder format for name if no custom name provided
-        const folderName = data.sshConfig.remoteWorkdir.split('/').filter(Boolean).pop() || data.sshConfig.remoteWorkdir;
-        const defaultName = `${data.sshConfig.host}:${folderName}`;
+        // Use host:parent/folder format for name if no custom name provided
+        const folderPath = getPathTail(data.sshConfig.remoteWorkdir, 2);
+        const defaultName = `${data.sshConfig.host}:${folderPath}`;
         const session: Session = {
           id: sessionId,
           name: data.name || defaultName,
@@ -112,10 +124,10 @@ export function registerSSHHandlers(ipcMain: IpcMain): void {
                 if (session.sshConfig) {
                   session.sshConfig.remoteWorkdir = setupResult.workingDirectory;
                 }
-                // Update session name to show host and folder name only
-                // Format: "host:folder" e.g. "greppy2:grep3" (not the full path)
-                const folderName = setupResult.workingDirectory.split('/').filter(Boolean).pop() || setupResult.workingDirectory;
-                session.name = `${data.sshConfig.host}:${folderName}`;
+                // Update session name to show host and last 2 path segments
+                // Format: "host:parent/folder" e.g. "greppy2:parcha/grep3"
+                const folderPath = getPathTail(setupResult.workingDirectory, 2);
+                session.name = `${data.sshConfig.host}:${folderPath}`;
               }
               // Store the setup output for context in system prompt
               if (setupResult.setupOutput) {
@@ -191,6 +203,207 @@ export function registerSSHHandlers(ipcMain: IpcMain): void {
     IPC_CHANNELS.SSH_SAVE_CONFIG,
     async (_event, config: SavedSSHConfig) => {
       settingsStore.set('lastSSHConfig', config);
+    }
+  );
+
+  /**
+   * Check if a persistent tmux session exists on the remote
+   */
+  ipcMain.handle(
+    IPC_CHANNELS.SSH_CHECK_PERSISTENT_SESSION,
+    async (_event, data: { sessionId: string; config: SSHConfig }) => {
+      console.log('[SSH IPC] Checking persistent session for', data.sessionId);
+      try {
+        const result = await sshService.checkPersistentSession(data.sessionId, data.config);
+        return result;
+      } catch (error) {
+        console.error('[SSH IPC] Failed to check persistent session:', error);
+        return null;
+      }
+    }
+  );
+
+  /**
+   * Kill a persistent tmux session on the remote
+   */
+  ipcMain.handle(
+    IPC_CHANNELS.SSH_KILL_PERSISTENT_SESSION,
+    async (_event, data: { sessionId: string; config: SSHConfig }) => {
+      console.log('[SSH IPC] Killing persistent session for', data.sessionId);
+      try {
+        const result = await sshService.killPersistentSession(data.sessionId, data.config);
+        return result;
+      } catch (error) {
+        console.error('[SSH IPC] Failed to kill persistent session:', error);
+        return {
+          success: false,
+          error: error instanceof Error ? error.message : 'Unknown error',
+        };
+      }
+    }
+  );
+
+  /**
+   * Check if SSH connection is available (quick ping)
+   */
+  ipcMain.handle(
+    IPC_CHANNELS.SSH_CHECK_CONNECTION,
+    async (_event, config: SSHConfig) => {
+      console.log('[SSH IPC] Checking connection to', config.host);
+      try {
+        const result = await sshService.testConnection(config);
+        return { connected: result.success, error: result.error };
+      } catch (error) {
+        return {
+          connected: false,
+          error: error instanceof Error ? error.message : 'Unknown error',
+        };
+      }
+    }
+  );
+
+  /**
+   * Teleport a local session to an SSH remote
+   * Copies transcript files so Claude can resume with full context
+   *
+   * Order of operations:
+   * 1. Run worktree script FIRST to get final working directory
+   * 2. Copy transcripts to the FINAL working directory's project folder
+   * 3. Create session pointing to the final directory
+   */
+  ipcMain.handle(
+    IPC_CHANNELS.SSH_TELEPORT_SESSION,
+    async (
+      _event,
+      data: {
+        sourceSessionId: string;
+        destinationConfig: SSHConfig;
+      }
+    ) => {
+      console.log('[SSH IPC] Teleporting session', data.sourceSessionId, 'to', data.destinationConfig.host);
+
+      try {
+        // Get source session from store
+        const sessions = sessionStore.get('sessions') || {};
+        const sourceSession = sessions[data.sourceSessionId] as Session | undefined;
+
+        if (!sourceSession) {
+          return { success: false, error: 'Source session not found' };
+        }
+
+        if (sourceSession.sshConfig) {
+          return { success: false, error: 'Cannot teleport an SSH session (already remote)' };
+        }
+
+        // Send progress updates
+        const sendProgress = (message: string) => {
+          sendSetupProgress(data.sourceSessionId, 'running', message);
+        };
+
+        // Create new SSH session ID
+        const newSessionId = uuid();
+        let finalWorkdir = data.destinationConfig.remoteWorkdir;
+        let setupOutput: string | undefined;
+
+        // STEP 1: Run pre-session setup FIRST to get the final working directory
+        // This must happen before copying transcripts so we copy to the right place
+        if (data.destinationConfig.worktreeScript || data.destinationConfig.syncSettings !== false) {
+          sendProgress('Running pre-session setup...');
+
+          // Connect for setup
+          await sshService.connect(newSessionId, data.destinationConfig);
+
+          const setupResult = await sshService.runPreSessionSetup(
+            newSessionId,
+            data.destinationConfig,
+            (message) => {
+              console.log('[SSH IPC] Teleport setup progress:', message);
+              sendProgress(message);
+            }
+          );
+
+          if (!setupResult.success) {
+            console.error('[SSH IPC] Pre-session setup failed:', setupResult.error);
+            sendSetupProgress(data.sourceSessionId, 'error', undefined, undefined, setupResult.error);
+            return { success: false, error: setupResult.error };
+          }
+
+          // Update working directory if script output one
+          if (setupResult.workingDirectory) {
+            console.log('[SSH IPC] Final working directory from setup:', setupResult.workingDirectory);
+            finalWorkdir = setupResult.workingDirectory;
+          }
+
+          setupOutput = setupResult.setupOutput;
+        }
+
+        // STEP 2: Now copy transcripts to the FINAL working directory
+        // Create a modified config with the final workdir for transcript placement
+        const teleportConfig: SSHConfig = {
+          ...data.destinationConfig,
+          remoteWorkdir: finalWorkdir,
+          // Don't sync settings again - we already did it above
+          syncSettings: false,
+        };
+
+        sendProgress('Copying session transcripts...');
+        const result = await sshService.teleportSession(
+          sourceSession.worktreePath,
+          sourceSession.sdkSessionId,
+          teleportConfig,
+          sendProgress
+        );
+
+        if (!result.success) {
+          sendSetupProgress(data.sourceSessionId, 'error', undefined, undefined, result.error);
+          return result;
+        }
+
+        // STEP 3: Create the session record
+        const folderPath = getPathTail(finalWorkdir, 2);
+
+        const newSession: Session = {
+          id: newSessionId,
+          name: `${data.destinationConfig.host}:${folderPath}`,
+          repoPath: finalWorkdir,
+          worktreePath: finalWorkdir,
+          branch: sourceSession.branch || 'main',
+          sshConfig: {
+            ...data.destinationConfig,
+            remoteWorkdir: finalWorkdir, // Use the final workdir from setup script
+          },
+          status: 'stopped', // Ready to start
+          ports: { web: 0, api: 0, debug: 0 },
+          createdAt: new Date(),
+          updatedAt: new Date(),
+          setupScript: '',
+          setupOutput,
+          isDevMode: true,
+          // Preserve SDK session ID so Claude can find the transcript
+          sdkSessionId: sourceSession.sdkSessionId,
+          // Track teleportation origin
+          teleportedFrom: data.sourceSessionId,
+        };
+
+        // Save new session
+        sessions[newSessionId] = newSession;
+        sessionStore.set('sessions', sessions);
+
+        sendSetupProgress(data.sourceSessionId, 'completed', 'Teleportation complete!');
+
+        console.log('[SSH IPC] Teleported session created:', newSessionId);
+        return {
+          success: true,
+          newSessionId,
+        };
+      } catch (error) {
+        console.error('[SSH IPC] Teleport failed:', error);
+        sendSetupProgress(data.sourceSessionId, 'error', undefined, undefined, error instanceof Error ? error.message : 'Unknown error');
+        return {
+          success: false,
+          error: error instanceof Error ? error.message : 'Unknown error',
+        };
+      }
     }
   );
 }

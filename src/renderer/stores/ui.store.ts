@@ -117,7 +117,7 @@ export const useUIStore = create<UIState>((set, get) => ({
   toggleGitPanel: () => set((state) => ({ isGitPanelOpen: !state.isGitPanelOpen })),
   toggleExtensionsPanel: () => set((state) => ({ isExtensionsPanelOpen: !state.isExtensionsPanelOpen })),
   togglePlanPanel: () => set((state) => ({ isPlanPanelOpen: !state.isPlanPanelOpen })),
-  showPlanPanel: () => set({ isPlanPanelOpen: true }),
+  showPlanPanel: () => set({ isPlanPanelOpen: true, isBrowserPanelOpen: false, isExtensionsPanelOpen: false }),
   setInspectorActive: (active) => set({ isInspectorActive: active }),
   setSelectedElement: (element) => set({ selectedElement: element }),
   cycleSplitRatio: () => set((state) => {

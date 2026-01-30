@@ -15,8 +15,14 @@ import type {
   SSHConfig
 } from '../shared/types';
 
+// App's working directory (for deterministic dev instance naming)
+const APP_CWD = process.cwd();
+
 // Type-safe API for renderer process
 const electronAPI = {
+  // App info
+  appCwd: APP_CWD,
+
   // Auth
   auth: {
     login: () => ipcRenderer.invoke(IPC_CHANNELS.AUTH_LOGIN),
@@ -221,6 +227,12 @@ const electronAPI = {
     // Update permission mode mid-stream (used by GREP IT! button)
     setPermissionMode: (sessionId: string, mode: string): Promise<void> =>
       ipcRenderer.invoke(IPC_CHANNELS.CLAUDE_SET_PERMISSION_MODE, sessionId, mode),
+    // Listen for permission mode changes from main process (e.g., after plan approval)
+    onPermissionModeChanged: (callback: (data: { sessionId: string; mode: string }) => void) => {
+      const handler = (_: IpcRendererEvent, data: { sessionId: string; mode: string }) => callback(data);
+      ipcRenderer.on(IPC_CHANNELS.CLAUDE_PERMISSION_MODE_CHANGED, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.CLAUDE_PERMISSION_MODE_CHANGED, handler);
+    },
     // Background task output listener
     onBackgroundTaskOutput: (callback: (data: { sessionId: string; taskId: string; output: string; status: 'running' | 'completed' | 'error'; completedAt?: string }) => void) => {
       const handler = (_: IpcRendererEvent, data: { sessionId: string; taskId: string; output: string; status: 'running' | 'completed' | 'error'; completedAt?: string }) => callback(data);
@@ -544,12 +556,12 @@ const electronAPI = {
 
   // Extensions (commands, skills, agents)
   extensions: {
-    scanCommands: (projectPath?: string) =>
-      ipcRenderer.invoke(IPC_CHANNELS.EXTENSION_SCAN_COMMANDS, projectPath),
-    scanSkills: (projectPath?: string) =>
-      ipcRenderer.invoke(IPC_CHANNELS.EXTENSION_SCAN_SKILLS, projectPath),
-    scanAgents: (projectPath?: string) =>
-      ipcRenderer.invoke(IPC_CHANNELS.EXTENSION_SCAN_AGENTS, projectPath),
+    scanCommands: (options?: { sessionId?: string; projectPath?: string } | string) =>
+      ipcRenderer.invoke(IPC_CHANNELS.EXTENSION_SCAN_COMMANDS, options),
+    scanSkills: (options?: { sessionId?: string; projectPath?: string } | string) =>
+      ipcRenderer.invoke(IPC_CHANNELS.EXTENSION_SCAN_SKILLS, options),
+    scanAgents: (options?: { sessionId?: string; projectPath?: string } | string) =>
+      ipcRenderer.invoke(IPC_CHANNELS.EXTENSION_SCAN_AGENTS, options),
     getCommand: (commandName: string, projectPath?: string) =>
       ipcRenderer.invoke(IPC_CHANNELS.EXTENSION_GET_COMMAND, commandName, projectPath),
     installSkill: (source: string, options?: { global?: boolean; skills?: string[]; projectPath?: string }): Promise<{ success: boolean; output: string; error?: string }> =>
@@ -668,6 +680,25 @@ const electronAPI = {
       ipcRenderer.on(IPC_CHANNELS.SSH_SETUP_PROGRESS, handler);
       return () => ipcRenderer.removeListener(IPC_CHANNELS.SSH_SETUP_PROGRESS, handler);
     },
+    // Persistent session management (tmux-based)
+    checkPersistentSession: (sessionId: string, config: SSHConfig): Promise<{
+      tmuxSessionName: string;
+      isRunning: boolean;
+      claudeProcessPid?: number;
+    } | null> => ipcRenderer.invoke(IPC_CHANNELS.SSH_CHECK_PERSISTENT_SESSION, { sessionId, config }),
+    killPersistentSession: (sessionId: string, config: SSHConfig): Promise<{
+      success: boolean;
+      error?: string;
+    }> => ipcRenderer.invoke(IPC_CHANNELS.SSH_KILL_PERSISTENT_SESSION, { sessionId, config }),
+    checkConnection: (config: SSHConfig): Promise<{
+      connected: boolean;
+      error?: string;
+    }> => ipcRenderer.invoke(IPC_CHANNELS.SSH_CHECK_CONNECTION, config),
+    teleportSession: (sourceSessionId: string, destinationConfig: SSHConfig): Promise<{
+      success: boolean;
+      newSessionId?: string;
+      error?: string;
+    }> => ipcRenderer.invoke(IPC_CHANNELS.SSH_TELEPORT_SESSION, { sourceSessionId, destinationConfig }),
   },
 };
 

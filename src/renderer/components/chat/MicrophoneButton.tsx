@@ -150,6 +150,7 @@ ${messageSummary || 'No messages yet'}`;
     startRecording,
     updateContext,
     speak,
+    sendUserActivity,
   } = useVoiceConversationSDK({
     agentId,
     sessionId,
@@ -481,12 +482,12 @@ ${messageSummary || 'No messages yet'}`;
   useEffect(() => {
     if (hookConnected && isStreaming) {
       // Send activity signal immediately when streaming starts
-      window.electronAPI.voice.sendUserActivity();
+      sendUserActivity();
       console.log('[MicrophoneButton] Sent initial user activity signal');
 
       // Send activity signal every 15 seconds while working
       activityIntervalRef.current = setInterval(() => {
-        window.electronAPI.voice.sendUserActivity();
+        sendUserActivity();
         console.log('[MicrophoneButton] Sent periodic user activity signal');
       }, 15000);
     } else {
@@ -503,7 +504,7 @@ ${messageSummary || 'No messages yet'}`;
         activityIntervalRef.current = null;
       }
     };
-  }, [hookConnected, isStreaming]);
+  }, [hookConnected, isStreaming, sendUserActivity]);
 
   // Event-driven status updates - send tool changes as silent context (no verbal prompt)
   // The agent can reference this if needed, but thinking updates are the primary verbal updates

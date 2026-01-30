@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { ChevronRight, ChevronDown, Folder, Plus, Zap, Loader2, Search, GitFork } from 'lucide-react';
+import { ChevronRight, ChevronDown, Folder, Plus, Zap, Loader2, Search, GitFork, Server } from 'lucide-react';
 import { useSessionStore } from '../../stores/session.store';
 import SessionCard from './SessionCard';
 import NewSessionDialog from './NewSessionDialog';
+import TeleportDialog from './TeleportDialog';
 import type { Session } from '../../../shared/types';
 
 interface ProjectGroup {
@@ -11,15 +12,18 @@ interface ProjectGroup {
   sessions: Session[];
   mostRecentUpdate: Date;
   forks: ProjectGroup[]; // Worktree forks of this project (as nested groups)
+  type: 'local' | 'ssh';  // Distinguish project types
+  sshHost?: string;       // For SSH projects, the host name
 }
 
 export default function SessionList() {
-  const { sessions, activeSessionId, setActiveSession, isLoadingSessions } = useSessionStore();
+  const { sessions, activeSessionId, setActiveSession, isLoadingSessions, loadSessions, startSession } = useSessionStore();
   const [expandedProjects, setExpandedProjects] = useState<Set<string>>(new Set());
   const [newSessionDialogOpen, setNewSessionDialogOpen] = useState(false);
   const [newSessionInitialPath, setNewSessionInitialPath] = useState<string>('');
   const [newSessionInitialName, setNewSessionInitialName] = useState<string>('');
   const [showAllRecentSessions, setShowAllRecentSessions] = useState(false);
+  const [teleportSession, setTeleportSession] = useState<Session | null>(null);
 
   // Track sessions that have been visited during this app instance
   const [visitedSessionIds, setVisitedSessionIds] = useState<Set<string>>(new Set());
@@ -39,9 +43,37 @@ export default function SessionList() {
 
     const projectGroups = new Map<string, ProjectGroup>();
     const forkSessions: Session[] = []; // Collect fork sessions for second pass
+    const sshHostGroups = new Map<string, ProjectGroup>(); // SSH sessions grouped by host
 
-    // First pass: create project groups for non-fork sessions
+    // First pass: separate SSH and local sessions, create project groups
     sessions.forEach(session => {
+      // Handle SSH sessions - group by host
+      if (session.sshConfig) {
+        const host = session.sshConfig.host;
+        const hostKey = `ssh://${session.sshConfig.username}@${host}`;
+
+        if (!sshHostGroups.has(hostKey)) {
+          sshHostGroups.set(hostKey, {
+            path: hostKey,
+            name: host,
+            sessions: [],
+            mostRecentUpdate: new Date(session.updatedAt),
+            forks: [],
+            type: 'ssh',
+            sshHost: host,
+          });
+        }
+
+        const group = sshHostGroups.get(hostKey)!;
+        group.sessions.push(session);
+
+        const sessionDate = new Date(session.updatedAt);
+        if (sessionDate > group.mostRecentUpdate) {
+          group.mostRecentUpdate = sessionDate;
+        }
+        return;
+      }
+
       // Collect fork sessions for second pass
       if (session.isWorktree && session.parentRepoPath) {
         forkSessions.push(session);
@@ -70,6 +102,7 @@ export default function SessionList() {
           sessions: [],
           mostRecentUpdate: new Date(session.updatedAt),
           forks: [],
+          type: 'local',
         });
       }
 
@@ -98,6 +131,7 @@ export default function SessionList() {
             sessions: [],
             mostRecentUpdate: new Date(session.updatedAt),
             forks: [], // Forks don't have sub-forks
+            type: 'local',
           };
           parentGroup.forks.push(forkGroup);
         }
@@ -121,14 +155,21 @@ export default function SessionList() {
             sessions: [],
             mostRecentUpdate: new Date(session.updatedAt),
             forks: [],
+            type: 'local',
           });
         }
         projectGroups.get(projectPath)!.sessions.push(session);
       }
     });
 
+    // Merge local and SSH project groups
+    const allProjects = [
+      ...Array.from(projectGroups.values()),
+      ...Array.from(sshHostGroups.values()),
+    ];
+
     // Sort projects by most recent activity (most recently used first)
-    const sorted = Array.from(projectGroups.values()).sort((a, b) =>
+    const sorted = allProjects.sort((a, b) =>
       b.mostRecentUpdate.getTime() - a.mostRecentUpdate.getTime()
     );
 
@@ -238,6 +279,7 @@ export default function SessionList() {
                 isActive={session.id === activeSessionId}
                 onClick={() => setActiveSession(session.id)}
                 isFork={session.isWorktree}
+                onTeleportRequest={setTeleportSession}
               />
             ))}
 
@@ -288,12 +330,24 @@ export default function SessionList() {
                     ) : (
                       <ChevronRight size={12} className="flex-shrink-0 text-claude-text-secondary" />
                     )}
-                    <Folder size={14} className="flex-shrink-0 text-claude-accent" />
+                    {project.type === 'ssh' ? (
+                      <Server size={14} className="flex-shrink-0 text-cyan-400" />
+                    ) : (
+                      <Folder size={14} className="flex-shrink-0 text-claude-accent" />
+                    )}
                     <div className="flex-1 min-w-0">
                       <span className="text-xs font-bold text-claude-text truncate block">
-                        {project.name}
+                        {project.type === 'ssh' ? (
+                          <span className="flex items-center gap-1">
+                            <span className="text-cyan-400">⌘</span>
+                            {project.name}
+                          </span>
+                        ) : (
+                          project.name
+                        )}
                       </span>
                       <span className="text-[10px] text-claude-text-secondary">
+                        {project.type === 'ssh' && 'SSH Remote · '}
                         {totalSessions} session{totalSessions !== 1 ? 's' : ''}
                       </span>
                     </div>
@@ -345,6 +399,7 @@ export default function SessionList() {
                                   isActive={session.id === activeSessionId}
                                   onClick={() => setActiveSession(session.id)}
                                   isFork={true}
+                                  onTeleportRequest={setTeleportSession}
                                 />
                               </div>
                             </div>
@@ -360,6 +415,7 @@ export default function SessionList() {
                         session={session}
                         isActive={session.id === activeSessionId}
                         onClick={() => setActiveSession(session.id)}
+                        onTeleportRequest={setTeleportSession}
                       />
                     ))}
                   </div>
@@ -381,6 +437,23 @@ export default function SessionList() {
         initialPath={newSessionInitialPath}
         initialName={newSessionInitialName}
       />
+
+      {/* Teleport to SSH Dialog */}
+      {teleportSession && (
+        <TeleportDialog
+          session={teleportSession}
+          onClose={() => setTeleportSession(null)}
+          onTeleported={async (newSessionId) => {
+            setTeleportSession(null);
+            // Reload sessions from backend to include the new teleported session
+            await loadSessions();
+            // Select the new session
+            await setActiveSession(newSessionId);
+            // Explicitly start the session since it's created in 'stopped' state
+            await startSession(newSessionId);
+          }}
+        />
+      )}
     </div>
   );
 }

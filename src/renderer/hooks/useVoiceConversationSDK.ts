@@ -210,12 +210,15 @@ export const useVoiceConversationSDK = ({
                 toolName: toolCall.tool_name,
                 parameters: toolCall.parameters as Record<string, unknown>,
               });
-              // Note: We may need to send the result back somehow
               console.log('[VoiceConversationSDK] Tool result:', result);
+              // Return the result to the SDK so the agent receives it
+              return result;
             } catch (error) {
               console.error('[VoiceConversationSDK] Tool call error:', error);
+              return `Error: ${error instanceof Error ? error.message : 'Unknown error'}`;
             }
           }
+          return 'No handler for this tool call';
         },
       });
 
