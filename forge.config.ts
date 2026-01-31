@@ -69,6 +69,18 @@ const config: ForgeConfig = {
           console.log(`[Packaging] Copied ${dep.name} to ${dest}`);
         }
 
+        // Copy bundled QMD (semantic codebase search)
+        const platformKey = `${options.platform}-${options.arch}`;
+        const qmdSourceDir = path.join(__dirname, 'resources', 'qmd', platformKey);
+        const qmdDestDir = path.join(resourcesPath, 'qmd');
+
+        if (fs.existsSync(qmdSourceDir)) {
+          await fs.copy(qmdSourceDir, qmdDestDir);
+          console.log(`[Packaging] Copied QMD for ${platformKey} to ${qmdDestDir}`);
+        } else {
+          console.log(`[Packaging] Warning: QMD not found for ${platformKey}. Run 'npx ts-node scripts/setup-qmd.ts ${platformKey}' to set up.`);
+        }
+
         // Sign the app with adhoc signature after all modifications
         // This must happen after copying dependencies to ensure valid signature
         if (options.platform === 'darwin') {

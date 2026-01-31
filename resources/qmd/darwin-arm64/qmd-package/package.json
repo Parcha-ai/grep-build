@@ -1,0 +1,7 @@
+{
+  "name": "qmd-bundle",
+  "private": true,
+  "dependencies": {
+    "qmd": "https://github.com/tobi/qmd"
+  }
+}

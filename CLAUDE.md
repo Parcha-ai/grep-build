@@ -10,7 +10,8 @@ Claudette (branded as "Grep") is an Electron desktop application providing an AI
 
 ```bash
 # Start development server with hot reload
-npm run start
+# ALWAYS use the dev script, NOT npm run start directly
+./scripts/dev.sh
 
 # Run linting
 npm run lint
@@ -22,12 +23,18 @@ npm run package
 npm run make
 ```
 
+**CRITICAL: Always use `./scripts/dev.sh` to start the dev server, NOT `npm run start` directly!** The dev script:
+- Generates a unique instance name (e.g., "fuzzy-penguin") for identifying which dev build is running
+- Sets up QMD (semantic search) before starting
+- Kills any existing process on port 9000
+- Provides better logging and environment setup
+
 ## Development Workflow
 
 **CRITICAL: Always test in dev before building!**
 
 When making changes to the application:
-1. Run `npm run start` to launch the dev version
+1. Run `./scripts/dev.sh` to launch the dev version (NEVER use `npm run start` directly)
 2. Verify the changes work correctly in the dev build
 3. Get explicit user confirmation that everything is working
 4. Only build the production app when the user explicitly requests it with `/build`

@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { X, Eye, EyeOff, Check, AlertCircle, Save, Sparkles } from 'lucide-react';
+import React, { useState, useEffect, useCallback } from 'react';
+import { X, Eye, EyeOff, Check, AlertCircle, Save, Sparkles, Search, Download, Loader2 } from 'lucide-react';
 import { useUIStore } from '../../stores/ui.store';
 import { useAudioStore } from '../../stores/audio.store';
 import ReleaseNotes from '../common/ReleaseNotes';
@@ -23,6 +23,12 @@ export default function SettingsDialog() {
   const [voiceModeEnabled, setVoiceModeEnabled] = useState(false);
   const [ralphLoopEnabled, setRalphLoopEnabled] = useState(false);
 
+  // QMD semantic search settings
+  const [qmdEnabled, setQmdEnabled] = useState(false);
+  const [qmdStatus, setQmdStatus] = useState<{ installed: boolean; bundled: boolean } | null>(null);
+  const [isInstallingQmd, setIsInstallingQmd] = useState(false);
+  const [qmdInstallMessage, setQmdInstallMessage] = useState('');
+
   const [isSaving, setIsSaving] = useState(false);
   const [saveStatus, setSaveStatus] = useState<'idle' | 'success' | 'error'>('idle');
   const [isLoading, setIsLoading] = useState(true);
@@ -35,12 +41,16 @@ export default function SettingsDialog() {
         window.electronAPI.settings.getApiKey(),
         window.electronAPI.audio.getElevenLabsKey(),
         window.electronAPI.audio.getOpenAiKey(),
+        window.electronAPI.settings.get(),
+        window.electronAPI.qmd.getStatus(),
         loadSettings(),
       ])
-        .then(([anthropicKey, elevenLabsKey, openAiKey]) => {
+        .then(([anthropicKey, elevenLabsKey, openAiKey, appSettings, qmdStatusResult]) => {
           setApiKey(anthropicKey || '');
           setElevenlabsApiKey(elevenLabsKey || '');
           setOpenaiApiKey(openAiKey || '');
+          setQmdEnabled(appSettings.qmdEnabled || false);
+          setQmdStatus(qmdStatusResult);
           setIsLoading(false);
 
           // Load voices after setting API key
@@ -84,6 +94,9 @@ export default function SettingsDialog() {
         window.electronAPI.audio.setOpenAiKey(openaiApiKey),
       ]);
 
+      // Save app settings (QMD)
+      await window.electronAPI.settings.set({ qmdEnabled });
+
       // Save audio settings (voice selection, trigger word, agent ID, voice mode, ralph loop)
       if (audioSettings) {
         await updateSettings({
@@ -117,6 +130,38 @@ export default function SettingsDialog() {
       closeSettings();
     }
   };
+
+  // Handle QMD auto-install
+  const handleInstallQmd = useCallback(async () => {
+    setIsInstallingQmd(true);
+    setQmdInstallMessage('Installing QMD...');
+
+    // Listen for progress updates
+    const unsubscribe = window.electronAPI.qmd.onIndexingProgress((data) => {
+      setQmdInstallMessage(data.message);
+    });
+
+    try {
+      const success = await window.electronAPI.qmd.autoInstall();
+      if (success) {
+        setQmdInstallMessage('QMD installed successfully!');
+        // Refresh status
+        const newStatus = await window.electronAPI.qmd.getStatus();
+        setQmdStatus(newStatus);
+        setTimeout(() => setQmdInstallMessage(''), 2000);
+      } else {
+        setQmdInstallMessage('Installation failed');
+        setTimeout(() => setQmdInstallMessage(''), 3000);
+      }
+    } catch (error) {
+      console.error('Failed to install QMD:', error);
+      setQmdInstallMessage('Installation failed');
+      setTimeout(() => setQmdInstallMessage(''), 3000);
+    } finally {
+      setIsInstallingQmd(false);
+      unsubscribe();
+    }
+  }, []);
 
   if (!isSettingsOpen) return null;
 
@@ -341,6 +386,83 @@ export default function SettingsDialog() {
                 />
               </button>
             </div>
+          </div>
+
+          {/* QMD Semantic Search Section */}
+          <div className="space-y-4 pt-4 border-t border-claude-border">
+            <div className="flex items-center gap-2">
+              <Search size={14} className="text-blue-400" />
+              <h3 className="text-xs font-mono text-claude-text uppercase tracking-wider">
+                Semantic Codebase Search
+              </h3>
+            </div>
+
+            {/* QMD Toggle */}
+            <div className="flex items-center justify-between">
+              <div>
+                <label className="block text-xs font-mono text-claude-text-secondary uppercase tracking-wider">
+                  Enable QMD Search
+                </label>
+                <p className="text-[10px] font-mono text-claude-text-secondary mt-1">
+                  AI-powered semantic search through your codebase
+                </p>
+              </div>
+              <button
+                onClick={() => setQmdEnabled(!qmdEnabled)}
+                disabled={isLoading}
+                className={`relative inline-flex h-6 w-11 items-center transition-colors ${
+                  qmdEnabled ? 'bg-blue-500' : 'bg-claude-border'
+                } disabled:opacity-50`}
+                style={{ borderRadius: 0 }}
+              >
+                <span
+                  className={`inline-block h-4 w-4 transform bg-white transition-transform ${
+                    qmdEnabled ? 'translate-x-6' : 'translate-x-1'
+                  }`}
+                />
+              </button>
+            </div>
+
+            {/* QMD Status */}
+            {qmdStatus && (
+              <div className="space-y-2">
+                <div className="text-[10px] font-mono text-claude-text-secondary">
+                  {qmdStatus.installed ? (
+                    <span className="text-green-400">
+                      ✓ QMD {qmdStatus.bundled ? '(bundled)' : '(installed)'} ready
+                    </span>
+                  ) : isInstallingQmd ? (
+                    <span className="flex items-center gap-2 text-blue-400">
+                      <Loader2 size={12} className="animate-spin" />
+                      {qmdInstallMessage || 'Installing...'}
+                    </span>
+                  ) : (
+                    <div className="flex items-center gap-2">
+                      <span className="text-amber-400">QMD not installed</span>
+                      <button
+                        onClick={handleInstallQmd}
+                        disabled={isLoading}
+                        className="flex items-center gap-1 px-2 py-0.5 text-[10px] bg-blue-500/20 text-blue-400 hover:bg-blue-500/30 transition-colors"
+                        style={{ borderRadius: 0 }}
+                      >
+                        <Download size={10} />
+                        Install
+                      </button>
+                    </div>
+                  )}
+                </div>
+                {qmdInstallMessage && !isInstallingQmd && (
+                  <div className="text-[10px] font-mono text-green-400">
+                    {qmdInstallMessage}
+                  </div>
+                )}
+              </div>
+            )}
+
+            <p className="text-[10px] font-mono text-claude-text-secondary">
+              When enabled, Claude can search your code using natural language queries.
+              You'll be prompted to enable this for each project individually.
+            </p>
           </div>
 
           {/* Voice Conversation Mode Section */}

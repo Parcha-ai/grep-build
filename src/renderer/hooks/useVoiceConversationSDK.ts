@@ -73,9 +73,6 @@ export const useVoiceConversationSDK = ({
   // Audio level polling interval
   const audioLevelIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
-  // Track connection start time for debugging disconnect timing
-  const connectionStartTimeRef = useRef<number | null>(null);
-
   
   /**
    * Connect to ElevenLabs and start voice mode using the official SDK
@@ -150,61 +147,18 @@ export const useVoiceConversationSDK = ({
         onConnect: ({ conversationId }) => {
           console.log('[VoiceConversationSDK] Connected, conversationId:', conversationId);
           isConnectedRef.current = true;
-          connectionStartTimeRef.current = Date.now();
-          setState(s => ({ ...s, isConnected: true, isConnecting: false, error: null }));
+          setState(s => ({ ...s, isConnected: true, isConnecting: false }));
         },
 
         onDisconnect: (details) => {
-          // DisconnectionDetails has three possible reasons:
-          // - "error": An error occurred (with message and context)
-          // - "agent": Server/agent closed the connection (token expired, quota, etc)
-          // - "user": User-initiated disconnect
-          const connectionDuration = connectionStartTimeRef.current
-            ? Math.round((Date.now() - connectionStartTimeRef.current) / 1000)
-            : 0;
-          console.log('[VoiceConversationSDK] Disconnected after', connectionDuration, 'seconds:', JSON.stringify(details, null, 2));
-
+          console.log('[VoiceConversationSDK] Disconnected:', details);
           isConnectedRef.current = false;
-          conversationRef.current = null;
-          connectionStartTimeRef.current = null;
+          setState(s => ({ ...s, isConnected: false, isRecording: false, isSpeaking: false }));
 
           // Clear audio level polling
           if (audioLevelIntervalRef.current) {
             clearInterval(audioLevelIntervalRef.current);
             audioLevelIntervalRef.current = null;
-          }
-
-          // Generate a user-friendly error message based on disconnect reason
-          let errorMessage: string | null = null;
-          if (details?.reason === 'error') {
-            errorMessage = (details as { reason: 'error'; message: string }).message || 'Connection error';
-            console.error('[VoiceConversationSDK] Disconnect due to error:', errorMessage);
-          } else if (details?.reason === 'agent') {
-            // Agent/server closed - likely token expiry (10 min limit) or server issue
-            const closeEvent = (details as { reason: 'agent'; context?: CloseEvent }).context;
-            if (closeEvent?.code === 1000) {
-              // Normal closure - could be token expiry
-              errorMessage = 'Voice session ended (token expired after 10 minutes). Click mic to reconnect.';
-            } else if (closeEvent?.code) {
-              errorMessage = `Voice connection closed by server (code: ${closeEvent.code})`;
-            } else {
-              errorMessage = 'Voice connection closed by server';
-            }
-            console.log('[VoiceConversationSDK] Disconnect by agent, close event:', closeEvent);
-          }
-          // reason === 'user' means user clicked disconnect - no error to show
-
-          setState(s => ({
-            ...s,
-            isConnected: false,
-            isRecording: false,
-            isSpeaking: false,
-            error: errorMessage,
-          }));
-
-          // Notify parent of error if there is one
-          if (errorMessage) {
-            onErrorRef.current?.(errorMessage);
           }
         },
 
@@ -325,8 +279,6 @@ export const useVoiceConversationSDK = ({
    * Disconnect from voice mode
    */
   const disconnect = useCallback(async () => {
-    console.log('[VoiceConversationSDK] Disconnecting');
-
     // Clear audio level polling
     if (audioLevelIntervalRef.current) {
       clearInterval(audioLevelIntervalRef.current);
@@ -367,15 +319,13 @@ export const useVoiceConversationSDK = ({
 
   /**
    * Send context update (inform agent of state changes)
+   * NOTE: Disabled because sendContextualUpdate triggers a server error that
+   * crashes the ElevenLabs SDK (error_type undefined bug in handleErrorEvent)
    */
-  const updateContext = useCallback(async (context: string) => {
-    if (!conversationRef.current || !isConnectedRef.current) {
-      console.warn('[VoiceConversationSDK] Not connected, skipping context update');
-      return;
-    }
-
-    console.log('[VoiceConversationSDK] Sending context update');
-    conversationRef.current.sendContextualUpdate(context);
+  const updateContext = useCallback(async (_context: string) => {
+    // Disabled - sendContextualUpdate causes SDK crash
+    // TODO: Re-enable when ElevenLabs fixes the bug or we find a workaround
+    console.log('[VoiceConversationSDK] Context update disabled (SDK bug workaround)');
   }, []);
 
   /**

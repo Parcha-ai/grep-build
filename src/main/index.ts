@@ -2,6 +2,9 @@ import { app, BrowserWindow, ipcMain, protocol, session, net, Menu, systemPrefer
 import * as path from 'path';
 import { pathToFileURL } from 'url';
 
+// Dev instance name from environment variable (set by scripts/dev.sh)
+export const DEV_INSTANCE_NAME = process.env.DEV_INSTANCE_NAME || null;
+
 // Enable remote debugging for CDP access (used by Stagehand to control webviews)
 app.commandLine.appendSwitch('remote-debugging-port', '9222');
 
@@ -24,6 +27,8 @@ import { registerVoiceHandlers } from './ipc/voice.ipc';
 import { registerExtensionHandlers } from './ipc/extension.ipc';
 import { registerBrowserHandlers } from './ipc/browser.ipc';
 import { registerSSHHandlers } from './ipc/ssh.ipc';
+import { registerMemoryHandlers } from './ipc/memory.ipc';
+import { registerQmdHandlers } from './ipc/qmd.ipc';
 import { IPC_CHANNELS } from '../shared/constants/channels';
 import { cdpProxyService } from './services/cdp-proxy.service';
 
@@ -583,6 +588,8 @@ function registerIPCHandlers(): void {
   registerExtensionHandlers(ipcMain);
   registerBrowserHandlers(ipcMain);
   registerSSHHandlers(ipcMain);
+  registerMemoryHandlers(ipcMain);
+  registerQmdHandlers(ipcMain, () => mainWindow);
 }
 
 // This method will be called when Electron has finished initialization

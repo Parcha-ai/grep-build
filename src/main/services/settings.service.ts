@@ -22,6 +22,8 @@ export NODE_ENV=development
 # Add your custom setup commands below:
 `,
   autoStartContainer: true,
+  // QMD semantic search - disabled by default, user must opt-in
+  qmdEnabled: false,
 };
 
 export class SettingsService {

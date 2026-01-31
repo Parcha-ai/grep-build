@@ -13,6 +13,8 @@ import { browserService } from './browser.service';
 import { stagehandService } from './stagehand.service';
 import { documentService } from './document.service';
 import { sshService } from './ssh.service';
+import { memoryService, MemoryCategory } from './memory.service';
+import { qmdService } from './qmd.service';
 
 interface StreamEvent {
   type: 'text_delta' | 'thinking_delta' | 'tool_use' | 'tool_result' | 'message_complete' | 'error' | 'system' | 'permission_request' | 'compaction_status' | 'compaction_complete' | 'plan_content';
@@ -193,9 +195,9 @@ export class ClaudeService {
 
   /**
    * Build the system prompt append section based on session type
-   * Includes SSH context for remote sessions
+   * Includes SSH context for remote sessions and agent memories
    */
-  private buildSystemPromptAppend(session: Session): string {
+  private buildSystemPromptAppend(session: Session, memoriesPrompt?: string): string {
     let append = `
 ## Grep Build Agent
 
@@ -262,6 +264,19 @@ ${cleanOutput}
 `;
         }
       }
+    }
+
+    // Add agent memories if available
+    if (memoriesPrompt && memoriesPrompt.trim()) {
+      append += `
+## Your Memories
+
+The following are facts, preferences, and knowledge you have remembered about this project. Use these to provide more relevant and context-aware assistance.
+
+${memoriesPrompt}
+
+**Note**: You can use the \`remember\`, \`recall\`, and \`forget\` tools to manage your memories.
+`;
     }
 
     return append;
@@ -1063,6 +1078,246 @@ ${cleanOutput}
       }
     );
 
+    // ============ MEMORY TOOLS ============
+    // These tools allow the agent to persist knowledge across sessions
+
+    // Get project path from session for memory operations
+    const getProjectPath = (): string | undefined => {
+      const session = this.sessionStore.get(`sessions.${sessionId}`) as Session | undefined;
+      return session?.worktreePath || session?.repoPath;
+    };
+
+    const memoryRememberTool = tool(
+      'remember',
+      'Store an important fact, preference, or discovery for future reference. Use this when you learn something valuable that should persist across sessions. Categories: preference (user preferences), codebase (code structure facts), architecture (design decisions), path (useful file paths), context (current work context).',
+      {
+        category: z.string().describe('Category: preference, codebase, architecture, path, or context'),
+        content: z.string().describe('The fact or information to remember'),
+      },
+      async (args) => {
+        try {
+          const { category, content } = args;
+          const projectPath = getProjectPath();
+
+          if (!projectPath) {
+            return {
+              content: [{
+                type: 'text',
+                text: 'Cannot remember: no project path found for this session.',
+              }],
+              isError: true,
+            };
+          }
+
+          console.log('[Claude Service] Remembering fact:', category, content.substring(0, 50));
+
+          const fact = await memoryService.remember(
+            { category: category as MemoryCategory, content, source: 'agent' },
+            projectPath
+          );
+
+          return {
+            content: [{
+              type: 'text',
+              text: `Remembered [${fact.category}]: "${fact.content}" (id: ${fact.id})`,
+            }],
+          };
+        } catch (error) {
+          console.error('[Claude Service] Memory remember error:', error);
+          return {
+            content: [{
+              type: 'text',
+              text: `Failed to remember: ${error instanceof Error ? error.message : String(error)}`,
+            }],
+            isError: true,
+          };
+        }
+      }
+    );
+
+    const memoryRecallTool = tool(
+      'recall',
+      'Search your memories for relevant information. Use this before searching the codebase to check if you already know the answer.',
+      {
+        query: z.string().describe('What to search for in memories'),
+        category: z.string().optional().describe('Optional filter: preference, codebase, architecture, path, or context'),
+        limit: z.number().optional().describe('Maximum number of results (default: 10)'),
+      },
+      async (args) => {
+        try {
+          const { query, category, limit } = args;
+          const projectPath = getProjectPath();
+
+          if (!projectPath) {
+            return {
+              content: [{
+                type: 'text',
+                text: 'Cannot recall: no project path found for this session.',
+              }],
+              isError: true,
+            };
+          }
+
+          console.log('[Claude Service] Recalling memories for query:', query);
+
+          const facts = await memoryService.recall(query, projectPath, {
+            category: category as MemoryCategory | undefined,
+            limit,
+          });
+
+          if (facts.length === 0) {
+            return {
+              content: [{
+                type: 'text',
+                text: `No memories found matching: "${query}"`,
+              }],
+            };
+          }
+
+          const formattedFacts = facts.map(f =>
+            `- [${f.category}] ${f.content} (id: ${f.id})`
+          ).join('\n');
+
+          return {
+            content: [{
+              type: 'text',
+              text: `Found ${facts.length} memories:\n\n${formattedFacts}`,
+            }],
+          };
+        } catch (error) {
+          console.error('[Claude Service] Memory recall error:', error);
+          return {
+            content: [{
+              type: 'text',
+              text: `Failed to recall: ${error instanceof Error ? error.message : String(error)}`,
+            }],
+            isError: true,
+          };
+        }
+      }
+    );
+
+    const memoryForgetTool = tool(
+      'forget',
+      'Remove a memory that is no longer accurate or relevant.',
+      {
+        factId: z.string().describe('ID of the memory to forget'),
+      },
+      async (args) => {
+        try {
+          const { factId } = args;
+          const projectPath = getProjectPath();
+
+          if (!projectPath) {
+            return {
+              content: [{
+                type: 'text',
+                text: 'Cannot forget: no project path found for this session.',
+              }],
+              isError: true,
+            };
+          }
+
+          console.log('[Claude Service] Forgetting fact:', factId);
+
+          const success = await memoryService.forget(factId, projectPath);
+
+          if (success) {
+            return {
+              content: [{
+                type: 'text',
+                text: `Forgot memory with id: ${factId}`,
+              }],
+            };
+          } else {
+            return {
+              content: [{
+                type: 'text',
+                text: `Memory not found with id: ${factId}`,
+              }],
+            };
+          }
+        } catch (error) {
+          console.error('[Claude Service] Memory forget error:', error);
+          return {
+            content: [{
+              type: 'text',
+              text: `Failed to forget: ${error instanceof Error ? error.message : String(error)}`,
+            }],
+            isError: true,
+          };
+        }
+      }
+    );
+
+    const memoryListTool = tool(
+      'listMemories',
+      'List all memories for the current project. Useful for reviewing what has been remembered.',
+      {},
+      async () => {
+        try {
+          const projectPath = getProjectPath();
+
+          if (!projectPath) {
+            return {
+              content: [{
+                type: 'text',
+                text: 'Cannot list memories: no project path found for this session.',
+              }],
+              isError: true,
+            };
+          }
+
+          console.log('[Claude Service] Listing all memories');
+
+          const facts = await memoryService.listMemories(projectPath);
+
+          if (facts.length === 0) {
+            return {
+              content: [{
+                type: 'text',
+                text: 'No memories stored for this project yet.',
+              }],
+            };
+          }
+
+          // Group by category
+          const byCategory: Record<string, typeof facts> = {};
+          for (const fact of facts) {
+            if (!byCategory[fact.category]) {
+              byCategory[fact.category] = [];
+            }
+            byCategory[fact.category].push(fact);
+          }
+
+          let output = `Found ${facts.length} memories:\n\n`;
+          for (const [category, categoryFacts] of Object.entries(byCategory)) {
+            output += `### ${category}\n`;
+            for (const f of categoryFacts) {
+              output += `- ${f.content} (id: ${f.id})\n`;
+            }
+            output += '\n';
+          }
+
+          return {
+            content: [{
+              type: 'text',
+              text: output,
+            }],
+          };
+        } catch (error) {
+          console.error('[Claude Service] Memory list error:', error);
+          return {
+            content: [{
+              type: 'text',
+              text: `Failed to list memories: ${error instanceof Error ? error.message : String(error)}`,
+            }],
+            isError: true,
+          };
+        }
+      }
+    );
+
     const mcpServer = createSdkMcpServer({
       name: 'claudette-browser',
       version: '2.0.0', // Upgraded to Stagehand-powered automation
@@ -1089,6 +1344,11 @@ ${cleanOutput}
         documentReadTool,
         documentEditTool,
         documentPreviewTool,
+        // Memory tools
+        memoryRememberTool,
+        memoryRecallTool,
+        memoryForgetTool,
+        memoryListTool,
       ],
     });
 
@@ -1477,11 +1737,78 @@ ${cleanOutput}
         console.log('[Claude Service] DOM element context included in text prompt');
       }
 
+      // Pre-fetch agent memories to inject into system prompt
+      // Skip for SSH sessions since memory files are local
+      const projectPath = session.worktreePath || session.repoPath || process.cwd();
+      let memoriesPrompt: string | undefined;
+      if (!session.sshConfig) {
+        try {
+          memoriesPrompt = await memoryService.getMemoriesForPrompt(projectPath);
+          if (memoriesPrompt) {
+            console.log('[Claude Service] Loaded memories for session, length:', memoriesPrompt.length);
+          }
+        } catch (error) {
+          console.error('[Claude Service] Failed to load memories:', error);
+          // Continue without memories - non-critical failure
+        }
+      }
+
+      // Build MCP servers configuration
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const mcpServersConfig: Record<string, any> = {
+        'claudette-browser': this.getBrowserMcpServer(sessionId),
+      };
+
+      // Check if QMD is available for semantic codebase search
+      // Only add for local sessions (not SSH) since QMD runs locally
+      // Requires: 1) Global setting enabled, 2) Project preference enabled
+      if (!session.sshConfig) {
+        const qmdGlobalEnabled = this.store.get('qmdEnabled', false) as boolean;
+        const qmdProjectEnabled = qmdService.isEnabledForProject(projectPath, qmdGlobalEnabled);
+
+        if (qmdProjectEnabled) {
+          const qmdConfig = qmdService.getMcpServerConfig();
+          if (qmdConfig) {
+            mcpServersConfig['qmd'] = {
+              type: 'stdio',
+              command: qmdConfig.command,
+              args: qmdConfig.args,
+            };
+            console.log('[Claude Service] QMD MCP server enabled for semantic search');
+
+            // Ensure project is indexed for QMD (runs in background, doesn't block)
+            qmdService.ensureProjectIndexed(projectPath, (message) => {
+              console.log('[Claude Service] QMD indexing:', message);
+            }).catch((error) => {
+              console.error('[Claude Service] QMD indexing error:', error);
+            });
+          }
+        } else if (qmdGlobalEnabled) {
+          // Global is enabled but project preference is unknown - check if we should prompt
+          qmdService.shouldPromptForProject(projectPath).then((shouldPrompt) => {
+            if (shouldPrompt && this.mainWindow) {
+              console.log('[Claude Service] QMD available - prompting user for project preference');
+              this.mainWindow.webContents.send(IPC_CHANNELS.QMD_PROMPT_RESPONSE, {
+                sessionId,
+                projectPath,
+              });
+            }
+          });
+        } else {
+          // QMD globally disabled - log for debugging
+          console.log('[Claude Service] QMD disabled globally (enable in settings to use semantic search)');
+        }
+      }
+
       // Use the Claude Agent SDK query function with Claude Code's system prompt
+      console.log('[Claude Service] Starting query, session has sshConfig:', !!session.sshConfig);
+      if (session.sshConfig) {
+        console.log('[Claude Service] SSH config:', { host: session.sshConfig.host, user: session.sshConfig.username, remoteWorkdir: session.sshConfig.remoteWorkdir });
+      }
       const messages = query({
         prompt,
         options: {
-          cwd: session.worktreePath || session.repoPath || process.cwd(),
+          cwd: projectPath,
           abortController,
           permissionMode: sdkPermissionMode,
           ...(requiresDangerFlag ? { allowDangerouslySkipPermissions: true } : {}),
@@ -1493,7 +1820,7 @@ ${cleanOutput}
           systemPrompt: {
             type: 'preset',
             preset: 'claude_code',
-            append: this.buildSystemPromptAppend(session),
+            append: this.buildSystemPromptAppend(session, memoriesPrompt),
           },
           // Enable CLAUDE.md and Skills from both user (~/.claude/) and project (.claude/)
           // Skills are discovered automatically by the SDK from these filesystem locations
@@ -1506,19 +1833,17 @@ ${cleanOutput}
           },
           // Resume previous conversation if we have an SDK session ID
           ...(sdkSessionId ? { resume: sdkSessionId } : {}),
-          // Add custom browser tools via MCP server (controls internal webview)
-          mcpServers: {
-            'claudette-browser': this.getBrowserMcpServer(sessionId),
-          },
+          // Add MCP servers (browser tools + QMD semantic search if available)
+          mcpServers: mcpServersConfig,
           // SSH remote execution: spawn Claude Code on remote machine instead of locally
-          // Uses persistent tmux sessions so Claude can survive app restarts
+          // Note: Using non-persistent createRemoteProcess - the persistent tmux/FIFO approach
+          // has blocking issues with named pipes that cause the read channel to close immediately
           ...(session.sshConfig ? {
             spawnClaudeCodeProcess: (options: { command: string; args: string[]; cwd?: string; env: Record<string, string | undefined>; signal: AbortSignal }) => {
               console.log('[Claude Service] Creating SSH remote process for session:', sessionId);
               console.log('[Claude Service] SDK spawn options:', { command: options.command, args: options.args, cwd: options.cwd });
-              // Use persistent tmux-based sessions for SSH connections
-              // This allows the Claude process to survive app restarts
-              return sshService.createPersistentRemoteProcess(
+              // Use direct SSH exec - simpler and more reliable than tmux/FIFO
+              return sshService.createRemoteProcess(
                 sessionId,
                 session.sshConfig!,
                 options

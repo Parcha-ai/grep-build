@@ -199,6 +199,26 @@ export const IPC_CHANNELS = {
   VOICE_USER_ACTIVITY: 'voice:user-activity',
   VOICE_GET_SIGNED_URL: 'voice:get-signed-url', // Get signed URL for SDK-based WebSocket connection
   VOICE_GET_CONVERSATION_TOKEN: 'voice:get-conversation-token', // Get conversation token for WebRTC connection (better echo cancellation)
+
+  // Memory channels (agent memory system)
+  MEMORY_REMEMBER: 'memory:remember',
+  MEMORY_RECALL: 'memory:recall',
+  MEMORY_FORGET: 'memory:forget',
+  MEMORY_LIST: 'memory:list',
+  MEMORY_SYNC: 'memory:sync',
+
+  // QMD channels (semantic codebase search)
+  QMD_GET_STATUS: 'qmd:get-status',
+  QMD_ENSURE_INDEXED: 'qmd:ensure-indexed',
+  QMD_CREATE_COLLECTION: 'qmd:create-collection',
+  QMD_GENERATE_EMBEDDINGS: 'qmd:generate-embeddings',
+  QMD_SEARCH: 'qmd:search',
+  QMD_INDEXING_PROGRESS: 'qmd:indexing-progress',
+  QMD_GET_PROJECT_PREFERENCE: 'qmd:get-project-preference',
+  QMD_SET_PROJECT_PREFERENCE: 'qmd:set-project-preference',
+  QMD_SHOULD_PROMPT: 'qmd:should-prompt',
+  QMD_PROMPT_RESPONSE: 'qmd:prompt-response', // Event sent to renderer to show QMD prompt
+  QMD_AUTO_INSTALL: 'qmd:auto-install', // Auto-install QMD (downloads Bun + QMD)
 } as const;
 
 export type IPCChannel = typeof IPC_CHANNELS[keyof typeof IPC_CHANNELS];

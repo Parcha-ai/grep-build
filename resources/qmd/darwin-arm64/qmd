@@ -1,0 +1,4 @@
+#!/bin/bash
+DIR="$(cd "$(dirname "$0")" && pwd)"
+QMD_DIR="$DIR/qmd-package/node_modules/qmd"
+"$DIR/bun/bun" --cwd="$QMD_DIR" "src/qmd.ts" "$@"

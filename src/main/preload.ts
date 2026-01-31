@@ -15,13 +15,13 @@ import type {
   SSHConfig
 } from '../shared/types';
 
-// App's working directory (for deterministic dev instance naming)
-const APP_CWD = process.cwd();
+// Dev instance name from environment variable (set by scripts/dev.sh)
+const DEV_INSTANCE_NAME = process.env.DEV_INSTANCE_NAME || null;
 
 // Type-safe API for renderer process
 const electronAPI = {
   // App info
-  appCwd: APP_CWD,
+  devInstanceName: DEV_INSTANCE_NAME,
 
   // Auth
   auth: {
@@ -699,6 +699,115 @@ const electronAPI = {
       newSessionId?: string;
       error?: string;
     }> => ipcRenderer.invoke(IPC_CHANNELS.SSH_TELEPORT_SESSION, { sourceSessionId, destinationConfig }),
+  },
+
+  // Memory (agent memory system)
+  memory: {
+    remember: (
+      fact: { category: string; content: string; source?: 'user' | 'extracted' | 'agent' },
+      projectPath?: string
+    ): Promise<{
+      id: string;
+      category: string;
+      content: string;
+      createdAt: string;
+      updatedAt: string;
+      source: string;
+      projectPath?: string;
+    }> => ipcRenderer.invoke(IPC_CHANNELS.MEMORY_REMEMBER, fact, projectPath),
+
+    recall: (
+      query: string,
+      projectPath: string,
+      options?: { limit?: number; category?: string }
+    ): Promise<Array<{
+      id: string;
+      category: string;
+      content: string;
+      createdAt: string;
+      updatedAt: string;
+      source: string;
+      projectPath?: string;
+    }>> => ipcRenderer.invoke(IPC_CHANNELS.MEMORY_RECALL, query, projectPath, options),
+
+    forget: (factId: string, projectPath: string): Promise<boolean> =>
+      ipcRenderer.invoke(IPC_CHANNELS.MEMORY_FORGET, factId, projectPath),
+
+    list: (projectPath: string): Promise<Array<{
+      id: string;
+      category: string;
+      content: string;
+      createdAt: string;
+      updatedAt: string;
+      source: string;
+      projectPath?: string;
+    }>> => ipcRenderer.invoke(IPC_CHANNELS.MEMORY_LIST, projectPath),
+
+    sync: (projectPath: string): Promise<void> =>
+      ipcRenderer.invoke(IPC_CHANNELS.MEMORY_SYNC, projectPath),
+  },
+
+  // QMD (semantic codebase search)
+  qmd: {
+    getStatus: (): Promise<{
+      installed: boolean;
+      version?: string;
+      collections: Array<{ name: string; path: string; fileCount?: number; lastIndexed?: string }>;
+      embeddingsReady: boolean;
+      bundled: boolean;
+    }> => ipcRenderer.invoke(IPC_CHANNELS.QMD_GET_STATUS),
+
+    ensureIndexed: (projectPath: string): Promise<boolean> =>
+      ipcRenderer.invoke(IPC_CHANNELS.QMD_ENSURE_INDEXED, projectPath),
+
+    createCollection: (projectPath: string, mask?: string): Promise<boolean> =>
+      ipcRenderer.invoke(IPC_CHANNELS.QMD_CREATE_COLLECTION, projectPath, mask),
+
+    generateEmbeddings: (collectionName?: string): Promise<boolean> =>
+      ipcRenderer.invoke(IPC_CHANNELS.QMD_GENERATE_EMBEDDINGS, collectionName),
+
+    search: (
+      query: string,
+      options?: { collection?: string; mode?: 'search' | 'vsearch' | 'query'; limit?: number }
+    ): Promise<Array<{ file: string; score: number; content: string }>> =>
+      ipcRenderer.invoke(IPC_CHANNELS.QMD_SEARCH, query, options),
+
+    onIndexingProgress: (
+      callback: (data: { projectPath?: string; collectionName?: string; message: string }) => void
+    ) => {
+      const handler = (
+        _: IpcRendererEvent,
+        data: { projectPath?: string; collectionName?: string; message: string }
+      ) => callback(data);
+      ipcRenderer.on(IPC_CHANNELS.QMD_INDEXING_PROGRESS, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.QMD_INDEXING_PROGRESS, handler);
+    },
+
+    // Project preference management
+    getProjectPreference: (projectPath: string): Promise<'enabled' | 'disabled' | 'unknown'> =>
+      ipcRenderer.invoke(IPC_CHANNELS.QMD_GET_PROJECT_PREFERENCE, projectPath),
+
+    setProjectPreference: (projectPath: string, preference: 'enabled' | 'disabled'): Promise<void> =>
+      ipcRenderer.invoke(IPC_CHANNELS.QMD_SET_PROJECT_PREFERENCE, projectPath, preference),
+
+    shouldPrompt: (projectPath: string): Promise<boolean> =>
+      ipcRenderer.invoke(IPC_CHANNELS.QMD_SHOULD_PROMPT, projectPath),
+
+    // Listen for QMD prompt requests from main process
+    onPromptRequest: (
+      callback: (data: { sessionId: string; projectPath: string }) => void
+    ) => {
+      const handler = (
+        _: IpcRendererEvent,
+        data: { sessionId: string; projectPath: string }
+      ) => callback(data);
+      ipcRenderer.on(IPC_CHANNELS.QMD_PROMPT_RESPONSE, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.QMD_PROMPT_RESPONSE, handler);
+    },
+
+    // Auto-install QMD (downloads Bun + QMD if not available)
+    autoInstall: (): Promise<boolean> =>
+      ipcRenderer.invoke(IPC_CHANNELS.QMD_AUTO_INSTALL),
   },
 };
 

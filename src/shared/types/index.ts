@@ -179,6 +179,8 @@ export interface AppSettings {
   githubToken?: string;
   defaultSetupScript: string;
   autoStartContainer: boolean;
+  // QMD semantic search settings
+  qmdEnabled: boolean; // Global toggle for QMD semantic search
 }
 
 // Permission request from Agent SDK

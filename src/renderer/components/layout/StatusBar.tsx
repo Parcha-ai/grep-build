@@ -4,37 +4,8 @@ import { useAuthStore } from '../../stores/auth.store';
 import { ChevronDown, Check } from 'lucide-react';
 import type { Branch } from '../../../shared/types';
 
-// Silly name generator for dev mode identification
-const SILLY_ADJECTIVES = [
-  'fuzzy', 'sparkly', 'bouncy', 'wobbly', 'zippy', 'snazzy', 'groovy', 'jazzy',
-  'perky', 'zesty', 'quirky', 'peppy', 'spiffy', 'nifty', 'dandy', 'swanky',
-  'cheeky', 'plucky', 'snappy', 'frisky', 'giddy', 'jolly', 'chipper', 'dapper'
-];
-const SILLY_NOUNS = [
-  'penguin', 'tiger', 'otter', 'panda', 'koala', 'badger', 'ferret', 'wombat',
-  'platypus', 'narwhal', 'capybara', 'axolotl', 'quokka', 'lemur', 'meerkat',
-  'hedgehog', 'sloth', 'mongoose', 'armadillo', 'chinchilla', 'ocelot', 'tapir'
-];
-
-// Generate a deterministic silly name based on the app's working directory
-// This uses a simple hash of the path to pick adjective and noun
-function hashString(str: string): number {
-  let hash = 0;
-  for (let i = 0; i < str.length; i++) {
-    const char = str.charCodeAt(i);
-    hash = ((hash << 5) - hash) + char;
-    hash = hash & hash; // Convert to 32-bit integer
-  }
-  return Math.abs(hash);
-}
-
-// Get the app's working directory from the preload-exposed API
-const APP_CWD = (window as any).electronAPI?.appCwd || '/claudette';
-const PATH_HASH = hashString(APP_CWD);
-const DEV_INSTANCE_NAME = `${SILLY_ADJECTIVES[PATH_HASH % SILLY_ADJECTIVES.length]}-${SILLY_NOUNS[(PATH_HASH >> 8) % SILLY_NOUNS.length]}`;
-
-// Log the silly name so it can be identified in logs
-console.log(`[StatusBar] Dev instance name: ${DEV_INSTANCE_NAME} (from cwd: ${APP_CWD})`);
+// Dev instance name from environment variable (set by scripts/dev.sh, passed via preload)
+const DEV_INSTANCE_NAME: string | null = (window as any).electronAPI?.devInstanceName || null;
 
 // Extract subagent type from Task tool input
 function getSubagentType(input: Record<string, unknown>): string | null {

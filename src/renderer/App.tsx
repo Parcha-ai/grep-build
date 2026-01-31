@@ -12,6 +12,7 @@ import SettingsDialog from './components/settings/SettingsDialog';
 import ApiKeyOnboarding from './components/onboarding/ApiKeyOnboarding';
 import QuickSearch from './components/editor/QuickSearch';
 import SessionSwitcher from './components/session/SessionSwitcher';
+import QMDPrompt from './components/qmd/QMDPrompt';
 import { Terminal, Globe, PanelRight, Settings, PanelLeftClose, Monitor, AlertTriangle, Package, FileText } from 'lucide-react';
 
 // Check if we're running in Electron (has electronAPI) or browser preview mode
@@ -361,6 +362,9 @@ function ElectronApp() {
 
       {/* Session Switcher (Ctrl+Tab) */}
       <SessionSwitcher />
+
+      {/* QMD Semantic Search Prompt */}
+      <QMDPrompt />
     </div>
   );
 }

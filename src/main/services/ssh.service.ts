@@ -1468,6 +1468,9 @@ export class SSHService {
       .map(([key, value]) => `export ${key}="${value?.replace(/"/g, '\\"')}"`)
       .join('; ');
 
+    console.log('[SSH Service] Environment vars to export:', Object.keys(sdkOptions.env).filter(k => includeVars.includes(k)));
+    console.log('[SSH Service] Has ANTHROPIC_API_KEY:', !!sdkOptions.env.ANTHROPIC_API_KEY);
+
     // Filter and escape args
     const filteredArgs = sdkOptions.args.filter(arg => {
       if (arg.includes('claude-agent-sdk') || arg.includes('cli.js') || arg.includes('node_modules')) {
@@ -1498,10 +1501,13 @@ export class SSHService {
     // Start async connection and tmux setup
     (async () => {
       try {
+        console.log('[SSH Service] Getting connection for persistent process...');
         const client = await this.getConnection(sessionId, config);
+        console.log('[SSH Service] Got connection, checking for existing session...');
 
         // Check if tmux session already exists with a running Claude process
         const existingSession = await this.checkPersistentSession(sessionId, config);
+        console.log('[SSH Service] Existing session check result:', existingSession);
 
         if (existingSession?.isRunning) {
           console.log(`[SSH Service] Reattaching to existing persistent session: ${tmuxSessionName}`);
