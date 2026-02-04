@@ -123,10 +123,17 @@ export class StagehandService {
         console.log('[Stagehand] No webview CDP found, will launch own browser');
       }
 
+      // If we have a CDP URL (HTTP endpoint), get the browser WebSocket URL
+      let browserWsUrl: string | undefined;
+      if (cdpUrl) {
+        browserWsUrl = cdpProxyService.getBrowserWebSocketUrl();
+        console.log('[Stagehand] Using browser WebSocket URL:', browserWsUrl);
+      }
+
       this.stagehand = new Stagehand({
         env: 'LOCAL',
-        localBrowserLaunchOptions: cdpUrl ? {
-          cdpUrl, // Connect to existing webview
+        localBrowserLaunchOptions: browserWsUrl ? {
+          cdpUrl: browserWsUrl, // Connect to existing webview via browser-level CDP
         } : {
           headless: true, // Fallback: launch own browser
         },
@@ -546,6 +553,7 @@ export class StagehandService {
 
   /**
    * Check if a webview is available via CDP proxy
+   * Returns the HTTP endpoint URL for Playwright's connectOverCDP
    */
   private async findWebviewCdpUrl(): Promise<string | undefined> {
     // First check if CDP proxy is running
@@ -559,20 +567,18 @@ export class StagehandService {
     console.log('[Stagehand] CDP proxy targets:', targets.length);
 
     if (targets.length > 0) {
-      // Use the first available webview
-      const target = targets[0];
-      console.log('[Stagehand] Found webview target via proxy:', target.url);
-      return target.webSocketDebuggerUrl;
+      // Use the HTTP endpoint - Playwright will fetch /json/version to get the WebSocket URL
+      const httpEndpoint = cdpProxyService.getHttpEndpoint();
+      console.log('[Stagehand] Found webview targets, using HTTP endpoint:', httpEndpoint);
+      return httpEndpoint;
     }
 
     // Fallback: check if there's a registered session we can use
     const sessionId = browserService.getFirstSessionId();
     if (sessionId) {
-      const wsUrl = cdpProxyService.getWebSocketUrl(sessionId);
-      if (wsUrl) {
-        console.log('[Stagehand] Using session webview via proxy:', sessionId);
-        return wsUrl;
-      }
+      const httpEndpoint = cdpProxyService.getHttpEndpoint();
+      console.log('[Stagehand] Using session webview via proxy:', sessionId);
+      return httpEndpoint;
     }
 
     return undefined;
@@ -591,7 +597,7 @@ export class StagehandService {
       return false;
     }
 
-    console.log('[Stagehand] Found webview, reconnecting:', cdpUrl);
+    console.log('[Stagehand] Found webview, reconnecting via:', cdpUrl);
 
     // Close existing browser
     await this.close();
@@ -607,10 +613,14 @@ export class StagehandService {
         process.env.GOOGLE_GENERATIVE_AI_API_KEY = this.googleApiKey;
       }
 
+      // Use the browser-level WebSocket URL for connection
+      const browserWsUrl = cdpProxyService.getBrowserWebSocketUrl();
+      console.log('[Stagehand] Connecting to browser WebSocket:', browserWsUrl);
+
       this.stagehand = new Stagehand({
         env: 'LOCAL',
         localBrowserLaunchOptions: {
-          cdpUrl,
+          cdpUrl: browserWsUrl,
         },
         model: 'google/gemini-2.5-flash',
         domSettleTimeout: 3000,
