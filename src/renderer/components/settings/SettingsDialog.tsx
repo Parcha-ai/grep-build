@@ -35,6 +35,8 @@ export default function SettingsDialog() {
   const [showApiKey, setShowApiKey] = useState(false);
   const [openaiApiKey, setOpenaiApiKey] = useState('');
   const [showOpenaiApiKey, setShowOpenaiApiKey] = useState(false);
+  const [googleApiKey, setGoogleApiKey] = useState('');
+  const [showGoogleApiKey, setShowGoogleApiKey] = useState(false);
 
   // Audio settings
   const [voiceModeEnabled, setVoiceModeEnabled] = useState(false);
@@ -94,13 +96,15 @@ export default function SettingsDialog() {
   }, [audioSettings, updateSettings, showSaveIndicator]);
 
   // Auto-save API keys with debounce for text inputs
-  const autoSaveApiKey = useCallback(async (key: string, type: 'anthropic' | 'openai') => {
+  const autoSaveApiKey = useCallback(async (key: string, type: 'anthropic' | 'openai' | 'google') => {
     showSaveIndicator();
     try {
       if (type === 'anthropic') {
         await window.electronAPI.settings.setApiKey(key);
       } else if (type === 'openai') {
         await window.electronAPI.audio.setOpenAiKey(key);
+      } else if (type === 'google') {
+        await window.electronAPI.settings.setGoogleApiKey(key);
       }
       console.log(`[SettingsDialog] Auto-saved ${type} API key`);
     } catch (error) {
@@ -125,14 +129,16 @@ export default function SettingsDialog() {
       Promise.all([
         window.electronAPI.settings.getApiKey(),
         window.electronAPI.audio.getOpenAiKey(),
+        window.electronAPI.settings.getGoogleApiKey(),
         window.electronAPI.settings.get(),
         window.electronAPI.qmd.getStatus(),
         loadSettings(),
       ])
-        .then(([anthropicKey, openAiKey, appSettings, qmdStatusResult]) => {
+        .then(([anthropicKey, openAiKey, googleKey, appSettings, qmdStatusResult]) => {
           console.log('[SettingsDialog] Loaded settings:', appSettings);
           setApiKey(anthropicKey || '');
           setOpenaiApiKey(openAiKey || '');
+          setGoogleApiKey(googleKey || '');
           setQmdEnabled(appSettings.qmdEnabled || false);
           setUltraPlanMode(appSettings.ultraPlanMode || false);
           setLunchReminderEnabled(appSettings.lunchReminderEnabled || false);
@@ -516,6 +522,34 @@ export default function SettingsDialog() {
             onClick={(e) => {
               e.preventDefault();
               window.electronAPI.app?.openExternal?.('https://platform.openai.com/api-keys');
+            }}
+            className="text-claude-accent hover:underline"
+          >
+            Get key
+          </a>
+        </p>
+      </div>
+
+      {/* Google/Gemini API Key */}
+      <div className="space-y-2 pt-4 border-t border-claude-border">
+        <label className="block text-xs font-mono text-claude-text-secondary uppercase tracking-wider">
+          Google/Gemini API Key (Browser AI)
+        </label>
+        <ApiKeyInput
+          value={googleApiKey}
+          onChange={setGoogleApiKey}
+          show={showGoogleApiKey}
+          onToggleShow={() => setShowGoogleApiKey(!showGoogleApiKey)}
+          placeholder="AIza..."
+          onSave={(value) => autoSaveApiKey(value, 'google')}
+        />
+        <p className="text-[10px] font-mono text-claude-text-secondary">
+          For AI-powered browser automation (Stagehand).{' '}
+          <a
+            href="#"
+            onClick={(e) => {
+              e.preventDefault();
+              window.electronAPI.app?.openExternal?.('https://aistudio.google.com/app/apikey');
             }}
             className="text-claude-accent hover:underline"
           >

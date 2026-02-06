@@ -91,6 +91,8 @@ export const IPC_CHANNELS = {
   SETTINGS_RESET: 'settings:reset',
   SETTINGS_GET_API_KEY: 'settings:get-api-key',
   SETTINGS_SET_API_KEY: 'settings:set-api-key',
+  SETTINGS_GET_GOOGLE_API_KEY: 'settings:get-google-api-key',
+  SETTINGS_SET_GOOGLE_API_KEY: 'settings:set-google-api-key',
 
   // App channels
   APP_GET_VERSION: 'app:get-version',

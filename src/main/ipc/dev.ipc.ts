@@ -234,12 +234,41 @@ export function registerDevHandlers(ipcMain: IpcMain): void {
         return { success: false, branches: [], error: 'Not a git repository' };
       }
 
-      // Get all local branches
-      const branchSummary = await git.branchLocal();
-      const branches = branchSummary.all.map(name => ({
-        name,
-        current: name === branchSummary.current,
-      }));
+      // Fetch from remote to get latest branches (silently fail if no remote)
+      try {
+        await git.fetch(['--all', '--prune']);
+      } catch (fetchError) {
+        // If fetch fails (no remote, no network, etc.), continue with local branches only
+        console.log('[dev.ipc] Failed to fetch from remote, using local branches only:', fetchError);
+      }
+
+      // Get all branches (local and remote)
+      const branchSummary = await git.branch(['-a']); // -a shows all (local + remote)
+      const currentBranch = branchSummary.current;
+
+      // Process branches: deduplicate and clean up names
+      const branchSet = new Set<string>();
+      const branches: Array<{ name: string; current: boolean }> = [];
+
+      for (const branchName of branchSummary.all) {
+        let cleanName = branchName;
+
+        // For remote branches like "remotes/origin/feature", extract just "feature"
+        if (branchName.startsWith('remotes/origin/')) {
+          cleanName = branchName.replace('remotes/origin/', '');
+          // Skip HEAD pointer
+          if (cleanName === 'HEAD') continue;
+        }
+
+        // Skip if we've already seen this branch name
+        if (branchSet.has(cleanName)) continue;
+        branchSet.add(cleanName);
+
+        branches.push({
+          name: cleanName,
+          current: cleanName === currentBranch,
+        });
+      }
 
       // Sort: current branch first, then alphabetically
       branches.sort((a, b) => {
@@ -248,7 +277,7 @@ export function registerDevHandlers(ipcMain: IpcMain): void {
         return a.name.localeCompare(b.name);
       });
 
-      return { success: true, branches, currentBranch: branchSummary.current };
+      return { success: true, branches, currentBranch };
     } catch (error) {
       return { success: false, branches: [], error: error instanceof Error ? error.message : 'Failed to get branches' };
     }

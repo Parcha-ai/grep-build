@@ -25,6 +25,14 @@ export function registerSettingsHandlers(ipcMain: IpcMain): void {
     settingsService.setApiKey(key);
   });
 
+  ipcMain.handle(IPC_CHANNELS.SETTINGS_GET_GOOGLE_API_KEY, async () => {
+    return settingsService.getGoogleApiKey() || '';
+  });
+
+  ipcMain.handle(IPC_CHANNELS.SETTINGS_SET_GOOGLE_API_KEY, async (_, key: string) => {
+    settingsService.setGoogleApiKey(key);
+  });
+
   // App utilities
   ipcMain.handle(IPC_CHANNELS.APP_GET_VERSION, async () => {
     return app.getVersion();

@@ -1243,6 +1243,7 @@ ${data.textContent ? `**Text Content:** "${data.textContent.slice(0, 100)}${data
           src={initialUrl.current}
           className={`absolute inset-0 w-full h-full ${showStagehand && stagehandScreenshot ? 'invisible' : ''}`}
           partition={`persist:browser-${session.id}`}
+          webpreferences="contextIsolation=no"
         />
 
         {/* Automation indicator overlay */}

@@ -326,6 +326,10 @@ const electronAPI = {
       ipcRenderer.invoke(IPC_CHANNELS.SETTINGS_GET_API_KEY),
     setApiKey: (key: string): Promise<void> =>
       ipcRenderer.invoke(IPC_CHANNELS.SETTINGS_SET_API_KEY, key),
+    getGoogleApiKey: (): Promise<string> =>
+      ipcRenderer.invoke(IPC_CHANNELS.SETTINGS_GET_GOOGLE_API_KEY),
+    setGoogleApiKey: (key: string): Promise<void> =>
+      ipcRenderer.invoke(IPC_CHANNELS.SETTINGS_SET_GOOGLE_API_KEY, key),
   },
 
   // App

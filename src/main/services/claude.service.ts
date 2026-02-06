@@ -299,11 +299,16 @@ ${memoriesPrompt}
     const apiKey = this.getApiKey();
     if (apiKey) {
       stagehandService.setApiKey(apiKey);
+      console.log('[Claude Service] Set Anthropic API key for Stagehand');
     }
     // Pass Google API key for Gemini models (from store or environment)
     const googleApiKey = this.getGoogleApiKey() || process.env.GOOGLE_API_KEY;
+    console.log('[Claude Service] Google API key check:', googleApiKey ? 'PRESENT' : 'MISSING', 'from store:', !!this.getGoogleApiKey(), 'from env:', !!process.env.GOOGLE_API_KEY);
     if (googleApiKey) {
       stagehandService.setGoogleApiKey(googleApiKey);
+      console.log('[Claude Service] Set Google API key for Stagehand');
+    } else {
+      console.warn('[Claude Service] No Google API key available - Stagehand AI features will not work!');
     }
 
     // ============ STAGEHAND-POWERED BROWSER TOOLS ============
@@ -329,7 +334,7 @@ ${memoriesPrompt}
           });
 
           // Navigate using Stagehand
-          const navResult = await stagehandService.navigate(url);
+          const navResult = await stagehandService.navigate(url, sessionId);
           if (!navResult.success) {
             return {
               content: [{
@@ -402,7 +407,7 @@ ${memoriesPrompt}
           await this.ensureBrowserPanelOpen(sessionId);
 
           console.log('[Claude Service] Navigating browser via Stagehand to:', url);
-          const result = await stagehandService.navigate(url);
+          const result = await stagehandService.navigate(url, sessionId);
 
           if (result.success && result.screenshot) {
             this.emitBrowserUpdate(sessionId, result.screenshot, url);
@@ -442,7 +447,7 @@ ${memoriesPrompt}
           await this.ensureBrowserPanelOpen(sessionId);
 
           console.log('[Claude Service] Browser act:', instruction);
-          const result = await stagehandService.act(instruction);
+          const result = await stagehandService.act(instruction, sessionId);
 
           if (result.success && result.screenshot) {
             this.emitBrowserUpdate(sessionId, result.screenshot);
@@ -485,7 +490,7 @@ ${memoriesPrompt}
         try {
           const { instruction } = args;
           console.log('[Claude Service] Browser observe:', instruction || 'all');
-          const result = await stagehandService.observe(instruction);
+          const result = await stagehandService.observe(instruction, sessionId);
 
           if (!result.success) {
             return {
@@ -1329,21 +1334,17 @@ ${memoriesPrompt}
       name: 'claudette-browser',
       version: '2.0.0', // Upgraded to Stagehand-powered automation
       tools: [
-        // Core browser tools
-        browserSnapshotTool,
+        // ============ STAGEHAND AI-POWERED TOOLS ONLY ============
+        // These use Stagehand's AI for browser automation
+        browserActTool,           // Natural language actions (PRIMARY)
+        browserObserveTool,       // Discover available actions
+        browserAgentTool,         // Autonomous multi-step workflows
+        browserExtractDataTool,   // AI-powered data extraction
+
+        // Navigation (uses Stagehand)
         browserNavigateTool,
-        // AI-powered Stagehand tools (PRIMARY - prefer these!)
-        browserActTool,
-        browserObserveTool,
-        browserAgentTool,
-        browserExtractDataTool,
-        // Fallback selector-based tools
-        browserClickTool,
-        browserTypeTool,
-        browserExtractTool,
-        // Page info tools
-        browserGetInfoTool,
-        browserGetDOMTool,
+
+        // ============ NON-BROWSER TOOLS ============
         // Utility tools
         updateSessionNameTool,
         // Document tools
@@ -1356,11 +1357,50 @@ ${memoriesPrompt}
         memoryRecallTool,
         memoryForgetTool,
         memoryListTool,
+
+        // ============ DISABLED FOR STAGEHAND TESTING ============
+        // browserSnapshotTool,      // Mixed Stagehand/CDP
+        // browserClickTool,         // Selector-based (should use browserService)
+        // browserTypeTool,          // Selector-based (should use browserService)
+        // browserExtractTool,       // Uses Stagehand (redundant with ExtractData)
+        // browserGetInfoTool,       // Uses Stagehand (simple CDP operation)
+        // browserGetDOMTool,        // Uses Stagehand (simple CDP operation)
       ],
     });
 
     this.browserMcpServers.set(sessionId, mcpServer);
     return mcpServer;
+  }
+
+  /**
+   * Execute browser tools locally (used for SSH sessions where browser is local)
+   */
+  private async executeLocalBrowserTool(sessionId: string, toolName: string, input: Record<string, unknown>): Promise<any> {
+    console.log('[Claude Service] Executing browser tool locally:', toolName, input);
+
+    // Ensure browser panel is open
+    await this.ensureBrowserPanelOpen(sessionId);
+
+    switch (toolName) {
+      case 'BrowserNavigate':
+        return stagehandService.navigate(input.url as string, sessionId);
+
+      case 'BrowserAct':
+        return stagehandService.act(input.instruction as string, sessionId);
+
+      case 'BrowserObserve':
+        return stagehandService.observe(input.instruction as string | undefined, sessionId);
+
+      case 'BrowserAgent':
+        return stagehandService.agent(input.task as string);
+
+      case 'BrowserExtractData':
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        return stagehandService.extract(input.instruction as string, input.schema as any);
+
+      default:
+        throw new Error(`Unknown browser tool: ${toolName}`);
+    }
   }
 
   setApiKey(apiKey: string): void {
@@ -1775,9 +1815,16 @@ ${memoriesPrompt}
 
       // Build MCP servers configuration
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const mcpServersConfig: Record<string, any> = {
-        'claudette-browser': this.getBrowserMcpServer(sessionId),
-      };
+      const mcpServersConfig: Record<string, any> = {};
+
+      // Browser tools - only for LOCAL sessions
+      // Cannot send SDK MCP servers to remote SSH sessions (they run in local process)
+      if (!session.sshConfig) {
+        mcpServersConfig['claudette-browser'] = this.getBrowserMcpServer(sessionId);
+        console.log('[Claude Service] Browser MCP tools enabled (local session)');
+      } else {
+        console.log('[Claude Service] Browser MCP tools disabled (SSH session - tools run in local process)');
+      }
 
       // Load user-installed MCP servers from Claudette's electron-store
       // This runs on EVERY message, so new MCP servers are picked up automatically
@@ -1834,8 +1881,48 @@ ${memoriesPrompt}
       // This hook fires only when ExitPlanMode succeeds and ultraPlanMode setting is enabled
       const settings = this.store.get('settings', {}) as any;
       const ultraPlanEnabled = settings.ultraPlanMode || false;
-      const hooks = ultraPlanEnabled ? {
-        PostToolUse: [{
+
+      // Build hooks object
+      const hooks: any = {};
+
+      // PreToolUse hook for SSH sessions: intercept browser tools and execute locally
+      if (session.sshConfig) {
+        hooks.PreToolUse = [{
+          matcher: 'mcp__claudette-browser__Browser*', // Match all MCP browser tools
+          hooks: [async (input: any, toolUseID: string | undefined, options: any) => {
+            console.log('[SSH Browser Intercept] PreToolUse hook called with:', JSON.stringify({ input, toolUseID, optionsKeys: Object.keys(options || {}) }));
+            // Extract actual tool name from MCP format
+            const fullToolName = input?.toolName || options?.toolName || '';
+            const toolName = fullToolName.replace('mcp__claudette-browser__', '');
+            console.log('[SSH Browser Intercept] Extracted tool name:', fullToolName, '->', toolName);
+
+            if (toolName.startsWith('Browser')) {
+              console.log('[SSH Browser Intercept] Executing browser tool locally:', toolName);
+              try {
+                const result = await this.executeLocalBrowserTool(sessionId, toolName, input);
+                return {
+                  continue: false, // Stop - don't send to remote
+                  toolResult: result, // Return local result
+                };
+              } catch (error) {
+                console.error('[SSH Browser Intercept] Local execution failed:', error);
+                return {
+                  continue: false,
+                  toolResult: {
+                    success: false,
+                    error: error instanceof Error ? error.message : String(error),
+                  },
+                };
+              }
+            }
+            return { continue: true }; // Not a browser tool, continue normally
+          }]
+        }];
+      }
+
+      // Add ultra plan mode hooks if enabled
+      if (ultraPlanEnabled) {
+        hooks.PostToolUse = [{
           matcher: 'ExitPlanMode',  // Only trigger after ExitPlanMode succeeds
           hooks: [async (input: any, toolUseID: string | undefined, { signal }: { signal: AbortSignal }) => {
             try {
@@ -1904,8 +1991,8 @@ Begin by creating the task structure now.
               return { continue: true };
             }
           }]
-        }]
-      } : undefined;
+        }];
+      }
 
       // Use the Claude Agent SDK query function with Claude Code's system prompt
       console.log('[Claude Service] Starting query, session has sshConfig:', !!session.sshConfig);
