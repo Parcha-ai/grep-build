@@ -153,6 +153,7 @@ export class StagehandService {
         model: 'google/gemini-2.5-flash', // Model name (API key passed separately)
         domSettleTimeout: 3000, // Wait for DOM to stabilize
         verbose: 1,
+        disablePino: true, // Disable Pino logging to prevent worker thread crashes
       });
 
       await this.stagehand.init();
@@ -645,6 +646,7 @@ export class StagehandService {
         model: 'google/gemini-2.5-flash', // Model name (API key passed separately)
         domSettleTimeout: 3000,
         verbose: 1,
+        disablePino: true, // Disable Pino logging to prevent worker thread crashes
       });
 
       await this.stagehand.init();
