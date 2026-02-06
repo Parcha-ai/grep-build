@@ -329,7 +329,7 @@ ${memoriesPrompt}
           });
 
           // Navigate using Stagehand
-          const navResult = await stagehandService.navigate(url);
+          const navResult = await stagehandService.navigate(url, sessionId);
           if (!navResult.success) {
             return {
               content: [{
@@ -1329,21 +1329,17 @@ ${memoriesPrompt}
       name: 'claudette-browser',
       version: '2.0.0', // Upgraded to Stagehand-powered automation
       tools: [
-        // Core browser tools
-        browserSnapshotTool,
+        // ============ STAGEHAND AI-POWERED TOOLS ONLY ============
+        // These use Stagehand's AI for browser automation
+        browserActTool,           // Natural language actions (PRIMARY)
+        browserObserveTool,       // Discover available actions
+        browserAgentTool,         // Autonomous multi-step workflows
+        browserExtractDataTool,   // AI-powered data extraction
+
+        // Navigation (uses Stagehand)
         browserNavigateTool,
-        // AI-powered Stagehand tools (PRIMARY - prefer these!)
-        browserActTool,
-        browserObserveTool,
-        browserAgentTool,
-        browserExtractDataTool,
-        // Fallback selector-based tools
-        browserClickTool,
-        browserTypeTool,
-        browserExtractTool,
-        // Page info tools
-        browserGetInfoTool,
-        browserGetDOMTool,
+
+        // ============ NON-BROWSER TOOLS ============
         // Utility tools
         updateSessionNameTool,
         // Document tools
@@ -1356,6 +1352,14 @@ ${memoriesPrompt}
         memoryRecallTool,
         memoryForgetTool,
         memoryListTool,
+
+        // ============ DISABLED FOR STAGEHAND TESTING ============
+        // browserSnapshotTool,      // Mixed Stagehand/CDP
+        // browserClickTool,         // Selector-based (should use browserService)
+        // browserTypeTool,          // Selector-based (should use browserService)
+        // browserExtractTool,       // Uses Stagehand (redundant with ExtractData)
+        // browserGetInfoTool,       // Uses Stagehand (simple CDP operation)
+        // browserGetDOMTool,        // Uses Stagehand (simple CDP operation)
       ],
     });
 
