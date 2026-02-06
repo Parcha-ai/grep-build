@@ -1,5 +1,5 @@
 import { WebSocketServer, WebSocket } from 'ws';
-import { createServer, IncomingMessage, ServerResponse } from 'http';
+import * as http from 'http';
 import { webContents } from 'electron';
 import { browserService } from './browser.service';
 
@@ -14,7 +14,7 @@ import { browserService } from './browser.service';
  * - Page-level WebSocket connections for direct page control
  */
 export class CdpProxyService {
-  private httpServer: ReturnType<typeof createServer> | null = null;
+  private httpServer: http.Server | null = null;
   private wss: WebSocketServer | null = null;
   private port = 9223;
   private activeConnections = new Map<WebSocket, {
@@ -40,7 +40,7 @@ export class CdpProxyService {
     return new Promise((resolve, reject) => {
       try {
         // Create HTTP server for /json endpoints
-        this.httpServer = createServer((req, res) => this.handleHttpRequest(req, res));
+        this.httpServer = http.createServer((req, res) => this.handleHttpRequest(req, res));
 
         // Create WebSocket server attached to HTTP server
         this.wss = new WebSocketServer({ server: this.httpServer });
@@ -85,7 +85,7 @@ export class CdpProxyService {
   /**
    * Handle HTTP requests for CDP discovery endpoints
    */
-  private handleHttpRequest(req: IncomingMessage, res: ServerResponse): void {
+  private handleHttpRequest(req: http.IncomingMessage, res: http.ServerResponse): void {
     const url = req.url || '';
 
     // Set CORS headers for browser access
@@ -204,9 +204,9 @@ export class CdpProxyService {
    * Handle browser-level CDP commands
    * Implements Target domain for Playwright compatibility
    */
-  private async handleBrowserCommand(ws: WebSocket, message: { id: number; method: string; params?: any }): Promise<void> {
-    const { id, method, params } = message;
-    console.log('[CDP Proxy] Browser command:', method);
+  private async handleBrowserCommand(ws: WebSocket, message: { id: number; method: string; params?: any; sessionId?: string }): Promise<void> {
+    const { id, method, params, sessionId: messageSessionId } = message;
+    console.log('[CDP Proxy] Browser command:', method, messageSessionId ? `(session: ${messageSessionId})` : '');
 
     try {
       let result: any;
@@ -394,8 +394,8 @@ export class CdpProxyService {
 
         // Forward other commands to the page if we have a session
         default:
-          // Check if this is a session-specific command
-          const sessionId = params?.sessionId || (message as any).sessionId;
+          // Check if this is a session-specific command (flattened or in params)
+          const sessionId = messageSessionId || params?.sessionId;
           if (sessionId) {
             result = await this.forwardToPage(sessionId, method, params);
           } else {

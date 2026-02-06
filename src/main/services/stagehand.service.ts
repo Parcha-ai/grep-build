@@ -137,7 +137,10 @@ export class StagehandService {
         } : {
           headless: true, // Fallback: launch own browser
         },
-        model: 'google/gemini-2.5-flash', // Gemini 2.5 Flash - recommended stable model
+        model: this.googleApiKey ? {
+          modelName: 'google/gemini-2.5-flash',
+          apiKey: this.googleApiKey, // Pass API key directly to model config
+        } : 'google/gemini-2.5-flash', // Fallback to env var if no key
         domSettleTimeout: 3000, // Wait for DOM to stabilize
         verbose: 1,
       });
@@ -622,7 +625,10 @@ export class StagehandService {
         localBrowserLaunchOptions: {
           cdpUrl: browserWsUrl,
         },
-        model: 'google/gemini-2.5-flash',
+        model: this.googleApiKey ? {
+          modelName: 'google/gemini-2.5-flash',
+          apiKey: this.googleApiKey, // Pass API key directly to model config
+        } : 'google/gemini-2.5-flash', // Fallback to env var if no key
         domSettleTimeout: 3000,
         verbose: 1,
       });
