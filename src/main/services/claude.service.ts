@@ -1817,14 +1817,11 @@ ${memoriesPrompt}
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const mcpServersConfig: Record<string, any> = {};
 
-      // Browser tools - only for LOCAL sessions
-      // Cannot send SDK MCP servers to remote SSH sessions (they run in local process)
-      if (!session.sshConfig) {
-        mcpServersConfig['claudette-browser'] = this.getBrowserMcpServer(sessionId);
-        console.log('[Claude Service] Browser MCP tools enabled (local session)');
-      } else {
-        console.log('[Claude Service] Browser MCP tools disabled (SSH session - tools run in local process)');
-      }
+      // Browser tools - available for all sessions
+      // For SSH, the MCP server runs in local Grep process but tools are sent to remote
+      // (investigating why they worked before but now show "No such tool available")
+      mcpServersConfig['claudette-browser'] = this.getBrowserMcpServer(sessionId);
+      console.log('[Claude Service] Browser MCP tools enabled', session.sshConfig ? '(SSH session)' : '(local session)');
 
       // Load user-installed MCP servers from Claudette's electron-store
       // This runs on EVERY message, so new MCP servers are picked up automatically
