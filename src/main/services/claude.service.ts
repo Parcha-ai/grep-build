@@ -1817,10 +1817,14 @@ ${memoriesPrompt}
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const mcpServersConfig: Record<string, any> = {};
 
-      // Browser tools are available for all sessions
-      // For SSH sessions, PreToolUse hook intercepts and executes them locally
-      mcpServersConfig['claudette-browser'] = this.getBrowserMcpServer(sessionId);
-      console.log('[Claude Service] Browser MCP tools enabled');
+      // Browser tools - only for LOCAL sessions
+      // Cannot send SDK MCP servers to remote SSH sessions (they run in local process)
+      if (!session.sshConfig) {
+        mcpServersConfig['claudette-browser'] = this.getBrowserMcpServer(sessionId);
+        console.log('[Claude Service] Browser MCP tools enabled (local session)');
+      } else {
+        console.log('[Claude Service] Browser MCP tools disabled (SSH session - tools run in local process)');
+      }
 
       // Load user-installed MCP servers from Claudette's electron-store
       // This runs on EVERY message, so new MCP servers are picked up automatically
@@ -1885,11 +1889,12 @@ ${memoriesPrompt}
       if (session.sshConfig) {
         hooks.PreToolUse = [{
           matcher: 'mcp__claudette-browser__Browser*', // Match all MCP browser tools
-          hooks: [async (input: any, toolUseID: string | undefined, { signal }: { signal: AbortSignal }) => {
+          hooks: [async (input: any, toolUseID: string | undefined, options: any) => {
+            console.log('[SSH Browser Intercept] PreToolUse hook called with:', JSON.stringify({ input, toolUseID, optionsKeys: Object.keys(options || {}) }));
             // Extract actual tool name from MCP format
-            const fullToolName = input?.toolName || '';
+            const fullToolName = input?.toolName || options?.toolName || '';
             const toolName = fullToolName.replace('mcp__claudette-browser__', '');
-            console.log('[SSH Browser Intercept] Hook triggered for:', fullToolName, '->', toolName);
+            console.log('[SSH Browser Intercept] Extracted tool name:', fullToolName, '->', toolName);
 
             if (toolName.startsWith('Browser')) {
               console.log('[SSH Browser Intercept] Executing browser tool locally:', toolName);
