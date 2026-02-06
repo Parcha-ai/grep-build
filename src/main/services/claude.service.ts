@@ -1884,9 +1884,13 @@ ${memoriesPrompt}
       // PreToolUse hook for SSH sessions: intercept browser tools and execute locally
       if (session.sshConfig) {
         hooks.PreToolUse = [{
-          matcher: 'Browser*', // Match all Browser tools
+          matcher: 'mcp__claudette-browser__Browser*', // Match all MCP browser tools
           hooks: [async (input: any, toolUseID: string | undefined, { signal }: { signal: AbortSignal }) => {
-            const toolName = input?.toolName || 'Unknown';
+            // Extract actual tool name from MCP format
+            const fullToolName = input?.toolName || '';
+            const toolName = fullToolName.replace('mcp__claudette-browser__', '');
+            console.log('[SSH Browser Intercept] Hook triggered for:', fullToolName, '->', toolName);
+
             if (toolName.startsWith('Browser')) {
               console.log('[SSH Browser Intercept] Executing browser tool locally:', toolName);
               try {
@@ -1914,7 +1918,6 @@ ${memoriesPrompt}
       // Add ultra plan mode hooks if enabled
       if (ultraPlanEnabled) {
         hooks.PostToolUse = [{
-        PostToolUse: [{
           matcher: 'ExitPlanMode',  // Only trigger after ExitPlanMode succeeds
           hooks: [async (input: any, toolUseID: string | undefined, { signal }: { signal: AbortSignal }) => {
             try {
