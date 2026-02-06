@@ -402,7 +402,7 @@ ${memoriesPrompt}
           await this.ensureBrowserPanelOpen(sessionId);
 
           console.log('[Claude Service] Navigating browser via Stagehand to:', url);
-          const result = await stagehandService.navigate(url);
+          const result = await stagehandService.navigate(url, sessionId);
 
           if (result.success && result.screenshot) {
             this.emitBrowserUpdate(sessionId, result.screenshot, url);
@@ -442,7 +442,7 @@ ${memoriesPrompt}
           await this.ensureBrowserPanelOpen(sessionId);
 
           console.log('[Claude Service] Browser act:', instruction);
-          const result = await stagehandService.act(instruction);
+          const result = await stagehandService.act(instruction, sessionId);
 
           if (result.success && result.screenshot) {
             this.emitBrowserUpdate(sessionId, result.screenshot);
@@ -485,7 +485,7 @@ ${memoriesPrompt}
         try {
           const { instruction } = args;
           console.log('[Claude Service] Browser observe:', instruction || 'all');
-          const result = await stagehandService.observe(instruction);
+          const result = await stagehandService.observe(instruction, sessionId);
 
           if (!result.success) {
             return {

@@ -1,7 +1,9 @@
 import { Stagehand, type Page } from '@browserbasehq/stagehand';
 import { z } from 'zod';
+import { BrowserWindow } from 'electron';
 import { cdpProxyService } from './cdp-proxy.service';
 import { browserService } from './browser.service';
+import { IPC_CHANNELS } from '../../shared/constants/channels';
 
 export interface StagehandActionResult {
   success: boolean;
@@ -72,8 +74,9 @@ export class StagehandService {
   /**
    * Initialize Stagehand instance
    * Creates a new browser instance in local mode
+   * @param sessionId - Optional session ID to open browser panel for
    */
-  async init(): Promise<void> {
+  async init(sessionId?: string): Promise<void> {
     if (this.stagehand) {
       return; // Already initialized
     }
@@ -99,6 +102,15 @@ export class StagehandService {
       if (this.googleApiKey) {
         process.env.GOOGLE_API_KEY = this.googleApiKey;
         process.env.GOOGLE_GENERATIVE_AI_API_KEY = this.googleApiKey;
+      }
+
+      // Ensure browser panel is open so webview is available
+      console.log('[Stagehand] Ensuring browser panel is open for session:', sessionId || 'unknown');
+      const mainWindow = BrowserWindow.getAllWindows()[0];
+      if (mainWindow && sessionId) {
+        mainWindow.webContents.send(IPC_CHANNELS.BROWSER_OPEN_PANEL, { sessionId });
+        // Give the browser panel time to initialize and register with CDP proxy
+        await new Promise(resolve => setTimeout(resolve, 2000));
       }
 
       // Try to connect to webview via CDP proxy
@@ -174,12 +186,14 @@ export class StagehandService {
 
   /**
    * Navigate to a URL
+   * @param url - The URL to navigate to
+   * @param sessionId - Optional session ID for opening browser panel
    */
-  async navigate(url: string): Promise<StagehandActionResult> {
+  async navigate(url: string, sessionId?: string): Promise<StagehandActionResult> {
     // Retry logic for destroyed browser
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
-        await this.ensureInitialized();
+        await this.ensureInitialized(sessionId);
 
         const page = this.getPage();
         if (!page) {
@@ -223,12 +237,14 @@ export class StagehandService {
   /**
    * Execute a natural language action
    * Uses Stagehand's AI to interpret and execute the action
+   * @param instruction - The instruction to execute
+   * @param sessionId - Optional session ID for opening browser panel
    */
-  async act(instruction: string): Promise<StagehandActionResult> {
+  async act(instruction: string, sessionId?: string): Promise<StagehandActionResult> {
     // Retry logic for destroyed browser
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
-        await this.ensureInitialized();
+        await this.ensureInitialized(sessionId);
 
         console.log('[Stagehand] Executing action:', instruction);
         await this.stagehand!.act(instruction);
@@ -296,8 +312,10 @@ export class StagehandService {
   /**
    * Observe available actions on the page
    * Returns a list of interactive elements and suggested actions
+   * @param instruction - Optional instruction for what to observe
+   * @param sessionId - Optional session ID for opening browser panel
    */
-  async observe(instruction?: string): Promise<StagehandObserveResult> {
+  async observe(instruction?: string, sessionId?: string): Promise<StagehandObserveResult> {
     try {
       await this.ensureInitialized();
 
@@ -650,8 +668,9 @@ export class StagehandService {
   /**
    * Ensure Stagehand is initialized before operations
    * If not connected to webview, try to reconnect
+   * @param sessionId - Optional session ID for opening browser panel
    */
-  private async ensureInitialized(): Promise<void> {
+  private async ensureInitialized(sessionId?: string): Promise<void> {
     // Check if we need to initialize or reinitialize
     let needsInit = !this.stagehand;
 
@@ -680,7 +699,7 @@ export class StagehandService {
     }
 
     if (needsInit) {
-      await this.init();
+      await this.init(sessionId);
     } else if (!this.connectedToWebview) {
       // Already have own browser, but check if webview is now available
       const cdpUrl = await this.findWebviewCdpUrl();
