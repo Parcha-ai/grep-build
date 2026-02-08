@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import type { Session, ChatMessage, ToolCall, PermissionRequest, PermissionResponse, QuestionRequest, QuestionResponse, SetupProgressEvent, CompactionStatus, CompactionComplete, PlanApprovalRequest, PlanApprovalResponse } from '../../shared/types';
+import { AGENT_COLORS } from '../../shared/types';
 
 // Check if running in Electron environment
 const hasElectronAPI = typeof window !== 'undefined' && !!window.electronAPI;
@@ -34,6 +35,7 @@ export interface StreamEvent {
   timestamp: number;
   content?: string;
   toolCall?: ToolCall;
+  agentId?: string; // parent_tool_use_id from SDK (null/undefined = lead agent)
 }
 
 // Model info type
@@ -70,6 +72,8 @@ interface SessionState {
     timestamp: number;
   }>>;
   backgroundTasks: Record<string, BackgroundTask[]>;
+  // Agent teams tracking — maps agentId to assigned colour index per session
+  agentColorMap: Record<string, Record<string, number>>; // sessionId -> { agentId -> colorIndex }
 
   setActiveSession: (sessionId: string | null) => void;
   addSession: (session: Session) => void;
@@ -89,9 +93,10 @@ interface SessionState {
 
   // Chat
   addMessage: (sessionId: string, message: ChatMessage) => void;
-  updateStreamContent: (sessionId: string, content: string) => void;
+  updateStreamContent: (sessionId: string, content: string, agentId?: string) => void;
   updateThinkingContent: (sessionId: string, content: string) => void;
   addToolCall: (sessionId: string, toolCall: ToolCall) => void;
+  getAgentColor: (sessionId: string, agentId: string) => string;
   updateToolCall: (sessionId: string, toolCallId: string, updates: Partial<ToolCall>) => void;
   setStreaming: (sessionId: string, isStreaming: boolean) => void;
   setSystemInfo: (sessionId: string, systemInfo: SystemInfo | null) => void;
@@ -164,6 +169,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   compactionStatus: {},
   messageQueue: {},
   backgroundTasks: {},
+  agentColorMap: {},
 
   setActiveSession: async (sessionId) => {
     const { loadMessages, startSession } = get();
@@ -387,6 +393,27 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     };
   },
 
+  // Agent colour assignment — deterministic mapping of agentId to colour
+  getAgentColor: (sessionId, agentId) => {
+    const state = get();
+    const sessionMap = state.agentColorMap[sessionId] || {};
+    if (agentId in sessionMap) {
+      return AGENT_COLORS[sessionMap[agentId] % AGENT_COLORS.length];
+    }
+    // Assign next colour index
+    const nextIndex = Object.keys(sessionMap).length;
+    set((s) => ({
+      agentColorMap: {
+        ...s.agentColorMap,
+        [sessionId]: {
+          ...(s.agentColorMap[sessionId] || {}),
+          [agentId]: nextIndex,
+        },
+      },
+    }));
+    return AGENT_COLORS[nextIndex % AGENT_COLORS.length];
+  },
+
   // Chat methods
   addMessage: (sessionId, message) => {
     set((state) => ({
@@ -397,13 +424,13 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     }));
   },
 
-  updateStreamContent: (sessionId, content) => {
+  updateStreamContent: (sessionId, content, agentId?) => {
     set((state) => {
       const existingEvents = state.streamEvents[sessionId] || [];
       const lastEvent = existingEvents[existingEvents.length - 1];
 
-      // If the last event is already a text event, update it instead of creating a new one
-      if (lastEvent && lastEvent.type === 'text') {
+      // If the last event is already a text event from the SAME agent, update it instead of creating a new one
+      if (lastEvent && lastEvent.type === 'text' && lastEvent.agentId === agentId) {
         const updatedEvents = [...existingEvents];
         updatedEvents[updatedEvents.length - 1] = {
           ...lastEvent,
@@ -422,7 +449,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         };
       }
 
-      // Otherwise, create a new text event
+      // Otherwise, create a new text event (different agent or first event)
       return {
         currentStreamContent: {
           ...state.currentStreamContent,
@@ -432,7 +459,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           ...state.streamEvents,
           [sessionId]: [
             ...existingEvents,
-            { id: `text-${Date.now()}`, type: 'text', timestamp: Date.now(), content },
+            { id: `text-${Date.now()}`, type: 'text', timestamp: Date.now(), content, agentId },
           ],
         },
       };
@@ -486,7 +513,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           ...state.streamEvents,
           [sessionId]: [
             ...(state.streamEvents[sessionId] || []),
-            { id: toolCall.id, type: 'tool', timestamp: Date.now(), toolCall },
+            { id: toolCall.id, type: 'tool', timestamp: Date.now(), toolCall, agentId: toolCall.agentId },
           ],
         },
       };
@@ -524,6 +551,10 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       currentSystemInfo: isStreaming
         ? { ...state.currentSystemInfo, [sessionId]: null }
         : state.currentSystemInfo,
+      // Reset agent colour assignments when starting a new streaming session
+      agentColorMap: isStreaming
+        ? { ...state.agentColorMap, [sessionId]: {} }
+        : state.agentColorMap,
     }));
 
     // Process queued messages when streaming ends
@@ -794,8 +825,8 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     if (!hasElectronAPI) return () => {};
     const { addMessage, updateStreamContent, updateThinkingContent, addToolCall, updateToolCall, setStreaming, setSystemInfo } = get();
 
-    const unsubChunk = window.electronAPI.claude.onStreamChunk(({ sessionId, content }) => {
-      updateStreamContent(sessionId, content);
+    const unsubChunk = window.electronAPI.claude.onStreamChunk(({ sessionId, content, agentId }) => {
+      updateStreamContent(sessionId, content, agentId);
     });
 
     const unsubThinking = window.electronAPI.claude.onThinkingChunk(({ sessionId, content }) => {

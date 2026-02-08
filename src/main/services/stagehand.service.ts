@@ -200,12 +200,29 @@ export class StagehandService {
         }
 
         console.log('[Stagehand] Navigating to:', url);
-        await page.goto(url, { waitUntil: 'domcontentloaded' });
+
+        // Add timeout to page.goto (30 seconds)
+        const gotoPromise = page.goto(url, { waitUntil: 'domcontentloaded' });
+        const gotoTimeout = new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error('Navigation timed out after 30 seconds')), 30000)
+        );
+        await Promise.race([gotoPromise, gotoTimeout]);
 
         // Wait a bit for dynamic content
         await new Promise(resolve => setTimeout(resolve, 1000));
 
-        const screenshot = await this.captureScreenshot();
+        // Capture screenshot with timeout
+        let screenshot: string | undefined;
+        try {
+          const screenshotPromise = this.captureScreenshot();
+          const screenshotTimeout = new Promise<undefined>((resolve) =>
+            setTimeout(() => resolve(undefined), 5000)
+          );
+          screenshot = await Promise.race([screenshotPromise, screenshotTimeout]);
+        } catch (error) {
+          console.warn('[Stagehand] Screenshot failed during navigation, continuing without it:', error);
+          screenshot = undefined;
+        }
 
         return {
           success: true,
@@ -246,12 +263,30 @@ export class StagehandService {
         await this.ensureInitialized(sessionId);
 
         console.log('[Stagehand] Executing action:', instruction);
-        await this.stagehand!.act(instruction);
+
+        // Add timeout to prevent hanging forever (30 second timeout)
+        const actPromise = this.stagehand!.act(instruction);
+        const timeoutPromise = new Promise((_, reject) =>
+          setTimeout(() => reject(new Error('Action timed out after 30 seconds')), 30000)
+        );
+
+        await Promise.race([actPromise, timeoutPromise]);
 
         // Wait for any resulting page changes
         await new Promise(resolve => setTimeout(resolve, 500));
 
-        const screenshot = await this.captureScreenshot();
+        // Capture screenshot with timeout to prevent hanging
+        let screenshot: string | undefined;
+        try {
+          const screenshotPromise = this.captureScreenshot();
+          const screenshotTimeout = new Promise<undefined>((resolve) =>
+            setTimeout(() => resolve(undefined), 5000) // 5 second timeout for screenshot
+          );
+          screenshot = await Promise.race([screenshotPromise, screenshotTimeout]);
+        } catch (error) {
+          console.warn('[Stagehand] Screenshot failed, continuing without it:', error);
+          screenshot = undefined;
+        }
 
         return {
           success: true,
@@ -321,9 +356,26 @@ export class StagehandService {
       console.log('[Stagehand] Observing page:', instruction || 'all elements');
       // observe() requires a string instruction
       const observeInstruction = instruction || 'Find all interactive elements on the page';
-      const actions = await this.stagehand!.observe(observeInstruction);
 
-      const screenshot = await this.captureScreenshot();
+      // Add timeout to prevent hanging forever (30 second timeout)
+      const observePromise = this.stagehand!.observe(observeInstruction);
+      const timeoutPromise = new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('Observe timed out after 30 seconds')), 30000)
+      );
+      const actions = await Promise.race([observePromise, timeoutPromise]) as Array<{ selector: string; description: string }>;
+
+      // Capture screenshot with timeout
+      let screenshot: string | undefined;
+      try {
+        const screenshotPromise = this.captureScreenshot();
+        const screenshotTimeout = new Promise<undefined>((resolve) =>
+          setTimeout(() => resolve(undefined), 5000)
+        );
+        screenshot = await Promise.race([screenshotPromise, screenshotTimeout]);
+      } catch (error) {
+        console.warn('[Stagehand] Screenshot failed during observe, continuing without it:', error);
+        screenshot = undefined;
+      }
 
       return {
         success: true,
@@ -353,9 +405,25 @@ export class StagehandService {
       console.log('[Stagehand] Agent executing task:', task);
       const agentInstance = this.stagehand!.agent();
 
-      const result = await agentInstance.execute(task);
+      // Add timeout for agent execution (60 seconds for complex tasks)
+      const executePromise = agentInstance.execute(task);
+      const timeoutPromise = new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('Agent execution timed out after 60 seconds')), 60000)
+      );
+      const result = await Promise.race([executePromise, timeoutPromise]);
 
-      const screenshot = await this.captureScreenshot();
+      // Capture screenshot with timeout
+      let screenshot: string | undefined;
+      try {
+        const screenshotPromise = this.captureScreenshot();
+        const screenshotTimeout = new Promise<undefined>((resolve) =>
+          setTimeout(() => resolve(undefined), 5000)
+        );
+        screenshot = await Promise.race([screenshotPromise, screenshotTimeout]);
+      } catch (error) {
+        console.warn('[Stagehand] Screenshot failed during agent execution, continuing without it:', error);
+        screenshot = undefined;
+      }
 
       // Handle the result - it could be AgentResult or AgentStreamResult
       // eslint-disable-next-line @typescript-eslint/no-explicit-any

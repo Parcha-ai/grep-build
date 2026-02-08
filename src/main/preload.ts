@@ -140,8 +140,8 @@ const electronAPI = {
       ipcRenderer.invoke(IPC_CHANNELS.CLAUDE_GET_MODELS),
     cancel: (sessionId: string): Promise<void> =>
       ipcRenderer.invoke(IPC_CHANNELS.CLAUDE_CANCEL, sessionId),
-    onStreamChunk: (callback: (chunk: { sessionId: string; content: string }) => void) => {
-      const handler = (_: IpcRendererEvent, chunk: { sessionId: string; content: string }) => callback(chunk);
+    onStreamChunk: (callback: (chunk: { sessionId: string; content: string; agentId?: string }) => void) => {
+      const handler = (_: IpcRendererEvent, chunk: { sessionId: string; content: string; agentId?: string }) => callback(chunk);
       ipcRenderer.on(IPC_CHANNELS.CLAUDE_STREAM_CHUNK, handler);
       return () => ipcRenderer.removeListener(IPC_CHANNELS.CLAUDE_STREAM_CHUNK, handler);
     },
@@ -160,13 +160,13 @@ const electronAPI = {
       ipcRenderer.on(IPC_CHANNELS.CLAUDE_STREAM_ERROR, handler);
       return () => ipcRenderer.removeListener(IPC_CHANNELS.CLAUDE_STREAM_ERROR, handler);
     },
-    onToolCall: (callback: (data: { sessionId: string; toolCall: unknown }) => void) => {
-      const handler = (_: IpcRendererEvent, data: { sessionId: string; toolCall: unknown }) => callback(data);
+    onToolCall: (callback: (data: { sessionId: string; toolCall: unknown; agentId?: string }) => void) => {
+      const handler = (_: IpcRendererEvent, data: { sessionId: string; toolCall: unknown; agentId?: string }) => callback(data);
       ipcRenderer.on(IPC_CHANNELS.CLAUDE_TOOL_CALL, handler);
       return () => ipcRenderer.removeListener(IPC_CHANNELS.CLAUDE_TOOL_CALL, handler);
     },
-    onToolResult: (callback: (data: { sessionId: string; toolCall: unknown }) => void) => {
-      const handler = (_: IpcRendererEvent, data: { sessionId: string; toolCall: unknown }) => callback(data);
+    onToolResult: (callback: (data: { sessionId: string; toolCall: unknown; agentId?: string }) => void) => {
+      const handler = (_: IpcRendererEvent, data: { sessionId: string; toolCall: unknown; agentId?: string }) => callback(data);
       ipcRenderer.on(IPC_CHANNELS.CLAUDE_TOOL_RESULT, handler);
       return () => ipcRenderer.removeListener(IPC_CHANNELS.CLAUDE_TOOL_RESULT, handler);
     },

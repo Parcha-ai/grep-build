@@ -53,8 +53,9 @@ export interface Session {
   teleportedFrom?: string; // Original local session ID if teleported to SSH
   downloadedFrom?: string; // Session ID of source SSH session (reverse teleport)
   sdkSessionId?: string; // Claude Agent SDK session ID for transcript resumption
-  // Pinning/favorites
-  isPinned?: boolean; // True if session is pinned to top of recent sessions
+  // Starring/favorites
+  isStarred?: boolean; // True if session is starred
+  starredAt?: Date; // When it was starred (for stable ordering)
 }
 
 export type SessionStatus = 'creating' | 'starting' | 'setup' | 'running' | 'stopping' | 'stopped' | 'error';
@@ -126,6 +127,25 @@ export interface ToolCall {
   error?: string;
   startedAt?: Date;
   completedAt?: Date;
+  agentId?: string; // null/undefined = lead agent, string = teammate (parent_tool_use_id from SDK)
+}
+
+// Agent colour palette for teammate identification
+export const AGENT_COLORS = [
+  '#3B82F6', // blue
+  '#8B5CF6', // violet
+  '#EC4899', // pink
+  '#F59E0B', // amber
+  '#10B981', // emerald
+  '#06B6D4', // cyan
+  '#F97316', // orange
+  '#6366F1', // indigo
+] as const;
+
+export interface AgentInfo {
+  id: string;        // parent_tool_use_id from SDK
+  name?: string;     // Agent name if available (e.g., "bond", "explore")
+  color: string;     // Assigned colour from AGENT_COLORS palette
 }
 
 // Content block for interleaved rendering of text and tool calls
@@ -133,6 +153,7 @@ export interface ContentBlock {
   type: 'text' | 'tool_use';
   text?: string; // For text blocks
   toolCallId?: string; // For tool_use blocks - reference to toolCalls array
+  agentId?: string; // Which agent produced this block (null = lead agent)
 }
 
 export interface ChatMessage {

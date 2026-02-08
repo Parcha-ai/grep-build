@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Play, Square, Trash2, GitBranch, GitFork, Server, Upload, Pencil, Pin, Download } from 'lucide-react';
+import { Play, Square, Trash2, GitBranch, GitFork, Server, Upload, Pencil, Star, Download } from 'lucide-react';
 import { useSessionStore } from '../../stores/session.store';
 import type { Session } from '../../../shared/types';
 
@@ -97,9 +97,13 @@ export default function SessionCard({ session, isActive, onClick, isFork = false
     startRenaming();
   };
 
-  const handlePinToggle = (e: React.MouseEvent) => {
+  const handleStarToggle = (e: React.MouseEvent) => {
     e.stopPropagation();
-    updateSession(session.id, { isPinned: !session.isPinned });
+    if (session.isStarred) {
+      updateSession(session.id, { isStarred: false, starredAt: undefined });
+    } else {
+      updateSession(session.id, { isStarred: true, starredAt: new Date() });
+    }
   };
 
   const startRenaming = () => {
@@ -230,21 +234,22 @@ export default function SessionCard({ session, isActive, onClick, isFork = false
           </div>
         </div>
 
+        {/* Star button - always visible when starred, hover-only otherwise */}
+        <button
+          onClick={handleStarToggle}
+          className={`p-1 transition-all ${
+            session.isStarred
+              ? 'text-amber-400 hover:bg-amber-400/20'
+              : 'opacity-0 group-hover:opacity-100 text-claude-text-secondary hover:bg-claude-text-secondary/20'
+          }`}
+          style={{ borderRadius: 0 }}
+          title={session.isStarred ? 'Unstar session' : 'Star session'}
+        >
+          <Star size={12} fill={session.isStarred ? 'currentColor' : 'none'} />
+        </button>
+
         {/* Actions - brutalist */}
         <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
-          {/* Pin button - only shows on hover, unless already pinned */}
-          <button
-            onClick={handlePinToggle}
-            className={`p-1 transition-colors ${
-              session.isPinned
-                ? 'opacity-100 text-claude-accent hover:bg-claude-accent/20'
-                : 'text-claude-text-secondary hover:bg-claude-text-secondary/20'
-            }`}
-            style={{ borderRadius: 0 }}
-            title={session.isPinned ? 'Unpin session' : 'Pin session'}
-          >
-            <Pin size={12} />
-          </button>
           {session.status === 'stopped' && (
             <button
               onClick={handleStart}

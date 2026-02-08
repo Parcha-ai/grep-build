@@ -1150,21 +1150,6 @@ ${data.textContent ? `**Text Content:** "${data.textContent.slice(0, 100)}${data
         </form>
 
         {/* Actions */}
-        {/* Stagehand/Webview toggle */}
-        {stagehandScreenshot && (
-          <button
-            onClick={() => setShowStagehand(!showStagehand)}
-            className={`p-1.5 rounded transition-colors ${
-              showStagehand
-                ? 'text-white'
-                : 'hover:bg-claude-bg text-claude-text-secondary'
-            }`}
-            style={showStagehand ? { backgroundColor: '#10B981' } : undefined}
-            title={showStagehand ? 'Showing AI Browser (click to show webview)' : 'Showing Webview (click to show AI browser)'}
-          >
-            <Bot size={16} />
-          </button>
-        )}
         <button
           onClick={() => setInspectorActive(!isInspectorActive)}
           className={`p-1.5 rounded transition-colors ${
@@ -1217,31 +1202,13 @@ ${data.textContent ? `**Text Content:** "${data.textContent.slice(0, 100)}${data
         }`}
         style={isAutomationActive ? { '--tw-ring-color': '#5D5FEF' } as React.CSSProperties : undefined}
       >
-        {/* Stagehand Screenshot View (AI Browser) */}
-        {showStagehand && stagehandScreenshot && (
-          <div className="absolute inset-0 w-full h-full bg-gray-900 flex flex-col">
-            <div className="flex-1 relative overflow-auto">
-              <img
-                src={`data:image/png;base64,${stagehandScreenshot}`}
-                alt="AI Browser View"
-                className="w-full h-auto"
-              />
-            </div>
-            {/* Stagehand mode indicator */}
-            <div className="absolute bottom-2 left-2 z-50 flex items-center gap-2 text-white px-3 py-1.5 rounded-full text-xs font-medium" style={{ backgroundColor: 'rgba(16,185,129,0.9)' }}>
-              <Bot size={14} />
-              <span>AI Browser (Stagehand)</span>
-              {stagehandUrl && <span className="opacity-75 ml-1">{new URL(stagehandUrl).hostname}</span>}
-            </div>
-          </div>
-        )}
-
-        {/* Traditional Webview (hidden when showing Stagehand) */}
+        {/* Live webview — always visible. Stagehand controls this same webview via CDP,
+            so the user sees automation happening in real time. */}
         <webview
           key={session.id}
           ref={webviewRef}
           src={initialUrl.current}
-          className={`absolute inset-0 w-full h-full ${showStagehand && stagehandScreenshot ? 'invisible' : ''}`}
+          className="absolute inset-0 w-full h-full"
           partition={`persist:browser-${session.id}`}
           webpreferences="contextIsolation=no"
         />

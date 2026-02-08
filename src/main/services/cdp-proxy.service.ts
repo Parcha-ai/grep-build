@@ -29,6 +29,18 @@ export class CdpProxyService {
   private attachedSessions = new Map<string, { targetId: string; sessionId: string }>();
   private sessionCounter = 0;
 
+  // Track browser-level WebSocket clients (for broadcasting lifecycle events)
+  private browserClients = new Set<WebSocket>();
+
+  // Track browser clients that have autoAttach enabled (for attaching to new targets)
+  private autoAttachClients = new Map<WebSocket, { flatten: boolean }>();
+
+  // Track detach handlers so we can clean them up (keyed by targetId)
+  private detachHandlers = new Map<string, { wc: Electron.WebContents; handler: (...args: any[]) => void }>();
+
+  // Default timeout for CDP commands (30 seconds)
+  private static readonly COMMAND_TIMEOUT_MS = 30000;
+
   /**
    * Start the CDP proxy server (HTTP + WebSocket)
    */
@@ -183,6 +195,9 @@ export class CdpProxyService {
       type: 'browser'
     });
 
+    // Track this as a browser-level client for lifecycle event broadcasting
+    this.browserClients.add(ws);
+
     // Handle incoming CDP commands
     ws.on('message', async (data) => {
       try {
@@ -196,6 +211,11 @@ export class CdpProxyService {
     ws.on('close', () => {
       console.log('[CDP Proxy] Browser connection closed');
       this.activeConnections.delete(ws);
+      this.browserClients.delete(ws);
+      this.autoAttachClients.delete(ws);
+      // Clear attached sessions so the next browser client can re-attach to targets.
+      // Without this, targets stay "attached" in the map and setAutoAttach skips them.
+      this.attachedSessions.clear();
     });
 
     ws.on('error', (error) => {
@@ -209,7 +229,6 @@ export class CdpProxyService {
    */
   private async handleBrowserCommand(ws: WebSocket, message: { id: number; method: string; params?: any; sessionId?: string }): Promise<void> {
     const { id, method, params, sessionId: messageSessionId } = message;
-    console.log('[CDP Proxy] Browser command:', method, messageSessionId ? `(session: ${messageSessionId})` : '');
 
     try {
       let result: any;
@@ -275,6 +294,13 @@ export class CdpProxyService {
 
                 // Always set up event forwarding for this session (even if debugger was already attached)
                 const eventHandler = (_event: any, eventMethod: string, eventParams: any) => {
+                  // Log navigation-critical events for debugging
+                  if (eventMethod.startsWith('Page.') || eventMethod === 'Runtime.executionContextCreated' || eventMethod === 'Runtime.executionContextDestroyed') {
+                    const extra = eventMethod === 'Page.lifecycleEvent' ? `name=${eventParams?.name} frameId=${eventParams?.frameId}` :
+                                  eventMethod === 'Page.frameNavigated' ? `url=${eventParams?.frame?.url}` :
+                                  eventMethod === 'Page.navigatedWithinDocument' ? `url=${eventParams?.url}` : '';
+                    console.log(`[CDP Proxy] Event[${sessionIdStr}] → Playwright: ${eventMethod} ${extra}`);
+                  }
                   if (flatten && ws.readyState === WebSocket.OPEN) {
                     this.sendEvent(ws, eventMethod, eventParams, sessionIdStr);
                   }
@@ -284,6 +310,41 @@ export class CdpProxyService {
                 // Clean up event handler when WebSocket closes
                 ws.on('close', () => {
                   wc.debugger.off('message', eventHandler);
+                });
+
+                // Handle debugger detachment (navigation, destruction, DevTools opened, crash)
+                const detachHandler = (_event: any, reason: string) => {
+                  console.log(`[CDP Proxy] Debugger detached from target ${targetId}: ${reason}`);
+
+                  // Clean up the attached session
+                  this.attachedSessions.delete(targetId);
+
+                  // Notify Playwright that the session is detached and target is destroyed
+                  if (ws.readyState === WebSocket.OPEN) {
+                    this.sendEvent(ws, 'Target.detachedFromTarget', {
+                      sessionId: sessionIdStr,
+                      reason
+                    });
+                    this.sendEvent(ws, 'Target.targetDestroyed', {
+                      targetId
+                    });
+                  }
+
+                  // Clean up the detach handler tracking
+                  this.detachHandlers.delete(targetId);
+
+                  // Remove the message event handler since debugger is gone
+                  wc.debugger.off('message', eventHandler);
+                };
+                wc.debugger.on('detach', detachHandler);
+
+                // Track the detach handler for cleanup
+                this.detachHandlers.set(targetId, { wc, handler: detachHandler });
+
+                // Also clean up detach handler when WebSocket closes
+                ws.on('close', () => {
+                  wc.debugger.off('detach', detachHandler);
+                  this.detachHandlers.delete(targetId);
                 });
               } catch (err) {
                 console.log('[CDP Proxy] Debugger attach note:', err);
@@ -345,10 +406,53 @@ export class CdpProxyService {
           result = { success: false };
           break;
 
+        case 'Target.getTargetInfo':
+          // If a targetId is provided, return that specific target's info
+          if (params?.targetId) {
+            const tgtWcId = browserService.getWebContentsId(params.targetId);
+            if (tgtWcId) {
+              const tgtWc = webContents.fromId(tgtWcId);
+              result = {
+                targetInfo: {
+                  targetId: params.targetId,
+                  type: 'page',
+                  title: tgtWc?.getTitle?.() || '',
+                  url: tgtWc?.getURL() || '',
+                  attached: this.attachedSessions.has(params.targetId),
+                  browserContextId: 'default'
+                }
+              };
+            } else {
+              throw new Error(`Target not found: ${params.targetId}`);
+            }
+          } else {
+            // No targetId — return browser target info (Playwright sends this after setAutoAttach)
+            result = {
+              targetInfo: {
+                targetId: 'browser',
+                type: 'browser',
+                title: '',
+                url: '',
+                attached: true,
+                browserContextId: ''
+              }
+            };
+          }
+          break;
+
         case 'Target.setAutoAttach':
           result = {};
-          // If autoAttach is enabled, auto-attach to existing targets
-          if (params?.autoAttach && params?.waitForDebuggerOnStart === false) {
+          // Track this client for auto-attach so we can notify when new targets appear
+          if (params?.autoAttach) {
+            this.autoAttachClients.set(ws, { flatten: params?.flatten ?? true });
+            console.log('[CDP Proxy] Auto-attach enabled for browser client');
+          } else {
+            this.autoAttachClients.delete(ws);
+          }
+          // Auto-attach to existing targets
+          // Note: Playwright sends waitForDebuggerOnStart=true, but our targets are already
+          // running so we always send waitingForDebugger=false in the attachedToTarget event
+          if (params?.autoAttach) {
             const targets = this.getTargets();
             for (const target of targets) {
               if (!this.attachedSessions.has(target.id)) {
@@ -359,16 +463,45 @@ export class CdpProxyService {
                 const autoWcId = browserService.getWebContentsId(target.id);
                 if (autoWcId) {
                   const autoWc = webContents.fromId(autoWcId);
-                  if (autoWc && !autoWc.debugger.isAttached()) {
+                  if (autoWc) {
                     try {
-                      autoWc.debugger.attach('1.3');
-                      autoWc.debugger.on('message', (_event, eventMethod, eventParams) => {
-                        if (params?.flatten) {
+                      if (!autoWc.debugger.isAttached()) {
+                        autoWc.debugger.attach('1.3');
+                      }
+
+                      // Set up event forwarding with proper cleanup tracking
+                      const autoEventHandler = (_event: any, eventMethod: string, eventParams: any) => {
+                        if (params?.flatten && ws.readyState === WebSocket.OPEN) {
                           this.sendEvent(ws, eventMethod, eventParams, autoSessionId);
                         }
+                      };
+                      autoWc.debugger.on('message', autoEventHandler);
+
+                      // Handle debugger detachment for auto-attached targets
+                      const autoDetachHandler = (_event: any, reason: string) => {
+                        console.log(`[CDP Proxy] Auto-attached debugger detached from ${target.id}: ${reason}`);
+                        this.attachedSessions.delete(target.id);
+                        if (ws.readyState === WebSocket.OPEN) {
+                          this.sendEvent(ws, 'Target.detachedFromTarget', {
+                            sessionId: autoSessionId,
+                            reason
+                          });
+                          this.sendEvent(ws, 'Target.targetDestroyed', {
+                            targetId: target.id
+                          });
+                        }
+                        autoWc.debugger.off('message', autoEventHandler);
+                      };
+                      autoWc.debugger.on('detach', autoDetachHandler);
+
+                      // Clean up handlers when WebSocket closes (prevents orphaned listeners)
+                      ws.on('close', () => {
+                        autoWc.debugger.off('message', autoEventHandler);
+                        autoWc.debugger.off('detach', autoDetachHandler);
                       });
                     } catch (err) {
-                      // Already attached
+                      // Already attached or attachment failed
+                      console.log('[CDP Proxy] Auto-attach debugger note:', err);
                     }
                   }
                 }
@@ -445,6 +578,29 @@ export class CdpProxyService {
   }
 
   /**
+   * Send a CDP command with a timeout to prevent infinite hangs.
+   * Electron's debugger.sendCommand() can silently hang forever if the debugger
+   * detaches between sending and receiving a response. This wrapper ensures
+   * we always get a resolution (or rejection) within a bounded time.
+   */
+  private async sendCommandWithTimeout(
+    wc: Electron.WebContents,
+    method: string,
+    params?: any,
+    timeoutMs: number = CdpProxyService.COMMAND_TIMEOUT_MS
+  ): Promise<any> {
+    return Promise.race([
+      wc.debugger.sendCommand(method, params || {}),
+      new Promise((_, reject) =>
+        setTimeout(
+          () => reject(new Error(`CDP command '${method}' timed out after ${timeoutMs}ms (debugger may be detached or target destroyed)`)),
+          timeoutMs
+        )
+      )
+    ]);
+  }
+
+  /**
    * Forward a command to a page via target ID
    */
   private async forwardToPageByTargetId(targetId: string, method: string, params?: any): Promise<any> {
@@ -467,7 +623,12 @@ export class CdpProxyService {
     const cleanParams = { ...params };
     delete cleanParams.sessionId;
 
-    return wc.debugger.sendCommand(method, cleanParams);
+    // Log navigation-critical commands for debugging
+    if (method.startsWith('Page.') || method.startsWith('Runtime.')) {
+      console.log(`[CDP Proxy] Command[${targetId}] → debugger: ${method}`, method === 'Page.navigate' ? JSON.stringify(cleanParams) : '');
+    }
+
+    return this.sendCommandWithTimeout(wc, method, cleanParams);
   }
 
   /**
@@ -517,14 +678,26 @@ export class CdpProxyService {
     };
     wc.debugger.on('message', eventHandler);
 
-    // Handle incoming commands
+    // Handle debugger detachment for page-level connections
+    const detachHandler = (_event: any, reason: string) => {
+      console.log(`[CDP Proxy] Page debugger detached from target ${targetId}: ${reason}`);
+      wc.debugger.off('message', eventHandler);
+      this.activeConnections.delete(ws);
+      // Close the WebSocket to signal Playwright that the connection is gone
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.close(1001, `Debugger detached: ${reason}`);
+      }
+    };
+    wc.debugger.on('detach', detachHandler);
+
+    // Handle incoming commands (with timeout protection)
     ws.on('message', async (data) => {
       try {
         const message = JSON.parse(data.toString());
         const { id, method, params } = message;
 
         try {
-          const result = await wc.debugger.sendCommand(method, params || {});
+          const result = await this.sendCommandWithTimeout(wc, method, params);
           if (ws.readyState === WebSocket.OPEN) {
             ws.send(JSON.stringify({ id, result }));
           }
@@ -547,6 +720,7 @@ export class CdpProxyService {
     ws.on('close', () => {
       console.log('[CDP Proxy] Page connection closed:', targetId);
       wc.debugger.off('message', eventHandler);
+      wc.debugger.off('detach', detachHandler);
       this.activeConnections.delete(ws);
     });
   }
@@ -607,6 +781,8 @@ export class CdpProxyService {
     }
     this.activeConnections.clear();
     this.attachedSessions.clear();
+    this.browserClients.clear();
+    this.detachHandlers.clear();
 
     if (this.wss) {
       this.wss.close();
@@ -670,6 +846,159 @@ export class CdpProxyService {
     }
 
     return targets;
+  }
+
+  /**
+   * Notify auto-attach clients that a new webview target has appeared.
+   * Called by browser.service.ts when a webview registers AFTER Playwright
+   * has already called Target.setAutoAttach (solves the race condition where
+   * Stagehand connects before the browser panel's webview is ready).
+   */
+  notifyNewTarget(sessionId: string): void {
+    if (this.autoAttachClients.size === 0) {
+      return; // No clients waiting for auto-attach
+    }
+
+    const wcId = browserService.getWebContentsId(sessionId);
+    if (!wcId) {
+      console.log(`[CDP Proxy] notifyNewTarget: no webContentsId for session ${sessionId}`);
+      return;
+    }
+
+    const wc = webContents.fromId(wcId);
+    if (!wc) {
+      console.log(`[CDP Proxy] notifyNewTarget: webContents not found for wcId ${wcId}`);
+      return;
+    }
+
+    // Skip if this target is already attached
+    if (this.attachedSessions.has(sessionId)) {
+      console.log(`[CDP Proxy] notifyNewTarget: session ${sessionId} already attached, skipping`);
+      return;
+    }
+
+    console.log(`[CDP Proxy] notifyNewTarget: new webview registered (session=${sessionId}), notifying ${this.autoAttachClients.size} auto-attach client(s)`);
+
+    // For each auto-attach client, attach to this new target
+    for (const [ws, config] of this.autoAttachClients) {
+      if (ws.readyState !== WebSocket.OPEN) {
+        this.autoAttachClients.delete(ws);
+        continue;
+      }
+
+      const autoSessionId = `session-${++this.sessionCounter}`;
+      this.attachedSessions.set(sessionId, { targetId: sessionId, sessionId: autoSessionId });
+
+      try {
+        if (!wc.debugger.isAttached()) {
+          wc.debugger.attach('1.3');
+        }
+
+        // Set up event forwarding
+        const autoEventHandler = (_event: any, eventMethod: string, eventParams: any) => {
+          if (config.flatten && ws.readyState === WebSocket.OPEN) {
+            this.sendEvent(ws, eventMethod, eventParams, autoSessionId);
+          }
+        };
+        wc.debugger.on('message', autoEventHandler);
+
+        // Handle debugger detachment
+        const autoDetachHandler = (_event: any, reason: string) => {
+          console.log(`[CDP Proxy] Auto-attached debugger detached from ${sessionId}: ${reason}`);
+          this.attachedSessions.delete(sessionId);
+          if (ws.readyState === WebSocket.OPEN) {
+            this.sendEvent(ws, 'Target.detachedFromTarget', {
+              sessionId: autoSessionId,
+              reason
+            });
+            this.sendEvent(ws, 'Target.targetDestroyed', {
+              targetId: sessionId
+            });
+          }
+          wc.debugger.off('message', autoEventHandler);
+        };
+        wc.debugger.on('detach', autoDetachHandler);
+
+        // Clean up when WebSocket closes
+        ws.on('close', () => {
+          try {
+            wc.debugger.off('message', autoEventHandler);
+            wc.debugger.off('detach', autoDetachHandler);
+          } catch {
+            // webContents may already be destroyed
+          }
+        });
+      } catch (err) {
+        console.log('[CDP Proxy] notifyNewTarget: debugger attach note:', err);
+      }
+
+      // Send the Target.attachedToTarget event — this is what Playwright is waiting for!
+      this.sendEvent(ws, 'Target.attachedToTarget', {
+        sessionId: autoSessionId,
+        targetInfo: {
+          targetId: sessionId,
+          type: 'page',
+          title: wc.getTitle?.() || '',
+          url: wc.getURL() || '',
+          attached: true,
+          browserContextId: 'default'
+        },
+        waitingForDebugger: false
+      });
+
+      console.log(`[CDP Proxy] notifyNewTarget: sent attachedToTarget for session=${sessionId}, cdpSession=${autoSessionId}`);
+    }
+  }
+
+  /**
+   * Clean up CDP proxy state when a webview is unregistered.
+   * Called by browser.service.ts when a webview is removed.
+   * Removes stale sessions and notifies connected Playwright clients.
+   */
+  unregisterWebview(sessionId: string, webContentsId: number): void {
+    console.log(`[CDP Proxy] Cleaning up for unregistered webview: session=${sessionId}, wcId=${webContentsId}`);
+
+    // Find and remove any attached sessions for this target
+    const session = this.attachedSessions.get(sessionId);
+    if (session) {
+      this.attachedSessions.delete(sessionId);
+      console.log(`[CDP Proxy] Removed attached session ${session.sessionId} for target ${sessionId}`);
+
+      // Notify all connected browser-level WebSocket clients
+      for (const ws of this.browserClients) {
+        if (ws.readyState === WebSocket.OPEN) {
+          this.sendEvent(ws, 'Target.detachedFromTarget', {
+            sessionId: session.sessionId,
+            reason: 'webview unregistered'
+          });
+          this.sendEvent(ws, 'Target.targetDestroyed', {
+            targetId: sessionId
+          });
+        }
+      }
+    }
+
+    // Clean up any detach handlers for this target
+    const detachEntry = this.detachHandlers.get(sessionId);
+    if (detachEntry) {
+      try {
+        detachEntry.wc.debugger.off('detach', detachEntry.handler);
+      } catch {
+        // webContents may already be destroyed
+      }
+      this.detachHandlers.delete(sessionId);
+    }
+
+    // Close any page-level connections for this webContents
+    for (const [ws, conn] of this.activeConnections) {
+      if (conn.webContentsId === webContentsId && conn.type === 'page') {
+        console.log(`[CDP Proxy] Closing page connection for destroyed webview: ${sessionId}`);
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.close(1001, 'Webview unregistered');
+        }
+        this.activeConnections.delete(ws);
+      }
+    }
   }
 
   /**

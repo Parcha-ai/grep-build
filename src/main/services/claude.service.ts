@@ -40,6 +40,9 @@ interface StreamEvent {
   // Plan content fields
   planContent?: string;
   planFilePath?: string;
+  // Agent teams fields
+  agentId?: string; // parent_tool_use_id from SDK (null = lead agent)
+  agentName?: string; // Descriptive name for the agent/teammate
 }
 
 interface PendingQuestion {
@@ -711,12 +714,17 @@ ${memoriesPrompt}
           const { instruction } = args;
           console.log('[Claude Service] AI data extraction:', instruction);
 
-          // Use a simple schema - Stagehand will interpret based on instruction
+          // Use a simple schema compatible with Gemini's structured output API.
+          // z.record() doesn't produce valid Gemini schema (missing items field),
+          // so we use explicit object properties instead.
           const flexibleSchema = z.object({
-            items: z.array(z.record(z.string(), z.string())).describe('Extracted items'),
+            items: z.array(z.object({
+              label: z.string().describe('Label or key for the extracted item'),
+              value: z.string().describe('Value or content of the extracted item'),
+            })).describe('Extracted items as label-value pairs'),
           });
 
-          const result = await stagehandService.extract<{ items: Array<Record<string, string>> }>(instruction, flexibleSchema);
+          const result = await stagehandService.extract<{ items: Array<{ label: string; value: string }> }>(instruction, flexibleSchema);
 
           if (result.success && result.data) {
             return {
@@ -2007,8 +2015,10 @@ Begin by creating the task structure now.
           permissionMode: sdkPermissionMode,
           ...(requiresDangerFlag ? { allowDangerouslySkipPermissions: true } : {}),
           includePartialMessages: true,
-          // Use selected model or default to Claude Opus 4.5
-          model: model || 'claude-opus-4-5-20251101',
+          // Use selected model or default to Claude Opus 4.6
+          model: model || 'claude-opus-4-6',
+          // Enable 1M context window (beta) for Opus 4.6 and Sonnet 4.5
+          betas: ['context-1m-2025-08-07'],
           ...(maxThinkingTokens ? { maxThinkingTokens } : {}),
           // Ultra Plan Mode: Add hooks if enabled
           ...(hooks ? { hooks } : {}),
@@ -2022,10 +2032,11 @@ Begin by creating the task structure now.
           // Skills are discovered automatically by the SDK from these filesystem locations
           // User skills: ~/.claude/skills/, Project skills: .claude/skills/
           settingSources: ['user', 'project'],
-          // Pass environment with API key
+          // Pass environment with API key and enable agent teams
           env: {
             ...process.env,
             ANTHROPIC_API_KEY: apiKey,
+            CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS: '1',
           },
           // Resume previous conversation if we have an SDK session ID
           ...(sdkSessionId ? { resume: sdkSessionId } : {}),
@@ -2247,6 +2258,11 @@ Begin by creating the task structure now.
       const toolCalls: ToolCall[] = [];
       const contentBlocks: ContentBlock[] = []; // Track content blocks in order
 
+      // Agent teams tracking — parent_tool_use_id identifies which agent is producing content
+      // null = lead agent, string = a teammate spawned via TeammateTool
+      let currentAgentId: string | undefined = undefined;
+      const agentNames = new Map<string, string>(); // agentId -> descriptive name
+
       // Batching for stream events to reduce render overhead
       let textBuffer = '';
       let thinkingBuffer = '';
@@ -2259,15 +2275,15 @@ Begin by creating the task structure now.
           const content = textBuffer;
           textBuffer = '';
 
-          // Add or extend text block in contentBlocks
+          // Add or extend text block in contentBlocks (only merge if same agent)
           const lastBlock = contentBlocks[contentBlocks.length - 1];
-          if (lastBlock && lastBlock.type === 'text') {
+          if (lastBlock && lastBlock.type === 'text' && lastBlock.agentId === currentAgentId) {
             lastBlock.text = (lastBlock.text || '') + content;
           } else {
-            contentBlocks.push({ type: 'text', text: content });
+            contentBlocks.push({ type: 'text', text: content, agentId: currentAgentId });
           }
 
-          return { text: content };
+          return { text: content, agentId: currentAgentId };
         }
         if (thinkingBuffer) {
           const content = thinkingBuffer;
@@ -2307,23 +2323,9 @@ Begin by creating the task structure now.
               const isCompacting = systemMsg.status === 'compacting';
               console.log('[Claude SDK] Compaction status:', isCompacting ? 'COMPACTING' : 'idle');
 
-              // Determine if Smart Compact is needed
-              // Smart Compact: if using Opus or other models without extended context, we note it
-              const currentModel = model || 'claude-opus-4-5-20251101';
-              const isOpus = currentModel.includes('opus');
-              const needsSmartCompact = isOpus && isCompacting;
-
               const compactionStatus: CompactionStatus = {
                 sessionId,
                 isCompacting,
-                ...(needsSmartCompact && {
-                  smartCompact: {
-                    enabled: true,
-                    originalModel: currentModel,
-                    compactingModel: 'claude-sonnet-4-5-20250929',
-                    reason: 'Opus does not support extended context - using Sonnet for compaction',
-                  },
-                }),
               };
 
               // Emit to renderer via IPC
@@ -2345,10 +2347,6 @@ Begin by creating the task structure now.
               const compactionComplete: CompactionComplete = {
                 sessionId,
                 preTokens: systemMsg.compact_metadata.pre_tokens,
-                smartCompact: {
-                  modelSwitched: (model || '').includes('opus'),
-                  restoredModel: model || 'claude-opus-4-5-20251101',
-                },
               };
 
               // Emit to renderer via IPC
@@ -2382,7 +2380,11 @@ Begin by creating the task structure now.
           case 'assistant': {
             // Full assistant message - only process tool_use blocks here
             // Text and thinking are handled via stream_event for real-time streaming
-            const assistantMsg = msg as SDKMessage & { message?: { content?: Array<{ type: string; text?: string; thinking?: string; name?: string; id?: string; input?: Record<string, unknown> }> } };
+            const assistantMsg = msg as SDKMessage & { parent_tool_use_id?: string | null; message?: { content?: Array<{ type: string; text?: string; thinking?: string; name?: string; id?: string; input?: Record<string, unknown> }> } };
+
+            // Track which agent is producing this content
+            currentAgentId = assistantMsg.parent_tool_use_id || undefined;
+
             if (assistantMsg.message?.content) {
               // Log all block types to debug tool detection
               const blockTypes = assistantMsg.message.content.map(b => `${b.type}${b.type === 'tool_use' ? ':' + (b.name || '?') : ''}`).join(', ');
@@ -2412,18 +2414,19 @@ Begin by creating the task structure now.
                       input: block.input || {},
                       status: 'running',
                       startedAt: new Date(),
+                      agentId: currentAgentId,
                     };
                     toolCalls.push(toolCall);
                     // Add tool_use content block to track order
-                    contentBlocks.push({ type: 'tool_use', toolCallId: toolCall.id });
-                    yield { type: 'tool_use', toolCall };
+                    contentBlocks.push({ type: 'tool_use', toolCallId: toolCall.id, agentId: currentAgentId });
+                    yield { type: 'tool_use', toolCall, agentId: currentAgentId };
                   } else {
                     // Update existing tool call with complete input from full assistant message
                     // stream_event often fires with empty input, this has the complete data
                     if (block.input && Object.keys(block.input).length > 0) {
                       existingTool.input = block.input;
                       // Emit tool_use again to trigger UI update with complete input
-                      yield { type: 'tool_use', toolCall: existingTool };
+                      yield { type: 'tool_use', toolCall: existingTool, agentId: currentAgentId };
                     }
                   }
                 }
@@ -2437,7 +2440,11 @@ Begin by creating the task structure now.
           case 'stream_event': {
             // Partial/streaming message events - includes thinking deltas and tool use starts
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            const streamMsg = msg as SDKMessage & { event?: any };
+            const streamMsg = msg as SDKMessage & { event?: any; parent_tool_use_id?: string | null };
+
+            // Track which agent is producing this stream content
+            currentAgentId = streamMsg.parent_tool_use_id || undefined;
+
             if (streamMsg.event) {
               const event = streamMsg.event;
 
@@ -2451,7 +2458,7 @@ Begin by creating the task structure now.
                   if (now - lastFlush >= FLUSH_INTERVAL_MS || textBuffer.length >= 100) {
                     const flushed = flushBuffers();
                     if (flushed?.text) {
-                      yield { type: 'text_delta', content: flushed.text };
+                      yield { type: 'text_delta', content: flushed.text, agentId: currentAgentId };
                     }
                     lastFlush = now;
                   }
@@ -2476,18 +2483,19 @@ Begin by creating the task structure now.
                   // Check if we already have this tool call (from assistant message)
                   const existingTool = toolCalls.find(tc => tc.id === event.content_block.id);
                   if (!existingTool) {
-                    console.log('[Claude SDK] Tool start:', event.content_block.name);
+                    console.log('[Claude SDK] Tool start:', event.content_block.name, currentAgentId ? `(agent: ${currentAgentId.slice(0, 8)})` : '(lead)');
                     const toolCall: ToolCall = {
                       id: event.content_block.id || `tool-${Date.now()}`,
                       name: event.content_block.name,
                       input: event.content_block.input || {},
                       status: 'running',
                       startedAt: new Date(),
+                      agentId: currentAgentId,
                     };
                     toolCalls.push(toolCall);
                     // Add tool_use content block to track order
-                    contentBlocks.push({ type: 'tool_use', toolCallId: toolCall.id });
-                    yield { type: 'tool_use', toolCall };
+                    contentBlocks.push({ type: 'tool_use', toolCallId: toolCall.id, agentId: currentAgentId });
+                    yield { type: 'tool_use', toolCall, agentId: currentAgentId };
                   }
                 }
               }
@@ -2498,25 +2506,29 @@ Begin by creating the task structure now.
           case 'tool_progress': {
             // Tool execution progress - may contain tool details we need
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            const progressMsg = msg as SDKMessage & { tool_use_id?: string; tool_name?: string; content?: any };
+            const progressMsg = msg as SDKMessage & { tool_use_id?: string; tool_name?: string; parent_tool_use_id?: string | null; content?: any };
             console.log('[Claude SDK] Tool progress:', JSON.stringify(progressMsg).slice(0, 300));
+
+            // Track agent from tool_progress messages too
+            const progressAgentId = progressMsg.parent_tool_use_id || undefined;
 
             // Check if this has tool information we should capture
             if (progressMsg.tool_name && progressMsg.tool_use_id) {
               const existingTool = toolCalls.find(tc => tc.id === progressMsg.tool_use_id);
               if (!existingTool) {
-                console.log('[Claude SDK] Tool from progress:', progressMsg.tool_name);
+                console.log('[Claude SDK] Tool from progress:', progressMsg.tool_name, progressAgentId ? `(agent: ${progressAgentId.slice(0, 8)})` : '(lead)');
                 const toolCall: ToolCall = {
                   id: progressMsg.tool_use_id,
                   name: progressMsg.tool_name,
                   input: {},
                   status: 'running',
                   startedAt: new Date(),
+                  agentId: progressAgentId,
                 };
                 toolCalls.push(toolCall);
                 // Add tool_use content block to track order
-                contentBlocks.push({ type: 'tool_use', toolCallId: toolCall.id });
-                yield { type: 'tool_use', toolCall };
+                contentBlocks.push({ type: 'tool_use', toolCallId: toolCall.id, agentId: progressAgentId });
+                yield { type: 'tool_use', toolCall, agentId: progressAgentId };
               }
             }
             break;

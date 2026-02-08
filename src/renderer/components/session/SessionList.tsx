@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { ChevronRight, ChevronDown, Folder, Plus, Zap, Loader2, Search, GitFork, Server } from 'lucide-react';
+import { ChevronRight, ChevronDown, Folder, Plus, Zap, Loader2, Search, GitFork, Server, Star } from 'lucide-react';
 import { useSessionStore } from '../../stores/session.store';
 import SessionCard from './SessionCard';
 import NewSessionDialog from './NewSessionDialog';
@@ -198,23 +198,33 @@ export default function SessionList() {
     return sorted;
   }, [sessions.map(s => s.id).join(',')]); // Only re-sort when session IDs change (add/remove)
 
-  // Get recent sessions (running sessions + recently used)
-  // Limited to 10 most recent for the "Recent Sessions" section
+  // Starred sessions — ordered by when they were starred (stable order)
+  const starredSessions = useMemo(() => {
+    return sessions
+      .filter(s => s.isStarred)
+      .sort((a, b) => {
+        // Sort by starredAt ascending (order they were starred in)
+        const aTime = a.starredAt ? new Date(a.starredAt).getTime() : 0;
+        const bTime = b.starredAt ? new Date(b.starredAt).getTime() : 0;
+        return aTime - bTime;
+      });
+  }, [sessions]);
+
+  // Recent sessions (running + recently used, excluding starred)
+  // Limited to 10 most recent for the "Recent" section
   const recentSessions = useMemo(() => {
-    // Get running sessions and recently updated sessions (within last 7 days)
     const sevenDaysAgo = Date.now() - (7 * 24 * 60 * 60 * 1000);
 
     return sessions
       .filter(s =>
-        s.status === 'running' || // Show all running sessions
-        visitedSessionIds.has(s.id) || // Show visited sessions
-        new Date(s.updatedAt).getTime() > sevenDaysAgo // Show recently used sessions
+        !s.isStarred && ( // Exclude starred sessions — they have their own section
+          s.status === 'running' || // Show all running sessions
+          visitedSessionIds.has(s.id) || // Show visited sessions
+          new Date(s.updatedAt).getTime() > sevenDaysAgo // Show recently used sessions
+        )
       )
       .sort((a, b) => {
-        // Pinned sessions go first
-        if (a.isPinned && !b.isPinned) return -1;
-        if (!a.isPinned && b.isPinned) return 1;
-        // Currently active session goes next
+        // Currently active session goes first
         if (a.id === activeSessionId) return -1;
         if (b.id === activeSessionId) return 1;
         // Then sort by most recently used
@@ -272,13 +282,38 @@ export default function SessionList() {
 
   return (
     <div className="pb-2">
+      {/* Starred Sessions section */}
+      {starredSessions.length > 0 && (
+        <div className="mb-3">
+          <div className="px-3 py-1.5 flex items-center gap-2">
+            <Star size={12} className="text-amber-400" fill="currentColor" />
+            <span className="text-[10px] font-bold text-claude-text-secondary uppercase tracking-wider">
+              Starred
+            </span>
+          </div>
+          <div>
+            {starredSessions.map((session) => (
+              <SessionCard
+                key={session.id}
+                session={session}
+                isActive={session.id === activeSessionId}
+                onClick={() => setActiveSession(session.id)}
+                isFork={session.isWorktree}
+                onTeleportRequest={setTeleportSession}
+                onDownload={setDownloadSession}
+              />
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Recent Sessions section */}
       {recentSessions.length > 0 && (
         <div className="mb-3">
           <div className="px-3 py-1.5 flex items-center gap-2">
             <Zap size={12} className="text-amber-400" />
             <span className="text-[10px] font-bold text-claude-text-secondary uppercase tracking-wider">
-              Recent Sessions {recentSessions.length > 5 && `(${recentSessions.length})`}
+              Recent {recentSessions.length > 5 && `(${recentSessions.length})`}
             </span>
           </div>
           <div>

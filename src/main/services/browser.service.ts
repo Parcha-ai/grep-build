@@ -2,6 +2,7 @@ import { BrowserWindow, ipcMain, webContents } from 'electron';
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import * as os from 'os';
+import { cdpProxyService } from './cdp-proxy.service';
 
 export interface BrowserSnapshot {
   url: string;
@@ -94,6 +95,10 @@ export class BrowserService {
         this.webContentsToSession.set(data.webContentsId, data.sessionId);
         console.log('[Browser Service] Registration successful. Total registered:', this.sessionWebContents.size);
         console.log('[Browser Service] Active sessions with browsers:', Array.from(this.sessionWebContents.keys()));
+
+        // Notify CDP proxy that a new target is available — this unblocks Playwright's
+        // connectOverCDP if it called Target.setAutoAttach before the webview was ready
+        cdpProxyService.notifyNewTarget(data.sessionId);
       } else {
         console.error('[Browser Service] FAILED - webContents.fromId returned null for ID:', data.webContentsId);
       }
@@ -104,6 +109,10 @@ export class BrowserService {
       const webContentsId = this.sessionWebContents.get(data.sessionId);
       console.log('[Browser Service] Unregistering webview:', data.sessionId, '-> webContentsId:', webContentsId);
       if (webContentsId) {
+        // Notify CDP proxy to clean up its state BEFORE we detach the debugger
+        // This ensures Playwright is informed of target destruction
+        cdpProxyService.unregisterWebview(data.sessionId, webContentsId);
+
         this.detachDebugger(webContentsId);
         this.sessionWebContents.delete(data.sessionId);
         this.webContentsToSession.delete(webContentsId);

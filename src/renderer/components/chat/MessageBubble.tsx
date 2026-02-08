@@ -8,6 +8,7 @@ import { useEditorStore } from '../../stores/editor.store';
 import { useUIStore } from '../../stores/ui.store';
 import { useSessionStore } from '../../stores/session.store';
 import type { ChatMessage, ToolCall, ContentBlock, Session } from '../../../shared/types';
+import { AGENT_COLORS } from '../../../shared/types';
 
 // Regex to match file paths with optional line numbers
 // Matches: /path/to/file.ext or /path/to/file.ext:123
@@ -304,39 +305,60 @@ function MessageBubble({ message, isStreaming, streamingToolCalls, isLatestMessa
 
             {/* Render content blocks in chronological order when available */}
             {message.contentBlocks && message.contentBlocks.length > 0 ? (
-              message.contentBlocks.map((block, blockIndex) => {
-                if (block.type === 'tool_use' && block.toolCallId) {
-                  const toolCall = toolCalls.find(tc => tc.id === block.toolCallId);
-                  if (toolCall) {
+              (() => {
+                // Build an agent colour map for this message's blocks
+                const blockAgentMap = new Map<string, number>();
+                let colorIdx = 0;
+                message.contentBlocks!.forEach(b => {
+                  if (b.agentId && !blockAgentMap.has(b.agentId)) {
+                    blockAgentMap.set(b.agentId, colorIdx++);
+                  }
+                });
+
+                return message.contentBlocks!.map((block, blockIndex) => {
+                  const isTeammate = !!block.agentId;
+                  const blockColor = isTeammate && block.agentId
+                    ? AGENT_COLORS[blockAgentMap.get(block.agentId)! % AGENT_COLORS.length]
+                    : undefined;
+                  const agentStyle = isTeammate && blockColor
+                    ? { borderLeft: `2px solid ${blockColor}`, paddingLeft: '8px' } as React.CSSProperties
+                    : undefined;
+
+                  if (block.type === 'tool_use' && block.toolCallId) {
+                    const toolCall = toolCalls.find(tc => tc.id === block.toolCallId);
+                    if (toolCall) {
+                      return (
+                        <div key={toolCall.id} style={agentStyle}>
+                          <ToolCallCard
+                            toolCall={toolCall}
+                            isLatestToolCall={isLatestMessage && blockIndex === message.contentBlocks!.length - 1 && block.type === 'tool_use'}
+                            isStreaming={isStreaming}
+                            defaultCollapsed={isOldMessage}
+                          />
+                        </div>
+                      );
+                    }
+                    return null;
+                  } else if (block.type === 'text' && block.text) {
                     return (
-                      <ToolCallCard
-                        key={toolCall.id}
-                        toolCall={toolCall}
-                        isLatestToolCall={isLatestMessage && blockIndex === message.contentBlocks!.length - 1 && block.type === 'tool_use'}
-                        isStreaming={isStreaming}
-                        defaultCollapsed={isOldMessage}
-                      />
+                      <div key={`text-${blockIndex}`} style={agentStyle}>
+                        <TextContentBlock
+                          content={block.text}
+                          messageId={message.id}
+                          showSpeaker={blockIndex === message.contentBlocks!.findIndex(b => b.type === 'text')}
+                          openFile={openFile}
+                          sessions={sessions}
+                          activeSessionId={activeSessionId}
+                          updateSession={updateSession}
+                          toggleBrowserPanel={toggleBrowserPanel}
+                          isBrowserPanelOpen={isBrowserPanelOpen}
+                        />
+                      </div>
                     );
                   }
                   return null;
-                } else if (block.type === 'text' && block.text) {
-                  return (
-                    <TextContentBlock
-                      key={`text-${blockIndex}`}
-                      content={block.text}
-                      messageId={message.id}
-                      showSpeaker={blockIndex === message.contentBlocks!.findIndex(b => b.type === 'text')}
-                      openFile={openFile}
-                      sessions={sessions}
-                      activeSessionId={activeSessionId}
-                      updateSession={updateSession}
-                      toggleBrowserPanel={toggleBrowserPanel}
-                      isBrowserPanelOpen={isBrowserPanelOpen}
-                    />
-                  );
-                }
-                return null;
-              })
+                });
+              })()
             ) : (
               /* Fallback for messages without contentBlocks (backwards compat) */
               <>

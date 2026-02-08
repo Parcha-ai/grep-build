@@ -6,6 +6,7 @@ import ReleaseNotes from '../common/ReleaseNotes';
 import { getLatestRelease } from '../../../shared/config/release-notes';
 import { useSessionStore } from '../../stores/session.store';
 import type { ChatMessage, ToolCall } from '../../../shared/types';
+import { AGENT_COLORS } from '../../../shared/types';
 import type { StreamEvent } from '../../stores/session.store';
 
 interface QueuedMessage {
@@ -38,6 +39,9 @@ export default function MessageList({
 }: MessageListProps) {
   // All hooks must be called before any conditional returns
   const rewindAndFork = useSessionStore((state) => state.rewindAndFork);
+  const activeSessionId = useSessionStore((state) => state.activeSessionId);
+  const getAgentColor = useSessionStore((state) => state.getAgentColor);
+  const agentColorMap = useSessionStore((state) => state.agentColorMap);
 
   // Create a map for quick lookup of current tool call state by ID
   const toolCallMap = React.useMemo(() => {
@@ -157,60 +161,109 @@ export default function MessageList({
       {/* Streaming events in chronological order (excluding thinking - shown separately) */}
       {isStreaming && streamEvents.length > 0 && (
         <div className="space-y-2">
-          {streamEvents.map((event) => {
+          {streamEvents.map((event, idx) => {
             // Skip thinking events - they're shown in the dedicated thinking section
             if (event.type === 'thinking') {
               return null;
-            } else if (event.type === 'tool') {
+            }
+
+            // Determine if we need to show an agent divider (agent changed from previous non-thinking event)
+            const prevEvent = idx > 0 ? streamEvents.slice(0, idx).filter(e => e.type !== 'thinking').pop() : null;
+            const agentChanged = event.agentId !== prevEvent?.agentId;
+            const isTeammate = !!event.agentId;
+            const agentColor = (isTeammate && activeSessionId) ? getAgentColor(activeSessionId, event.agentId!) : undefined;
+
+            // Agent badge for teammate events when agent changes
+            const agentBadge = (agentChanged && isTeammate && agentColor) ? (
+              <div className="flex items-center gap-2 py-1.5 mb-1">
+                <div className="h-px flex-1 opacity-30" style={{ backgroundColor: agentColor }} />
+                <div
+                  className="flex items-center gap-1.5 px-2 py-0.5 text-[10px] font-bold uppercase"
+                  style={{
+                    color: agentColor,
+                    backgroundColor: `${agentColor}15`,
+                    border: `1px solid ${agentColor}40`,
+                    letterSpacing: '0.08em',
+                  }}
+                >
+                  <div className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: agentColor }} />
+                  TEAMMATE
+                </div>
+                <div className="h-px flex-1 opacity-30" style={{ backgroundColor: agentColor }} />
+              </div>
+            ) : (agentChanged && !isTeammate && prevEvent?.agentId) ? (
+              <div className="flex items-center gap-2 py-1.5 mb-1">
+                <div className="h-px flex-1 bg-claude-border opacity-30" />
+                <div className="text-[10px] font-bold uppercase text-claude-text-secondary px-2 py-0.5 bg-claude-surface/50 border border-claude-border" style={{ letterSpacing: '0.08em' }}>
+                  LEAD
+                </div>
+                <div className="h-px flex-1 bg-claude-border opacity-30" />
+              </div>
+            ) : null;
+
+            if (event.type === 'tool') {
               // Use the live-updated tool call from currentToolCalls, fall back to snapshot
               const liveToolCall = toolCallMap.get(event.toolCall!.id) || event.toolCall!;
               return (
-                <ToolCallCard
-                  key={event.id}
-                  toolCall={liveToolCall}
-                  isLatest={false}
-                  isStreaming={true}
-                  onBackground={onBackgroundTask}
-                />
+                <React.Fragment key={event.id}>
+                  {agentBadge}
+                  <div style={isTeammate && agentColor ? { borderLeft: `2px solid ${agentColor}`, paddingLeft: '8px' } : undefined}>
+                    <ToolCallCard
+                      toolCall={liveToolCall}
+                      isLatest={false}
+                      isStreaming={true}
+                      onBackground={onBackgroundTask}
+                    />
+                  </div>
+                </React.Fragment>
               );
             } else if (event.type === 'text' && event.content) {
               return (
-                <div key={event.id} className="prose prose-invert max-w-none font-mono text-claude-text break-words min-w-0" style={{ overflowWrap: 'anywhere' }}>
-                  <ReactMarkdown
-                    components={{
-                      code({ className, children, ...props }) {
-                        const match = /language-(\w+)/.exec(className || '');
-                        const isBlock = String(children).includes('\n') || match;
-                        if (isBlock) {
-                          return (
-                            <div className="overflow-hidden border border-claude-border my-2" style={{ borderRadius: 0 }}>
-                              {match && (
-                                <div className="px-2 py-1 text-xs font-bold font-mono bg-claude-surface border-b border-claude-border text-claude-text-secondary" style={{ letterSpacing: '0.05em' }}>
-                                  {match[1].toUpperCase()}
-                                </div>
-                              )}
-                              <pre className="p-3 bg-claude-bg m-0 whitespace-pre-wrap break-words">
-                                <code className="text-sm font-mono text-claude-text" {...props}>{children}</code>
-                              </pre>
-                            </div>
-                          );
-                        }
-                        return <code className="px-1 py-0.5 text-sm font-mono bg-claude-surface text-claude-accent" style={{ borderRadius: 0 }} {...props}>{children}</code>;
-                      },
-                      p({ children }) { return <p className="my-1 leading-relaxed">{children}</p>; },
-                      ul({ children }) { return <ul className="my-1 ml-6 pl-0 list-disc list-outside">{children}</ul>; },
-                      ol({ children }) { return <ol className="my-1 ml-6 pl-0 list-decimal list-outside">{children}</ol>; },
-                      li({ children }) { return <li className="my-0.5 ml-0 pl-1">{children}</li>; },
-                      h1({ children }) { return <h1 className="text-lg font-bold mt-3 mb-1">{children}</h1>; },
-                      h2({ children }) { return <h2 className="text-base font-bold mt-2 mb-1">{children}</h2>; },
-                      h3({ children }) { return <h3 className="text-sm font-bold mt-2 mb-1">{children}</h3>; },
-                      strong({ children }) { return <strong className="font-bold text-claude-text">{children}</strong>; },
-                      em({ children }) { return <em className="italic">{children}</em>; },
+                <React.Fragment key={event.id}>
+                  {agentBadge}
+                  <div
+                    className="prose prose-invert max-w-none font-mono text-claude-text break-words min-w-0"
+                    style={{
+                      overflowWrap: 'anywhere',
+                      ...(isTeammate && agentColor ? { borderLeft: `2px solid ${agentColor}`, paddingLeft: '8px' } : {}),
                     }}
                   >
-                    {event.content}
-                  </ReactMarkdown>
-                </div>
+                    <ReactMarkdown
+                      components={{
+                        code({ className, children, ...props }) {
+                          const match = /language-(\w+)/.exec(className || '');
+                          const isBlock = String(children).includes('\n') || match;
+                          if (isBlock) {
+                            return (
+                              <div className="overflow-hidden border border-claude-border my-2" style={{ borderRadius: 0 }}>
+                                {match && (
+                                  <div className="px-2 py-1 text-xs font-bold font-mono bg-claude-surface border-b border-claude-border text-claude-text-secondary" style={{ letterSpacing: '0.05em' }}>
+                                    {match[1].toUpperCase()}
+                                  </div>
+                                )}
+                                <pre className="p-3 bg-claude-bg m-0 whitespace-pre-wrap break-words">
+                                  <code className="text-sm font-mono text-claude-text" {...props}>{children}</code>
+                                </pre>
+                              </div>
+                            );
+                          }
+                          return <code className="px-1 py-0.5 text-sm font-mono bg-claude-surface text-claude-accent" style={{ borderRadius: 0 }} {...props}>{children}</code>;
+                        },
+                        p({ children }) { return <p className="my-1 leading-relaxed">{children}</p>; },
+                        ul({ children }) { return <ul className="my-1 ml-6 pl-0 list-disc list-outside">{children}</ul>; },
+                        ol({ children }) { return <ol className="my-1 ml-6 pl-0 list-decimal list-outside">{children}</ol>; },
+                        li({ children }) { return <li className="my-0.5 ml-0 pl-1">{children}</li>; },
+                        h1({ children }) { return <h1 className="text-lg font-bold mt-3 mb-1">{children}</h1>; },
+                        h2({ children }) { return <h2 className="text-base font-bold mt-2 mb-1">{children}</h2>; },
+                        h3({ children }) { return <h3 className="text-sm font-bold mt-2 mb-1">{children}</h3>; },
+                        strong({ children }) { return <strong className="font-bold text-claude-text">{children}</strong>; },
+                        em({ children }) { return <em className="italic">{children}</em>; },
+                      }}
+                    >
+                      {event.content}
+                    </ReactMarkdown>
+                  </div>
+                </React.Fragment>
               );
             }
             return null;

@@ -45,15 +45,21 @@ class ChunkBatcher {
   private thinkingBuffer = '';
   private textTimer: NodeJS.Timeout | null = null;
   private thinkingTimer: NodeJS.Timeout | null = null;
+  private currentAgentId: string | undefined = undefined;
   private readonly BATCH_DELAY = 100; // 10 updates/sec - much smoother for markdown parsing
 
   constructor(
     private sessionId: string,
-    private sendText: (content: string) => void,
+    private sendText: (content: string, agentId?: string) => void,
     private sendThinking: (content: string) => void
   ) {}
 
-  addText(content: string) {
+  addText(content: string, agentId?: string) {
+    // If agent changed mid-buffer, flush the old agent's text first
+    if (this.textBuffer && this.currentAgentId !== agentId) {
+      this.flushText();
+    }
+    this.currentAgentId = agentId;
     this.textBuffer += content;
     if (!this.textTimer) {
       this.textTimer = setTimeout(() => this.flushText(), this.BATCH_DELAY);
@@ -69,7 +75,7 @@ class ChunkBatcher {
 
   flushText() {
     if (this.textBuffer) {
-      this.sendText(this.textBuffer);
+      this.sendText(this.textBuffer, this.currentAgentId);
       this.textBuffer = '';
     }
     if (this.textTimer) {
@@ -149,7 +155,7 @@ export function registerClaudeHandlers(ipcMain: IpcMain): void {
         // Create batcher for this session
         const batcher = new ChunkBatcher(
           sessionId,
-          (content) => mainWindow.webContents.send(IPC_CHANNELS.CLAUDE_STREAM_CHUNK, { sessionId, content }),
+          (content, agentId) => mainWindow.webContents.send(IPC_CHANNELS.CLAUDE_STREAM_CHUNK, { sessionId, content, agentId }),
           (content) => mainWindow.webContents.send(IPC_CHANNELS.CLAUDE_THINKING_CHUNK, { sessionId, content })
         );
 
@@ -162,7 +168,7 @@ export function registerClaudeHandlers(ipcMain: IpcMain): void {
           for await (const event of claudeService.streamMessage(sessionId, currentMessage, currentAttachments, permissionMode, thinkingMode, model)) {
             switch (event.type) {
               case 'text_delta':
-                batcher.addText(event.content || '');
+                batcher.addText(event.content || '', event.agentId);
                 fullMessageContent += event.content || '';
                 break;
 
@@ -174,6 +180,7 @@ export function registerClaudeHandlers(ipcMain: IpcMain): void {
                 mainWindow.webContents.send(IPC_CHANNELS.CLAUDE_TOOL_CALL, {
                   sessionId,
                   toolCall: event.toolCall,
+                  agentId: event.agentId,
                 });
                 break;
 
@@ -181,6 +188,7 @@ export function registerClaudeHandlers(ipcMain: IpcMain): void {
                 mainWindow.webContents.send(IPC_CHANNELS.CLAUDE_TOOL_RESULT, {
                   sessionId,
                   toolCall: event.toolCall,
+                  agentId: event.agentId,
                 });
                 break;
 
