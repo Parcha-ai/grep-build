@@ -136,21 +136,19 @@ export default function BrowserPreview({ session, isVisible = true }: BrowserPre
   const [canGoBack, setCanGoBack] = useState(false);
   const [canGoForward, setCanGoForward] = useState(false);
   const [webviewReady, setWebviewReady] = useState(false);
-  // Track user-initiated navigation to avoid reloading on website URL changes
-  const pendingUserNavigation = useRef<string | null>(null);
+  // Track the last URL we told the webview to load, to avoid redundant loadURL calls
+  const lastLoadedUrl = useRef<string>(url);
   // Initial URL for webview src - only used once, then loadURL is used for navigation
   const initialUrl = useRef<string>(url);
+
+  // Retry state for failed loads
+  const retryCount = useRef(0);
+  const retryTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Automation visual feedback state
   const [isAutomationActive, setIsAutomationActive] = useState(false);
   const [automationIndicator, setAutomationIndicator] = useState<AutomationIndicator | null>(null);
   const [clickRipples, setClickRipples] = useState<Array<{ id: number; x: number; y: number }>>([]);
-
-  // Stagehand browser state (shows screenshots from AI automation)
-  const [stagehandScreenshot, setStagehandScreenshot] = useState<string | null>(null);
-  const [stagehandUrl, setStagehandUrl] = useState<string | null>(null);
-  const [showStagehand, setShowStagehand] = useState(false);
-
 
   // Use per-session inspector state for multi-session support
   const {
@@ -179,21 +177,21 @@ export default function BrowserPreview({ session, isVisible = true }: BrowserPre
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []); // Only run once on mount - session won't change for this instance
 
-  // Navigate webview only for user-initiated navigation (not website URL changes)
+  // Navigate webview whenever url state changes and differs from what's currently loaded
   useEffect(() => {
     const webview = webviewRef.current;
-    const targetUrl = pendingUserNavigation.current;
+    if (!webview || !webviewReady || !url) return;
 
-    // Only proceed if there's a pending user navigation
-    if (!webview || !targetUrl || !webviewReady) return;
-
-    try {
-      console.log('[BrowserPreview] User navigation pending, calling loadURL with:', targetUrl);
-      webview.loadURL(targetUrl);
-      // Clear the pending navigation
-      pendingUserNavigation.current = null;
-    } catch (e) {
-      console.log('[BrowserPreview] Webview not ready for navigation yet');
+    // Only call loadURL if url differs from last loaded — avoids redundant reloads
+    // when handleDidNavigate updates url state to reflect where the webview already is
+    if (url !== lastLoadedUrl.current) {
+      console.log('[BrowserPreview] URL changed, calling loadURL:', url, '(was:', lastLoadedUrl.current, ')');
+      lastLoadedUrl.current = url;
+      // loadURL returns a Promise that rejects on ERR_ABORTED (-3) during redirects.
+      // This is normal for SPAs — the page cancels initial load and redirects.
+      webview.loadURL(url).catch((e: Error) => {
+        console.log('[BrowserPreview] loadURL rejected (usually harmless redirect):', e.message);
+      });
     }
   }, [url, webviewReady]);
 
@@ -245,17 +243,36 @@ export default function BrowserPreview({ session, isVisible = true }: BrowserPre
     };
     const handleDidNavigate = (e: Electron.DidNavigateEvent) => {
       console.log('[BrowserPreview] handleDidNavigate fired with e.url:', e.url);
-      console.log('[BrowserPreview] handleDidNavigate - setting url and inputUrl to:', e.url);
+      // Successful navigation — reset retry counter
+      retryCount.current = 0;
+      // Sync lastLoadedUrl so the navigation effect doesn't re-trigger loadURL
+      lastLoadedUrl.current = e.url;
       setUrl(e.url);
       setInputUrl(e.url);
       // Save the URL to session so it persists across reloads
       updateSession(session.id, { lastBrowserUrl: e.url });
     };
     const handleDidFailLoad = (e: any) => {
-      console.error('[BrowserPreview] Navigation failed:', e);
+      console.error('[BrowserPreview] Navigation failed:', e.errorCode, e.errorDescription);
       // Don't stop loading spinner on transient errors - OAuth redirects can trigger these
       if (e.errorCode !== -3) { // -3 is ERR_ABORTED, often happens during redirects
         setIsLoading(false);
+      }
+
+      // Retry on connection errors (dev server not yet running, etc.)
+      // -102 = ERR_CONNECTION_REFUSED, -105 = ERR_NAME_NOT_RESOLVED, -106 = ERR_INTERNET_DISCONNECTED
+      const retryableCodes = [-102, -105, -106];
+      if (retryableCodes.includes(e.errorCode) && retryCount.current < 3) {
+        retryCount.current++;
+        console.log(`[BrowserPreview] Scheduling retry ${retryCount.current}/3 in 3 seconds...`);
+        if (retryTimer.current) clearTimeout(retryTimer.current);
+        retryTimer.current = setTimeout(() => {
+          const wv = webviewRef.current;
+          if (wv) {
+            console.log(`[BrowserPreview] Retrying navigation (attempt ${retryCount.current})...`);
+            wv.reload();
+          }
+        }, 3000);
       }
     };
 
@@ -271,6 +288,7 @@ export default function BrowserPreview({ session, isVisible = true }: BrowserPre
       webview.removeEventListener('did-navigate', handleDidNavigate as any);
       webview.removeEventListener('did-navigate-in-page', handleDidNavigate as any);
       webview.removeEventListener('did-fail-load', handleDidFailLoad as any);
+      if (retryTimer.current) clearTimeout(retryTimer.current);
     };
   }, []);
 
@@ -351,7 +369,7 @@ export default function BrowserPreview({ session, isVisible = true }: BrowserPre
     };
   }, [session.id]);
 
-  // Handle Stagehand browser updates (screenshots from AI automation)
+  // Handle Stagehand browser updates — navigate webview to match Stagehand's URL
   useEffect(() => {
     console.log('[BrowserPreview] Setting up Stagehand update listener for session:', session.id);
     const unsubscribe = window.electronAPI.browser.onBrowserUpdate((data: { sessionId: string; screenshot: string; url?: string; timestamp: string }) => {
@@ -361,13 +379,10 @@ export default function BrowserPreview({ session, isVisible = true }: BrowserPre
 
       console.log('[BrowserPreview] Stagehand update received:', data.url || 'unknown URL');
 
-      // Update Stagehand screenshot state
-      setStagehandScreenshot(data.screenshot);
+      // Navigate the webview to match Stagehand's current URL
       if (data.url) {
-        setStagehandUrl(data.url);
-        setInputUrl(data.url);
+        navigate(data.url);
       }
-      setShowStagehand(true);
       setIsAutomationActive(true);
 
       // Auto-hide automation indicator after a delay
@@ -1026,12 +1041,12 @@ ${data.textContent ? `**Text Content:** "${data.textContent.slice(0, 100)}${data
 
   const navigate = (targetUrl: string) => {
     console.log('[BrowserPreview] navigate() called with:', targetUrl);
-    if (!targetUrl.startsWith('http')) {
+    if (!targetUrl.startsWith('http') && !targetUrl.startsWith('file://')) {
       targetUrl = 'http://' + targetUrl;
     }
     console.log('[BrowserPreview] navigate() setting URL to:', targetUrl);
-    // Mark this as a user-initiated navigation so the useEffect will call loadURL
-    pendingUserNavigation.current = targetUrl;
+    // Setting url state triggers the navigation effect, which calls loadURL
+    // if the URL differs from lastLoadedUrl
     setUrl(targetUrl);
     setInputUrl(targetUrl);
   };

@@ -412,6 +412,13 @@ ${memoriesPrompt}
           console.log('[Claude Service] Navigating browser via Stagehand to:', url);
           const result = await stagehandService.navigate(url, sessionId);
 
+          // Always sync the webview to the target URL.
+          // If Stagehand connected to its own headless browser (fallback), the webview
+          // won't have navigated. This ensures the visible browser preview stays in sync.
+          if (result.success) {
+            browserService.navigate(sessionId, url);
+          }
+
           if (result.success && result.screenshot) {
             this.emitBrowserUpdate(sessionId, result.screenshot, url);
           }
@@ -545,7 +552,7 @@ ${memoriesPrompt}
         try {
           const { task } = args;
           console.log('[Claude Service] Browser agent task:', task);
-          const result = await stagehandService.agent(task);
+          const result = await stagehandService.agent(task, sessionId);
 
           if (result.screenshot) {
             this.emitBrowserUpdate(sessionId, result.screenshot);
@@ -1390,8 +1397,14 @@ ${memoriesPrompt}
     await this.ensureBrowserPanelOpen(sessionId);
 
     switch (toolName) {
-      case 'BrowserNavigate':
-        return stagehandService.navigate(input.url as string, sessionId);
+      case 'BrowserNavigate': {
+        const result = await stagehandService.navigate(input.url as string, sessionId);
+        // Also sync the webview in case Stagehand is using its own browser
+        if (result.success) {
+          browserService.navigate(sessionId, input.url as string);
+        }
+        return result;
+      }
 
       case 'BrowserAct':
         return stagehandService.act(input.instruction as string, sessionId);
@@ -1400,7 +1413,7 @@ ${memoriesPrompt}
         return stagehandService.observe(input.instruction as string | undefined, sessionId);
 
       case 'BrowserAgent':
-        return stagehandService.agent(input.task as string);
+        return stagehandService.agent(input.task as string, sessionId);
 
       case 'BrowserExtractData':
         // eslint-disable-next-line @typescript-eslint/no-explicit-any

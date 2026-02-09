@@ -176,6 +176,13 @@ export class StagehandService {
   }
 
   /**
+   * Check if Stagehand is connected to the Electron webview (vs its own headless browser)
+   */
+  isConnectedToWebview(): boolean {
+    return this.connectedToWebview;
+  }
+
+  /**
    * Get the active page from Stagehand context
    */
   private getPage(): Page | undefined {
@@ -196,10 +203,15 @@ export class StagehandService {
 
         const page = this.getPage();
         if (!page) {
+          // Page disappeared after init — force reinit and retry
+          console.warn('[Stagehand] No active page after ensureInitialized, forcing reinit');
+          this.stagehand = null;
+          this.connectedToWebview = false;
+          if (attempt < 1) continue;
           return { success: false, error: 'No active page available' };
         }
 
-        console.log('[Stagehand] Navigating to:', url);
+        console.log('[Stagehand] Navigating to:', url, this.connectedToWebview ? '(webview)' : '(own browser - webview will NOT update visually)');
 
         // Add timeout to page.goto (30 seconds)
         const gotoPromise = page.goto(url, { waitUntil: 'domcontentloaded' });
@@ -398,53 +410,79 @@ export class StagehandService {
   /**
    * Execute a multi-step task using Stagehand's autonomous agent
    */
-  async agent(task: string): Promise<StagehandAgentResult> {
-    try {
-      await this.ensureInitialized();
-
-      console.log('[Stagehand] Agent executing task:', task);
-      const agentInstance = this.stagehand!.agent();
-
-      // Add timeout for agent execution (60 seconds for complex tasks)
-      const executePromise = agentInstance.execute(task);
-      const timeoutPromise = new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error('Agent execution timed out after 60 seconds')), 60000)
-      );
-      const result = await Promise.race([executePromise, timeoutPromise]);
-
-      // Capture screenshot with timeout
-      let screenshot: string | undefined;
+  async agent(task: string, sessionId?: string): Promise<StagehandAgentResult> {
+    // Retry logic for lost page
+    for (let attempt = 0; attempt < 2; attempt++) {
       try {
-        const screenshotPromise = this.captureScreenshot();
-        const screenshotTimeout = new Promise<undefined>((resolve) =>
-          setTimeout(() => resolve(undefined), 5000)
+        await this.ensureInitialized(sessionId);
+
+        // Verify we have an active page before creating agent
+        const page = this.getPage();
+        if (!page) {
+          console.warn('[Stagehand] No active page for agent, forcing reinit');
+          this.stagehand = null;
+          this.connectedToWebview = false;
+          if (attempt < 1) continue;
+          return { success: false, error: 'No active page available for agent execution' };
+        }
+
+        console.log('[Stagehand] Agent executing task:', task);
+        const agentInstance = this.stagehand!.agent({
+          model: 'google/gemini-2.5-flash',
+        });
+
+        // Add timeout for agent execution (60 seconds for complex tasks)
+        const executePromise = agentInstance.execute(task);
+        const timeoutPromise = new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error('Agent execution timed out after 60 seconds')), 60000)
         );
-        screenshot = await Promise.race([screenshotPromise, screenshotTimeout]);
+        const result = await Promise.race([executePromise, timeoutPromise]);
+
+        // Capture screenshot with timeout
+        let screenshot: string | undefined;
+        try {
+          const screenshotPromise = this.captureScreenshot();
+          const screenshotTimeout = new Promise<undefined>((resolve) =>
+            setTimeout(() => resolve(undefined), 5000)
+          );
+          screenshot = await Promise.race([screenshotPromise, screenshotTimeout]);
+        } catch (error) {
+          console.warn('[Stagehand] Screenshot failed during agent execution, continuing without it:', error);
+          screenshot = undefined;
+        }
+
+        // Handle the result - it could be AgentResult or AgentStreamResult
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const anyResult = result as any;
+
+        return {
+          success: anyResult.success ?? true,
+          message: anyResult.message ?? 'Task completed',
+          actions: anyResult.actions?.map((a: { type?: string; reasoning?: string; action?: string; instruction?: string }) => ({
+            type: a.type || 'action',
+            description: a.reasoning || a.action || a.instruction || `[${a.type || 'action'}]`,
+          })) ?? [],
+          screenshot,
+        };
       } catch (error) {
-        console.warn('[Stagehand] Screenshot failed during agent execution, continuing without it:', error);
-        screenshot = undefined;
+        const errorMsg = error instanceof Error ? error.message : (error ? String(error) : 'Unknown agent error');
+        console.error('[Stagehand] Agent error (attempt', attempt + 1, '):', errorMsg, error);
+
+        // If browser was destroyed, force reinit and retry
+        if (errorMsg.includes('destroyed') || errorMsg.includes('-32000') || errorMsg.includes('Target closed')) {
+          console.log('[Stagehand] Browser destroyed during agent, forcing reinit...');
+          this.stagehand = null;
+          this.connectedToWebview = false;
+          if (attempt < 1) continue;
+        }
+
+        return {
+          success: false,
+          error: errorMsg,
+        };
       }
-
-      // Handle the result - it could be AgentResult or AgentStreamResult
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const anyResult = result as any;
-
-      return {
-        success: anyResult.success ?? true,
-        message: anyResult.message ?? 'Task completed',
-        actions: anyResult.actions?.map((a: { type?: string; description?: string }) => ({
-          type: a.type || 'action',
-          description: a.description || String(a),
-        })) ?? [],
-        screenshot,
-      };
-    } catch (error) {
-      console.error('[Stagehand] Agent error:', error);
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : String(error),
-      };
     }
+    return { success: false, error: 'Agent execution failed after retries' };
   }
 
   /**
@@ -745,7 +783,16 @@ export class StagehandService {
       try {
         const page = this.stagehand.context.activePage();
         if (!page) {
+          console.log('[Stagehand] No active page, will reinitialize');
           needsInit = true;
+          // Must null out stagehand so init() doesn't early-return
+          try {
+            await this.stagehand?.close();
+          } catch {
+            // Ignore close errors
+          }
+          this.stagehand = null;
+          this.connectedToWebview = false;
         } else {
           // Try to access the page to see if it's still alive
           await page.url();
