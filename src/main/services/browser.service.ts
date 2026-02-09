@@ -674,6 +674,13 @@ export class BrowserService {
               started: Date.now(),
             },
           });
+          // Cap at 200 entries to prevent memory bloat
+          if (requests.size > 200) {
+            const keysToDelete = Array.from(requests.keys()).slice(0, requests.size - 200);
+            for (const key of keysToDelete) {
+              requests.delete(key);
+            }
+          }
         }
 
         if (method === 'Network.responseReceived') {
@@ -784,6 +791,24 @@ export class BrowserService {
    */
   clearConsoleLogs(sessionId: string): void {
     this.consoleLogs.set(sessionId, []);
+  }
+
+  /**
+   * Clean up all per-session data to prevent memory leaks
+   */
+  cleanupSession(sessionId: string): void {
+    console.log(`[Browser Service] Cleaning up session: ${sessionId}`);
+    this.webviewSnapshots.delete(sessionId);
+    this.consoleLogs.delete(sessionId);
+    this.networkRequests.delete(sessionId);
+    this.enabledDomains.delete(sessionId);
+
+    // Clean up webContents mappings
+    const webContentsId = this.sessionWebContents.get(sessionId);
+    if (webContentsId !== undefined) {
+      this.webContentsToSession.delete(webContentsId);
+      this.sessionWebContents.delete(sessionId);
+    }
   }
 
   /**

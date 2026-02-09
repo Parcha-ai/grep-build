@@ -175,6 +175,22 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     const { loadMessages, startSession } = get();
 
     set((state) => {
+      const oldSessionId = state.activeSessionId;
+
+      // Evict heavy data from the previous session to free memory
+      // Messages are reloaded from the backend when switching back
+      let evictedMessages = state.messages;
+      let evictedToolCalls = state.currentToolCalls;
+      let evictedStreamEvents = state.streamEvents;
+      if (oldSessionId && oldSessionId !== sessionId && !state.isStreaming[oldSessionId]) {
+        const { [oldSessionId]: _msgs, ...restMessages } = state.messages;
+        const { [oldSessionId]: _tools, ...restToolCalls } = state.currentToolCalls;
+        const { [oldSessionId]: _events, ...restEvents } = state.streamEvents;
+        evictedMessages = restMessages;
+        evictedToolCalls = restToolCalls;
+        evictedStreamEvents = restEvents;
+      }
+
       // Update the session's updatedAt timestamp when it becomes active
       const updatedSessions = sessionId
         ? state.sessions.map(session =>
@@ -191,6 +207,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       return {
         activeSessionId: sessionId,
         sessions: updatedSessions,
+        messages: evictedMessages,
+        currentToolCalls: evictedToolCalls,
+        streamEvents: evictedStreamEvents,
         selectedModel: {
           ...state.selectedModel,
           ...restoredModel,
@@ -332,10 +351,36 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   deleteSession: async (sessionId) => {
     if (!hasElectronAPI) return;
     await window.electronAPI.sessions.delete(sessionId);
-    set((state) => ({
-      sessions: state.sessions.filter((s) => s.id !== sessionId),
-      activeSessionId: state.activeSessionId === sessionId ? null : state.activeSessionId,
-    }));
+    set((state) => {
+      // Build a new state that removes ALL per-session data to prevent memory leaks
+      const cleanRecord = <T>(record: Record<string, T>): Record<string, T> => {
+        const { [sessionId]: _, ...rest } = record;
+        return rest;
+      };
+
+      return {
+        sessions: state.sessions.filter((s) => s.id !== sessionId),
+        activeSessionId: state.activeSessionId === sessionId ? null : state.activeSessionId,
+        messages: cleanRecord(state.messages),
+        isStreaming: cleanRecord(state.isStreaming),
+        streamEvents: cleanRecord(state.streamEvents),
+        currentStreamContent: cleanRecord(state.currentStreamContent),
+        currentThinkingContent: cleanRecord(state.currentThinkingContent),
+        currentToolCalls: cleanRecord(state.currentToolCalls),
+        currentSystemInfo: cleanRecord(state.currentSystemInfo),
+        permissionMode: cleanRecord(state.permissionMode),
+        thinkingMode: cleanRecord(state.thinkingMode),
+        selectedModel: cleanRecord(state.selectedModel),
+        pendingPermission: cleanRecord(state.pendingPermission),
+        pendingQuestion: cleanRecord(state.pendingQuestion),
+        pendingPlanApproval: cleanRecord(state.pendingPlanApproval),
+        setupProgress: cleanRecord(state.setupProgress),
+        compactionStatus: cleanRecord(state.compactionStatus),
+        messageQueue: cleanRecord(state.messageQueue),
+        backgroundTasks: cleanRecord(state.backgroundTasks),
+        agentColorMap: cleanRecord(state.agentColorMap),
+      };
+    });
   },
 
   updateSession: async (sessionId, updates) => {
@@ -556,6 +601,48 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         ? { ...state.agentColorMap, [sessionId]: {} }
         : state.agentColorMap,
     }));
+
+    // When streaming ends, trim oversized content from messages to free memory
+    if (!isStreaming) {
+      const messages = get().messages[sessionId];
+      if (messages && messages.length > 0) {
+        let trimmed = false;
+        const trimmedMessages = messages.map(msg => {
+          if (msg.role !== 'assistant' || !msg.content) return msg;
+
+          const trimmedContent = (msg.content as unknown as any[]).map((block: any) => {
+            // Trim large tool results (base64 screenshots, large HTML, etc.)
+            if (block.type === 'tool_result' && typeof block.content === 'string') {
+              // Base64 image data
+              if (block.content.length > 10000 && /^data:image|^iVBOR|^\/9j\//.test(block.content)) {
+                trimmed = true;
+                return { ...block, content: '[Screenshot captured]' };
+              }
+              // Large HTML content
+              if (block.content.length > 50000 && /<[a-z][\s\S]*>/i.test(block.content)) {
+                trimmed = true;
+                return { ...block, content: `[HTML content — ${Math.round(block.content.length / 1024)}KB]` };
+              }
+              // Any very large content
+              if (block.content.length > 100000) {
+                trimmed = true;
+                return { ...block, content: block.content.slice(0, 1000) + `\n\n[Truncated — ${Math.round(block.content.length / 1024)}KB total]` };
+              }
+            }
+            return block;
+          });
+
+          return { ...msg, content: trimmedContent } as unknown as ChatMessage;
+        });
+
+        if (trimmed) {
+          console.log(`[SessionStore] Trimmed oversized content for session ${sessionId}`);
+          set((state) => ({
+            messages: { ...state.messages, [sessionId]: trimmedMessages as ChatMessage[] },
+          }));
+        }
+      }
+    }
 
     // Process queued messages when streaming ends
     if (!isStreaming) {

@@ -89,6 +89,48 @@ export class ClaudeService {
   }
 
   /**
+   * Clean up all per-session data to prevent memory leaks
+   */
+  cleanupSession(sessionId: string): void {
+    console.log(`[Claude Service] Cleaning up session: ${sessionId}`);
+
+    // Cancel any active query
+    const abortController = this.activeQueries.get(sessionId);
+    if (abortController) {
+      abortController.abort();
+    }
+    this.activeQueries.delete(sessionId);
+    this.activeQueryObjects.delete(sessionId);
+
+    // Clear permission and plan state
+    this.sessionPermissionModes.delete(sessionId);
+    this.prePlanPermissionModes.delete(sessionId);
+    this.sessionPlanFiles.delete(sessionId);
+
+    // Reject and clean pending promises
+    const pendingQ = this.pendingQuestions.get(sessionId);
+    if (pendingQ) {
+      pendingQ.reject(new Error('Session cleaned up'));
+    }
+    this.pendingQuestions.delete(sessionId);
+
+    const pendingP = this.pendingPermissions.get(sessionId);
+    if (pendingP) {
+      pendingP.reject(new Error('Session cleaned up'));
+    }
+    this.pendingPermissions.delete(sessionId);
+
+    const pendingPlan = this.pendingPlanApprovals.get(sessionId);
+    if (pendingPlan) {
+      pendingPlan.reject(new Error('Session cleaned up'));
+    }
+    this.pendingPlanApprovals.delete(sessionId);
+
+    // Clean up MCP server
+    this.browserMcpServers.delete(sessionId);
+  }
+
+  /**
    * Update the permission mode for an active session
    * This allows changing from 'default' to 'bypassPermissions' mid-stream
    */

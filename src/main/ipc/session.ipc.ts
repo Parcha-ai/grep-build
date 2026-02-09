@@ -2,6 +2,8 @@ import { IpcMain } from 'electron';
 import { IPC_CHANNELS } from '../../shared/constants/channels';
 import { SessionService } from '../services/session.service';
 import { getMainWindow } from '../index';
+import { claudeService } from './claude.ipc';
+import { browserService } from '../services/browser.service';
 
 const sessionService = new SessionService();
 
@@ -34,10 +36,16 @@ export function registerSessionHandlers(ipcMain: IpcMain): void {
   });
 
   ipcMain.handle(IPC_CHANNELS.SESSION_STOP, async (_, sessionId: string) => {
+    // Clean up per-session data when session stops
+    claudeService.cleanupSession(sessionId);
+    browserService.cleanupSession(sessionId);
     return sessionService.stopSession(sessionId);
   });
 
   ipcMain.handle(IPC_CHANNELS.SESSION_DELETE, async (_, sessionId: string) => {
+    // Clean up per-session data in services to prevent memory leaks
+    claudeService.cleanupSession(sessionId);
+    browserService.cleanupSession(sessionId);
     return sessionService.deleteSession(sessionId);
   });
 
