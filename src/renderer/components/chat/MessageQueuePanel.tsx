@@ -1,17 +1,22 @@
-import React, { useState } from 'react';
+import React, { useState, useCallback } from 'react';
 import { X, Zap, ArrowUp, Pencil, Check } from 'lucide-react';
 import { useSessionStore } from '../../stores/session.store';
+
+const EMPTY_QUEUE: never[] = [];
 
 interface MessageQueuePanelProps {
   sessionId: string;
 }
 
 export const MessageQueuePanel: React.FC<MessageQueuePanelProps> = ({ sessionId }) => {
-  const { messageQueue, removeFromQueue, editQueuedMessage, moveToFront, clearQueue, interruptAndSend } = useSessionStore();
+  const queue = useSessionStore(useCallback((s) => s.messageQueue[sessionId] || EMPTY_QUEUE, [sessionId]));
+  const removeFromQueue = useSessionStore((s) => s.removeFromQueue);
+  const editQueuedMessage = useSessionStore((s) => s.editQueuedMessage);
+  const moveToFront = useSessionStore((s) => s.moveToFront);
+  const clearQueue = useSessionStore((s) => s.clearQueue);
+  const interruptAndSend = useSessionStore((s) => s.interruptAndSend);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editText, setEditText] = useState('');
-
-  const queue = messageQueue[sessionId] || [];
 
   if (queue.length === 0) {
     return null;

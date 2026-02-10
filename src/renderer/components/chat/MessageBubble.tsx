@@ -30,9 +30,6 @@ interface TextContentBlockProps {
   messageId: string;
   showSpeaker: boolean;
   openFile: (path: string, line?: number) => void;
-  sessions: Session[];
-  activeSessionId: string | null;
-  updateSession: (id: string, updates: Partial<Session>) => Promise<void>;
   toggleBrowserPanel: () => void;
   isBrowserPanelOpen: boolean;
 }
@@ -42,9 +39,6 @@ function TextContentBlock({
   messageId,
   showSpeaker,
   openFile,
-  sessions,
-  activeSessionId,
-  updateSession,
   toggleBrowserPanel,
   isBrowserPanelOpen,
 }: TextContentBlockProps) {
@@ -155,9 +149,10 @@ function TextContentBlock({
                     if (!href) return;
 
                     if (href.includes('localhost') || href.includes('127.0.0.1')) {
-                      const session = sessions.find((s) => s.id === activeSessionId);
+                      const store = useSessionStore.getState();
+                      const session = store.sessions.find((s) => s.id === store.activeSessionId);
                       if (session) {
-                        updateSession(session.id, { lastBrowserUrl: href });
+                        store.updateSession(session.id, { lastBrowserUrl: href });
                         if (!isBrowserPanelOpen) {
                           toggleBrowserPanel();
                         }
@@ -231,7 +226,7 @@ function MessageBubble({ message, isStreaming, streamingToolCalls, isLatestMessa
   const [isRewinding, setIsRewinding] = useState(false);
   const openFile = useEditorStore((state) => state.openFile);
   const { toggleBrowserPanel, isBrowserPanelOpen } = useUIStore();
-  const { activeSessionId, updateSession, sessions } = useSessionStore();
+  // Note: activeSessionId, updateSession, sessions accessed via getState() in click handlers only
 
   // Show rewind button for user messages that aren't the most recent one
   const showRewindButton = isUser && !isLatestUserMessage && onRewind && !isStreaming;
@@ -347,9 +342,6 @@ function MessageBubble({ message, isStreaming, streamingToolCalls, isLatestMessa
                           messageId={message.id}
                           showSpeaker={blockIndex === message.contentBlocks!.findIndex(b => b.type === 'text')}
                           openFile={openFile}
-                          sessions={sessions}
-                          activeSessionId={activeSessionId}
-                          updateSession={updateSession}
                           toggleBrowserPanel={toggleBrowserPanel}
                           isBrowserPanelOpen={isBrowserPanelOpen}
                         />
@@ -486,10 +478,11 @@ function MessageBubble({ message, isStreaming, streamingToolCalls, isLatestMessa
                             // Check if it's a localhost URL
                             if (href.includes('localhost') || href.includes('127.0.0.1')) {
                               // Open in internal browser preview
-                              const session = sessions.find(s => s.id === activeSessionId);
+                              const store = useSessionStore.getState();
+                              const session = store.sessions.find(s => s.id === store.activeSessionId);
                               if (session) {
                                 // Update session's last browser URL
-                                updateSession(session.id, { lastBrowserUrl: href });
+                                store.updateSession(session.id, { lastBrowserUrl: href });
                                 // Open browser panel if not already open
                                 if (!isBrowserPanelOpen) {
                                   toggleBrowserPanel();

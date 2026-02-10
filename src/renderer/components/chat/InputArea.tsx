@@ -82,6 +82,10 @@ interface Attachment {
   subType?: 'file' | 'folder' | 'symbol'; // For mentions: preserves the original type
 }
 
+// Stable empty arrays to avoid reference changes when session data is missing
+const EMPTY_QUEUE: never[] = [];
+const EMPTY_MODELS: never[] = [];
+
 export default function InputArea({ sessionId, disabled, systemInfo, isStreaming: isStreamingProp }: InputAreaProps) {
   const [message, setMessage] = useState('');
   const [attachments, setAttachments] = useState<Attachment[]>([]);
@@ -103,10 +107,33 @@ export default function InputArea({ sessionId, disabled, systemInfo, isStreaming
   const containerRef = useRef<HTMLDivElement>(null);
   const voiceModeRef = useRef<VoiceModeHandle>(null);
 
-  // Voice mode state (CMD shortcuts disabled - users click microphone button)
-  const { sendMessage, interruptAndSend, isStreaming, permissionMode, cyclePermissionMode, thinkingMode, cycleThinkingMode, sessions, messageQueue, selectedModel, setSelectedModel, availableModels, loadAvailableModels } = useSessionStore();
-  const { selectedElement, setSelectedElement, sessionInspectorActive, setSessionInspectorActive, toggleBrowserPanel } = useUIStore();
-  const { settings: audioSettings, setAudioMode, voiceModeStates } = useAudioStore();
+  // Per-session data selectors — only re-render when THIS session's data changes
+  const isStreamingState = useSessionStore(useCallback((s) => s.isStreaming[sessionId] || false, [sessionId]));
+  const currentMode = useSessionStore(useCallback((s) => s.permissionMode[sessionId] || 'acceptEdits', [sessionId]));
+  const currentThinkingMode = useSessionStore(useCallback((s) => s.thinkingMode[sessionId] || 'thinking', [sessionId]));
+  const queuedMessages = useSessionStore(useCallback((s) => s.messageQueue[sessionId] || EMPTY_QUEUE, [sessionId]));
+  const currentModel = useSessionStore(useCallback((s) => s.selectedModel[sessionId] || 'claude-opus-4-5-20251101', [sessionId]));
+  const availableModels = useSessionStore((s) => s.availableModels || EMPTY_MODELS);
+
+  // Action selectors — stable references, never cause re-renders
+  const sendMessage = useSessionStore((s) => s.sendMessage);
+  const interruptAndSend = useSessionStore((s) => s.interruptAndSend);
+  const cyclePermissionMode = useSessionStore((s) => s.cyclePermissionMode);
+  const cycleThinkingMode = useSessionStore((s) => s.cycleThinkingMode);
+  const setSelectedModel = useSessionStore((s) => s.setSelectedModel);
+  const loadAvailableModels = useSessionStore((s) => s.loadAvailableModels);
+
+  // UI store — fine-grained selectors
+  const selectedElement = useUIStore((s) => s.selectedElement);
+  const setSelectedElement = useUIStore((s) => s.setSelectedElement);
+  const sessionInspectorActive = useUIStore((s) => s.sessionInspectorActive);
+  const setSessionInspectorActive = useUIStore((s) => s.setSessionInspectorActive);
+  const toggleBrowserPanel = useUIStore((s) => s.toggleBrowserPanel);
+
+  // Audio store — fine-grained selectors
+  const audioSettings = useAudioStore((s) => s.settings);
+  const setAudioMode = useAudioStore((s) => s.setAudioMode);
+  const voiceModeStates = useAudioStore((s) => s.voiceModeStates);
 
   // Voice mode state for this session
   const voiceState = voiceModeStates[sessionId];
@@ -135,19 +162,15 @@ export default function InputArea({ sessionId, disabled, systemInfo, isStreaming
   // Get the configurable trigger word (default: "please")
   const triggerWord = audioSettings?.voiceTriggerWord || 'please';
 
-  const currentMode = permissionMode[sessionId] || 'acceptEdits';
   const modeConfig = PERMISSION_MODE_CONFIG[currentMode];
-  const currentThinkingMode = thinkingMode[sessionId] || 'thinking';
   const thinkingConfig = THINKING_MODE_CONFIG[currentThinkingMode];
 
-  const isSending = isStreaming[sessionId] || false;
-  const queuedMessages = messageQueue[sessionId] || [];
+  const isSending = isStreamingState || (isStreamingProp ?? false);
   const hasQueuedMessages = queuedMessages.length > 0;
 
   // Model selector state
   const [showModelDropdown, setShowModelDropdown] = useState(false);
   const modelDropdownRef = useRef<HTMLDivElement>(null);
-  const currentModel = selectedModel[sessionId] || 'claude-opus-4-5-20251101';
 
   // Get current model display name
   const currentModelInfo = useMemo(() => {
@@ -493,7 +516,7 @@ export default function InputArea({ sessionId, disabled, systemInfo, isStreaming
   // Handle command/skill/agent selection
   const handleCommandSelect = useCallback(
     async (item: any) => {
-      const currentSession = sessions.find(s => s.id === sessionId);
+      const currentSession = useSessionStore.getState().sessions.find(s => s.id === sessionId);
       const projectPath = currentSession?.worktreePath;
       const itemType = item.itemType || commandType;
 
@@ -531,7 +554,7 @@ export default function InputArea({ sessionId, disabled, systemInfo, isStreaming
       setCommandStartIndex(-1);
       textareaRef.current?.focus();
     },
-    [message, commandStartIndex, commandType, sessionId, sessions]
+    [message, commandStartIndex, commandType, sessionId]
   );
 
   // Save message to history

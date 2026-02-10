@@ -87,7 +87,7 @@ interface BrowserPreviewProps {
 export default function BrowserPreview({ session, isVisible = true }: BrowserPreviewProps) {
   const webviewRef = useRef<Electron.WebviewTag>(null);
   const containerRef = useRef<HTMLDivElement>(null);
-  const { updateSession, messages } = useSessionStore();
+  const updateSession = useSessionStore((s) => s.updateSession);
 
   // Smart URL detection: use last browser URL, or find last localhost URL in transcript
   const getSessionUrl = () => {
@@ -96,7 +96,7 @@ export default function BrowserPreview({ session, isVisible = true }: BrowserPre
     }
 
     // Search messages for localhost URLs (most recent first)
-    const sessionMessages = messages[session.id] || [];
+    const sessionMessages = useSessionStore.getState().messages[session.id] || [];
     const localhostRegex = /https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?[^\s]*/gi;
 
     for (let i = sessionMessages.length - 1; i >= 0; i--) {

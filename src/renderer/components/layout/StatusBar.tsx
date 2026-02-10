@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useRef, useMemo } from 'react';
+import React, { useEffect, useState, useRef, useMemo, useCallback } from 'react';
 import { useSessionStore } from '../../stores/session.store';
 import { useAuthStore } from '../../stores/auth.store';
 import { ChevronDown, Check } from 'lucide-react';
@@ -28,9 +28,18 @@ function getSubagentType(input: Record<string, unknown>): string | null {
   return null;
 }
 
+const EMPTY_TOOL_CALLS: never[] = [];
+
 export default function StatusBar() {
-  const { activeSessionId, sessions, updateSession, refreshSessionBranch, currentToolCalls } = useSessionStore();
-  const { isDevMode } = useAuthStore();
+  const activeSessionId = useSessionStore((s) => s.activeSessionId);
+  const sessions = useSessionStore((s) => s.sessions);
+  const updateSession = useSessionStore((s) => s.updateSession);
+  const refreshSessionBranch = useSessionStore((s) => s.refreshSessionBranch);
+  const activeToolCalls = useSessionStore(useCallback(
+    (s) => s.currentToolCalls[s.activeSessionId || ''] || EMPTY_TOOL_CALLS,
+    []
+  ));
+  const isDevMode = useAuthStore((s) => s.isDevMode);
   const [dockerStatus, setDockerStatus] = useState<{ available: boolean; version?: string } | null>(null);
   const [showBranchMenu, setShowBranchMenu] = useState(false);
   const [branches, setBranches] = useState<Branch[]>([]);
@@ -77,10 +86,8 @@ export default function StatusBar() {
 
   // Track active Task tool calls (subagents)
   const activeTaskTools = useMemo(() => {
-    if (!activeSessionId) return [];
-    const toolCalls = currentToolCalls[activeSessionId] || [];
-    return toolCalls.filter(tc => tc.name === 'Task' && (tc.status === 'running' || tc.status === 'pending'));
-  }, [activeSessionId, currentToolCalls]);
+    return activeToolCalls.filter(tc => tc.name === 'Task' && (tc.status === 'running' || tc.status === 'pending'));
+  }, [activeToolCalls]);
 
   const hasActiveSubagents = activeTaskTools.length > 0;
 
