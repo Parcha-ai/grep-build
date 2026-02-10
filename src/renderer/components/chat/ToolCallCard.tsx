@@ -145,7 +145,8 @@ function formatToolInput(name: string, input: Record<string, unknown>): string {
       return type ? `[${type}] ${description}` : description;
     }
     case 'TodoWrite': {
-      const todos = input.todos as TodoItem[] | undefined;
+      const todosRawSummary = input.todos;
+      const todos = Array.isArray(todosRawSummary) ? todosRawSummary as TodoItem[] : undefined;
       if (!todos?.length) return 'Updating tasks...';
       const inProgress = todos.filter(t => t.status === 'in_progress').length;
       const completed = todos.filter(t => t.status === 'completed').length;

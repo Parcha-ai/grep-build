@@ -128,7 +128,7 @@ export default function ChatContainer({ session }: ChatContainerProps) {
     // Also check messages for task tool calls
     const messageTaskCalls: any[] = [];
     for (const msg of sessionMessages) {
-      if (msg?.toolCalls) {
+      if (msg?.toolCalls && Array.isArray(msg.toolCalls)) {
         for (const tc of msg.toolCalls) {
           if (tc?.name === 'TaskCreate' || tc?.name === 'TaskUpdate' || tc?.name === 'TaskList' || tc?.name === 'TaskGet') {
             messageTaskCalls.push({ name: tc.name, input: tc.input, result: tc.result });
@@ -174,7 +174,7 @@ export default function ChatContainer({ session }: ChatContainerProps) {
 
     // First, check message history for previous task tool calls
     for (const msg of sessionMessages) {
-      if (msg?.toolCalls) {
+      if (msg?.toolCalls && Array.isArray(msg.toolCalls)) {
         for (const tc of msg.toolCalls) {
           if (tc?.name === 'TaskCreate' && tc.result) {
             const result = tc.result as any;
@@ -286,7 +286,7 @@ export default function ChatContainer({ session }: ChatContainerProps) {
       // Check message history for TodoWrite
       for (let i = sessionMessages.length - 1; i >= 0; i--) {
         const msg = sessionMessages[i];
-        if (msg?.toolCalls) {
+        if (msg?.toolCalls && Array.isArray(msg.toolCalls)) {
           const todoWrite = [...msg.toolCalls]
             .reverse()
             .find(tc => tc?.name === 'TodoWrite');
@@ -346,6 +346,9 @@ export default function ChatContainer({ session }: ChatContainerProps) {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
 
+  // Track programmatic scrolls to avoid re-triggering scroll effects
+  const isProgrammaticScroll = useRef(false);
+
   // Check if user is at bottom of chat
   const checkIfAtBottom = useCallback(() => {
     const container = messagesContainerRef.current;
@@ -364,6 +367,12 @@ export default function ChatContainer({ session }: ChatContainerProps) {
     if (!container) return;
 
     const handleScroll = () => {
+      // Skip velocity detection for programmatic scrolls (scrollIntoView)
+      if (isProgrammaticScroll.current) {
+        checkIfAtBottom();
+        return;
+      }
+
       const now = Date.now();
       const currentScrollTop = container.scrollTop;
       const timeDelta = now - lastScrollTime.current;
@@ -396,7 +405,9 @@ export default function ChatContainer({ session }: ChatContainerProps) {
         // If we got TWO fast scrolls, trigger snap to bottom
         if (fastScrollCount.current >= 2) {
           console.log('[ChatContainer] Double fast-scroll detected! Snapping to bottom');
+          isProgrammaticScroll.current = true;
           messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+          setTimeout(() => { isProgrammaticScroll.current = false; }, 500);
           setIsAtBottom(true);
           setShowScrollButton(false);
           fastScrollCount.current = 0; // Reset
@@ -437,7 +448,10 @@ export default function ChatContainer({ session }: ChatContainerProps) {
       // Throttle scrollIntoView to at most once per 100ms during streaming
       if (!scrollTimerRef.current) {
         scrollTimerRef.current = setTimeout(() => {
+          isProgrammaticScroll.current = true;
           messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+          // Reset after smooth scroll animation completes
+          setTimeout(() => { isProgrammaticScroll.current = false; }, 500);
           scrollTimerRef.current = null;
         }, 100);
       }
@@ -453,7 +467,9 @@ export default function ChatContainer({ session }: ChatContainerProps) {
 
   // Scroll to bottom function for FAB
   const scrollToBottom = useCallback(() => {
+    isProgrammaticScroll.current = true;
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    setTimeout(() => { isProgrammaticScroll.current = false; }, 500);
     setIsAtBottom(true);
     setShowScrollButton(false);
     setHasNewContent(false);

@@ -249,7 +249,7 @@ function MessageBubble({ message, isStreaming, streamingToolCalls, isLatestMessa
   };
 
   // Use streaming tool calls if provided, otherwise use message.toolCalls
-  const toolCalls = streamingToolCalls || message.toolCalls || [];
+  const toolCalls = streamingToolCalls || (Array.isArray(message.toolCalls) ? message.toolCalls : []);
 
   // Check if this is a tool-only message (no text content)
   const isToolOnlyMessage = !message.content && toolCalls.length > 0;
