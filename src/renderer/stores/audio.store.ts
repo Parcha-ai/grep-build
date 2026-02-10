@@ -90,6 +90,7 @@ interface AudioState {
   setTTSError: (messageId: string, error: string) => void;
   completeTTS: (messageId: string) => void;
   clearTTS: (messageId: string) => void;
+  clearSessionTTS: (messageIds: string[]) => void;
 
   // Settings actions
   loadSettings: () => Promise<void>;
@@ -514,6 +515,14 @@ export const useAudioStore = create<AudioState>((set, get) => ({
   clearTTS: (messageId) => set((state) => {
     const { [messageId]: _, ...rest } = state.ttsStates;
     return { ttsStates: rest };
+  }),
+
+  clearSessionTTS: (messageIds) => set((state) => {
+    const newTTSStates = { ...state.ttsStates };
+    for (const id of messageIds) {
+      delete newTTSStates[id];
+    }
+    return { ttsStates: newTTSStates };
   }),
 
   // Settings actions

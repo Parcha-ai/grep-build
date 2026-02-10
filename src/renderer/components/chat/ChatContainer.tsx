@@ -18,29 +18,36 @@ interface ChatContainerProps {
   session: Session;
 }
 
+// Stable empty arrays/objects to avoid reference changes when session data is missing
+const EMPTY_MESSAGES: never[] = [];
+const EMPTY_EVENTS: never[] = [];
+const EMPTY_TOOL_CALLS: never[] = [];
+const EMPTY_QUEUE: never[] = [];
+const EMPTY_BG_TASKS: never[] = [];
+
 export default function ChatContainer({ session }: ChatContainerProps) {
-  const {
-    messages,
-    isStreaming,
-    streamEvents,
-    currentStreamContent,
-    currentThinkingContent,
-    currentToolCalls,
-    currentSystemInfo,
-    pendingPermission,
-    approvePermission,
-    denyPermission,
-    pendingQuestion,
-    answerQuestion,
-    subscribeToClaude,
-    compactionStatus,
-    setPermissionMode,
-    messageQueue,
-    backgroundTasks,
-    addBackgroundTask,
-    removeBackgroundTask,
-    subscribeToBackgroundTasks,
-  } = useSessionStore();
+  // Per-session data selectors — only re-render when THIS session's data changes
+  const sessionMessages = useSessionStore(useCallback((s) => s.messages[session.id] || EMPTY_MESSAGES, [session.id]));
+  const isSessionStreaming = useSessionStore(useCallback((s) => s.isStreaming[session.id] || false, [session.id]));
+  const sessionStreamEvents = useSessionStore(useCallback((s) => s.streamEvents[session.id] || EMPTY_EVENTS, [session.id]));
+  const streamContent = useSessionStore(useCallback((s) => s.currentStreamContent[session.id] || '', [session.id]));
+  const thinkingContent = useSessionStore(useCallback((s) => s.currentThinkingContent[session.id] || '', [session.id]));
+  const streamingToolCalls = useSessionStore(useCallback((s) => s.currentToolCalls[session.id] || EMPTY_TOOL_CALLS, [session.id]));
+  const systemInfo = useSessionStore(useCallback((s) => s.currentSystemInfo[session.id] || null, [session.id]));
+  const currentPermission = useSessionStore(useCallback((s) => s.pendingPermission[session.id] || null, [session.id]));
+  const currentQuestion = useSessionStore(useCallback((s) => s.pendingQuestion[session.id] || null, [session.id]));
+  const compaction = useSessionStore(useCallback((s) => s.compactionStatus[session.id] || null, [session.id]));
+  const queuedMessages = useSessionStore(useCallback((s) => s.messageQueue[session.id] || EMPTY_QUEUE, [session.id]));
+  const sessionBgTasks = useSessionStore(useCallback((s) => s.backgroundTasks[session.id] || EMPTY_BG_TASKS, [session.id]));
+
+  // Action selectors — stable references, never cause re-renders
+  const approvePermission = useSessionStore((s) => s.approvePermission);
+  const denyPermission = useSessionStore((s) => s.denyPermission);
+  const answerQuestion = useSessionStore((s) => s.answerQuestion);
+  const setPermissionMode = useSessionStore((s) => s.setPermissionMode);
+  const addBackgroundTask = useSessionStore((s) => s.addBackgroundTask);
+  const removeBackgroundTask = useSessionStore((s) => s.removeBackgroundTask);
+
   const { audioModeActive, ttsStates } = useAudioStore();
   const { toggleTerminalPanel, isTerminalPanelOpen } = useUIStore();
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -54,24 +61,15 @@ export default function ChatContainer({ session }: ChatContainerProps) {
   const fastScrollCount = useRef(0);
   const fastScrollResetTimer = useRef<NodeJS.Timeout | null>(null);
 
-  const sessionMessages = messages[session.id] || [];
-  const isSessionStreaming = isStreaming[session.id] || false;
-  const sessionStreamEvents = streamEvents[session.id] || [];
-  const streamContent = currentStreamContent[session.id] || '';
-  const thinkingContent = currentThinkingContent[session.id] || '';
-
   // Debug: Log thinking content
   if (thinkingContent) {
-    console.log('[ChatContainer] thinkingContent length:', thinkingContent.length, 'isStreaming:', isStreaming[session.id]);
+    console.log('[ChatContainer] thinkingContent length:', thinkingContent.length, 'isStreaming:', isSessionStreaming);
   }
-  const streamingToolCalls = currentToolCalls[session.id] || [];
-  const systemInfo = currentSystemInfo[session.id] || null;
   const isAudioMode = audioModeActive[session.id] || false;
-  const currentPermissionRequest = pendingPermission[session.id] || null;
-  const currentQuestionRequest = pendingQuestion[session.id] || null;
-  const currentCompactionStatus = compactionStatus[session.id] || null;
-  const queuedMessages = messageQueue[session.id] || [];
-  const sessionBackgroundTasks = backgroundTasks[session.id] || [];
+  const currentPermissionRequest = currentPermission;
+  const currentQuestionRequest = currentQuestion;
+  const currentCompactionStatus = compaction;
+  const sessionBackgroundTasks = sessionBgTasks;
 
   // Check if any TTS is actively playing for messages in this session
   const isTTSPlaying = sessionMessages.some(msg => msg?.id && ttsStates[msg.id]?.isPlaying);
@@ -109,8 +107,6 @@ export default function ChatContainer({ session }: ChatContainerProps) {
   // Extract tasks from TaskCreate/TaskUpdate/TaskList tool calls (new SDK Tasks system)
   // Also supports legacy TodoWrite for backwards compatibility
   const currentTasks = useMemo((): Task[] => {
-    const streamingToolCalls = currentToolCalls[session.id] || [];
-
     // Debug: Log all tool calls to understand what we're getting
     if (streamingToolCalls.length > 0) {
       console.log('[TasksBlock] All streaming tool calls:', streamingToolCalls.map(tc => tc.name));
@@ -312,37 +308,43 @@ export default function ChatContainer({ session }: ChatContainerProps) {
       console.log('[TasksBlock] Extracted tasks:', tasks);
     }
     return tasks;
-  }, [session.id, currentToolCalls, sessionMessages]);
+  }, [session.id, streamingToolCalls, sessionMessages]);
 
   useEffect(() => {
-    const unsubscribe = subscribeToClaude();
+    const unsubscribe = useSessionStore.getState().subscribeToClaude();
     return unsubscribe;
-  }, [subscribeToClaude]);
+  }, []);
 
   // Subscribe to background task updates
   useEffect(() => {
-    const unsubscribe = subscribeToBackgroundTasks();
+    const unsubscribe = useSessionStore.getState().subscribeToBackgroundTasks();
     return unsubscribe;
-  }, [subscribeToBackgroundTasks]);
+  }, []);
 
   // Keyboard shortcut: Cmd+B to background running Bash command
+  // Use refs to avoid re-registering listener on every streaming token update
+  const streamingToolCallsRef = useRef(streamingToolCalls);
+  streamingToolCallsRef.current = streamingToolCalls;
+  const handleBackgroundTaskRef = useRef(handleBackgroundTask);
+  handleBackgroundTaskRef.current = handleBackgroundTask;
+
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.metaKey && e.key === 'b') {
         // Find the first running Bash command
-        const runningBash = streamingToolCalls.find(
+        const runningBash = streamingToolCallsRef.current.find(
           (tc) => tc.name === 'Bash' && (tc.status === 'running' || tc.status === 'pending')
         );
         if (runningBash) {
           e.preventDefault();
-          handleBackgroundTask(runningBash);
+          handleBackgroundTaskRef.current(runningBash);
         }
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [streamingToolCalls, handleBackgroundTask]);
+  }, []);
 
   // Check if user is at bottom of chat
   const checkIfAtBottom = useCallback(() => {
@@ -428,12 +430,19 @@ export default function ChatContainer({ session }: ChatContainerProps) {
   // Auto-scroll only if user is at bottom
   // NOTE: Deliberately exclude streamingToolCalls from dependencies to avoid scroll spam
   // Tool call updates (status, output) shouldn't trigger scrolls - only new content should
+  // Throttle scroll to avoid excessive DOM operations during fast streaming
+  const scrollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
     if (isAtBottom) {
-      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-      setHasNewContent(false); // Clear new content flag when at bottom
+      // Throttle scrollIntoView to at most once per 100ms during streaming
+      if (!scrollTimerRef.current) {
+        scrollTimerRef.current = setTimeout(() => {
+          messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+          scrollTimerRef.current = null;
+        }, 100);
+      }
+      setHasNewContent(false);
     } else {
-      // Check if we got new content while scrolled up
       const currentCount = sessionMessages.length;
       if (currentCount > lastMessageCountRef.current || streamContent || thinkingContent) {
         setHasNewContent(true);

@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, memo } from 'react';
 import { useAuthStore } from './stores/auth.store';
 import { useSessionStore } from './stores/session.store';
 import { useUIStore } from './stores/ui.store';
@@ -118,10 +118,67 @@ function PreviewMode() {
   );
 }
 
+// Isolated clock component — ticks every second without re-rendering the rest of the app
+const StatusBarClock = memo(function StatusBarClock({ lunchReminderEnabled, lunchTime }: { lunchReminderEnabled: boolean; lunchTime: string }) {
+  const [currentTime, setCurrentTime] = useState(new Date());
+
+  useEffect(() => {
+    const interval = setInterval(() => setCurrentTime(new Date()), 1000);
+    return () => clearInterval(interval);
+  }, []);
+
+  const hours = currentTime.getHours();
+  const minutes = currentTime.getMinutes();
+  const seconds = currentTime.getSeconds();
+  const normalTime = `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+
+  const today = new Date().toDateString();
+  const lunchLogged = localStorage.getItem('lunch-logged-date') === today;
+
+  if (!lunchReminderEnabled || lunchLogged) {
+    return (
+      <div className="flex items-center gap-2 font-mono text-base text-white transition-colors">
+        <span className="font-bold tabular-nums" style={{ letterSpacing: '0.05em' }}>{normalTime}</span>
+      </div>
+    );
+  }
+
+  const [lunchHour, lunchMinute] = lunchTime.split(':').map(Number);
+  const lunchDate = new Date();
+  lunchDate.setHours(lunchHour, lunchMinute, 0, 0);
+  const msUntilLunch = lunchDate.getTime() - currentTime.getTime();
+  const minutesUntilLunch = Math.floor(msUntilLunch / 60000);
+
+  if (minutesUntilLunch > 30 || minutesUntilLunch < 0) {
+    return (
+      <div className="flex items-center gap-2 font-mono text-base text-white transition-colors">
+        <span className="font-bold tabular-nums" style={{ letterSpacing: '0.05em' }}>{normalTime}</span>
+      </div>
+    );
+  }
+
+  const secondsUntilLunch = Math.floor(msUntilLunch / 1000);
+  const minsLeft = Math.floor(secondsUntilLunch / 60);
+  const secsLeft = secondsUntilLunch % 60;
+  const countdownDisplay = `${minsLeft}:${secsLeft.toString().padStart(2, '0')}`;
+
+  let color = 'text-white';
+  if (secondsUntilLunch <= 60) color = 'text-red-500 font-bold';
+  else if (secondsUntilLunch <= 300) color = 'text-red-500 font-bold';
+  else if (secondsUntilLunch <= 1800) color = 'text-amber-500 font-bold';
+
+  return (
+    <div className={`flex items-center gap-2 font-mono text-base ${color} transition-colors`}>
+      <span className="text-xs uppercase font-bold" style={{ letterSpacing: '0.1em' }}>LUNCH IN</span>
+      <span className="font-bold tabular-nums" style={{ letterSpacing: '0.05em' }}>{countdownDisplay}</span>
+    </div>
+  );
+});
+
 // Main App component that requires Electron
 function ElectronApp() {
-  const { user, isLoading, isDevMode, checkAuth } = useAuthStore();
-  const { activeSessionId, sessions, loadSessions, subscribeToSessionChanges, subscribeToSetupProgress, subscribeToCompaction, setupAutoResumeOnClose, checkAndAutoResume } = useSessionStore();
+  const { user, isLoading, isDevMode } = useAuthStore();
+  const { activeSessionId, sessions } = useSessionStore();
   const {
     isSidebarOpen,
     isTerminalPanelOpen,
@@ -135,13 +192,9 @@ function ElectronApp() {
     togglePlanPanel,
     cycleSplitRatio,
     openSettings,
-    checkApiKey,
-    openOnboarding,
     hasApiKey,
-    enableSessionBrowser,
   } = useUIStore();
-  const { toggleQuickSearch, isEditorOpen, openEditor, closeEditor } = useEditorStore();
-  const { loadSettings: loadAudioSettings } = useAudioStore();
+  const { isEditorOpen, openEditor, closeEditor } = useEditorStore();
 
   // Toggle editor panel
   const toggleEditorPanel = () => {
@@ -154,7 +207,6 @@ function ElectronApp() {
   const [isInitialized, setIsInitialized] = useState(false);
 
   // Clock and lunch enforcement system
-  const [currentTime, setCurrentTime] = useState(new Date());
   const [showLunchModal, setShowLunchModal] = useState(false);
   const [lunchReminderEnabled, setLunchReminderEnabled] = useState(false);
   const [lunchTime, setLunchTime] = useState('12:00');
@@ -169,109 +221,29 @@ function ElectronApp() {
     });
   }, []);
 
-  // Clock tick + lunch enforcement
+  // Lunch enforcement check — runs every 60s (clock is handled by StatusBarClock component)
   useEffect(() => {
     const checkLunchStatus = async () => {
       const today = new Date().toDateString();
       const lunchLogged = localStorage.getItem('lunch-logged-date');
 
-      // Get configured lunch time from settings
       const settings = await window.electronAPI.settings.get();
+      if (!settings.lunchReminderEnabled) return;
 
-      // Only enforce if lunch reminder is enabled
-      if (!settings.lunchReminderEnabled) {
-        return;
-      }
-
-      const lunchTime = settings.lunchReminderTime || '12:00';
-      const [lunchHour, lunchMinute] = lunchTime.split(':').map(Number);
+      const configuredTime = settings.lunchReminderTime || '12:00';
+      const [lunchHour, lunchMinute] = configuredTime.split(':').map(Number);
 
       const now = new Date();
-      const hours = now.getHours();
-      const minutes = now.getMinutes();
-
-      // At configured lunch time, if lunch not logged today, show modal
-      if (hours === lunchHour && minutes === lunchMinute && lunchLogged !== today && !showLunchModal) {
+      if (now.getHours() === lunchHour && now.getMinutes() === lunchMinute && lunchLogged !== today) {
         setShowLunchModal(true);
       }
     };
 
-    const interval = setInterval(() => {
-      setCurrentTime(new Date());
-      checkLunchStatus();
-    }, 1000);
-
-    // Also check immediately on mount
+    const interval = setInterval(checkLunchStatus, 60000);
     checkLunchStatus();
 
     return () => clearInterval(interval);
-  }, [showLunchModal]);
-
-  // Calculate time until noon and display format
-  const getClockDisplay = useCallback(() => {
-    const hours = currentTime.getHours();
-    const minutes = currentTime.getMinutes();
-    const seconds = currentTime.getSeconds();
-
-    // Check if lunch already logged today
-    const today = new Date().toDateString();
-    const lunchLogged = localStorage.getItem('lunch-logged-date') === today;
-
-    // Normal time display
-    const normalTime = `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
-
-    // If lunch reminder disabled, show normal time
-    if (!lunchReminderEnabled || lunchLogged) {
-      return {
-        display: normalTime,
-        color: 'text-white',
-        isCountdown: false,
-      };
-    }
-
-    // Calculate minutes until lunch time
-    const [lunchHour, lunchMinute] = lunchTime.split(':').map(Number);
-    const lunchDate = new Date();
-    lunchDate.setHours(lunchHour, lunchMinute, 0, 0);
-
-    const now = new Date();
-    const msUntilLunch = lunchDate.getTime() - now.getTime();
-    const minutesUntilLunch = Math.floor(msUntilLunch / 60000);
-
-    // If more than 30 minutes away, show normal time
-    if (minutesUntilLunch > 30 || minutesUntilLunch < 0) {
-      return {
-        display: normalTime,
-        color: 'text-white',
-        isCountdown: false,
-      };
-    }
-
-    // Countdown mode: 30 minutes before lunch
-    const secondsUntilLunch = Math.floor(msUntilLunch / 1000);
-    const minsLeft = Math.floor(secondsUntilLunch / 60);
-    const secsLeft = secondsUntilLunch % 60;
-
-    const countdownDisplay = `${minsLeft}:${secsLeft.toString().padStart(2, '0')}`;
-
-    // Color based on time remaining
-    let color = 'text-white';
-    if (secondsUntilLunch <= 60) {
-      color = 'text-red-500 font-bold'; // Red at t-1 minute
-    } else if (secondsUntilLunch <= 300) {
-      color = 'text-red-500 font-bold'; // Red at t-5 minutes
-    } else if (secondsUntilLunch <= 1800) {
-      color = 'text-amber-500 font-bold'; // Orange at t-30 minutes
-    }
-
-    return {
-      display: countdownDisplay,
-      color,
-      isCountdown: true,
-    };
-  }, [currentTime]);
-
-  const clockInfo = getClockDisplay();
+  }, []);
 
   const handleLunchConfirmed = async (meal: string) => {
     const today = new Date().toDateString();
@@ -309,20 +281,20 @@ function ElectronApp() {
       initializeTTSListeners();
 
       // Load audio settings for voice features
-      await loadAudioSettings();
+      await useAudioStore.getState().loadSettings();
 
-      await checkAuth();
+      await useAuthStore.getState().checkAuth();
 
       // Check for API key and show onboarding if missing
-      const hasKey = await checkApiKey();
+      const hasKey = await useUIStore.getState().checkApiKey();
       if (!hasKey) {
-        openOnboarding();
+        useUIStore.getState().openOnboarding();
       }
 
       setIsInitialized(true);
     };
     init();
-  }, [checkAuth, checkApiKey, openOnboarding, loadAudioSettings]);
+  }, []);
 
   // Global keyboard shortcuts
   useEffect(() => {
@@ -331,14 +303,14 @@ function ElectronApp() {
       if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
         e.preventDefault();
         console.log('[App] CMD+K pressed - toggling QuickSearch');
-        toggleQuickSearch();
+        useEditorStore.getState().toggleQuickSearch();
         return;
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [toggleQuickSearch]);
+  }, []);
 
   // CMD+R handler - intercepted by main process, sent via IPC
   useEffect(() => {
@@ -359,38 +331,39 @@ function ElectronApp() {
   useEffect(() => {
     const unsubscribe = window.electronAPI.browser.onBrowserUpdate((data: { sessionId: string; screenshot: string; url?: string; timestamp: string }) => {
       // Enable browser for this session - this also opens the browser panel
-      enableSessionBrowser(data.sessionId);
+      useUIStore.getState().enableSessionBrowser(data.sessionId);
     });
 
     return () => {
       unsubscribe();
     };
-  }, [enableSessionBrowser]);
+  }, []);
 
   // Open browser panel when requested by main process (for Stagehand initialization)
   useEffect(() => {
     const unsubscribe = window.electronAPI.browser.onBrowserOpenPanel((data: { sessionId: string }) => {
       console.log('[App] Browser panel open requested for session:', data.sessionId);
       // Enable browser for this session - this also opens the browser panel
-      enableSessionBrowser(data.sessionId);
+      useUIStore.getState().enableSessionBrowser(data.sessionId);
     });
 
     return () => {
       unsubscribe();
     };
-  }, [enableSessionBrowser]);
+  }, []);
 
   useEffect(() => {
     // Load sessions when authenticated OR in dev mode
     if (user || isDevMode) {
-      loadSessions().then(() => {
+      const store = useSessionStore.getState();
+      store.loadSessions().then(() => {
         // After sessions are loaded, check for auto-resume (Grep It mode interrupted)
-        checkAndAutoResume();
+        useSessionStore.getState().checkAndAutoResume();
       });
-      const unsubscribeSession = subscribeToSessionChanges();
-      const unsubscribeSetup = subscribeToSetupProgress();
-      const unsubscribeCompaction = subscribeToCompaction();
-      const unsubscribeAutoResume = setupAutoResumeOnClose();
+      const unsubscribeSession = store.subscribeToSessionChanges();
+      const unsubscribeSetup = store.subscribeToSetupProgress();
+      const unsubscribeCompaction = store.subscribeToCompaction();
+      const unsubscribeAutoResume = store.setupAutoResumeOnClose();
       return () => {
         unsubscribeSession();
         unsubscribeSetup();
@@ -398,7 +371,7 @@ function ElectronApp() {
         unsubscribeAutoResume();
       };
     }
-  }, [user, isDevMode, loadSessions, subscribeToSessionChanges, subscribeToSetupProgress, subscribeToCompaction, setupAutoResumeOnClose, checkAndAutoResume]);
+  }, [user, isDevMode]);
 
   if (!isInitialized || isLoading) {
     return (
@@ -441,18 +414,9 @@ function ElectronApp() {
           </div>
         </div>
 
-        {/* Center: Clock with lunch countdown */}
+        {/* Center: Clock with lunch countdown — isolated component to avoid re-rendering entire app */}
         <div className="absolute left-1/2 transform -translate-x-1/2 flex items-center">
-          <div className={`flex items-center gap-2 font-mono text-base ${clockInfo.color} transition-colors`}>
-            {clockInfo.isCountdown && (
-              <span className="text-xs uppercase font-bold" style={{ letterSpacing: '0.1em' }}>
-                LUNCH IN
-              </span>
-            )}
-            <span className="font-bold tabular-nums" style={{ letterSpacing: '0.05em' }}>
-              {clockInfo.display}
-            </span>
-          </div>
+          <StatusBarClock lunchReminderEnabled={lunchReminderEnabled} lunchTime={lunchTime} />
         </div>
 
         {/* Right: panel toggle buttons */}

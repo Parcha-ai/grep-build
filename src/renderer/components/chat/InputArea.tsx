@@ -347,13 +347,13 @@ export default function InputArea({ sessionId, disabled, systemInfo, isStreaming
         console.log('[InputArea] New attachments count:', newAttachments.length);
         return newAttachments;
       });
-      setSelectedElement(null);
+      useUIStore.getState().setSelectedElement(null);
     }
-  }, [selectedElement, setSelectedElement]);
+  }, [selectedElement]);
 
   // Load commands, skills, and agents when session changes
   useEffect(() => {
-    const currentSession = sessions.find(s => s.id === sessionId);
+    const currentSession = useSessionStore.getState().sessions.find(s => s.id === sessionId);
     if (!currentSession) return;
 
     const projectPath = currentSession.worktreePath;
@@ -370,7 +370,7 @@ export default function InputArea({ sessionId, disabled, systemInfo, isStreaming
     }).catch(err => {
       console.error('[InputArea] Error loading extensions:', err);
     });
-  }, [sessionId, sessions]);
+  }, [sessionId]);
 
   // Detect @ mentions, slash commands, and @agent mentions in text
   const handleInputChange = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {

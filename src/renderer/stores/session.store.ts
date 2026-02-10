@@ -331,11 +331,52 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
   deleteSession: async (sessionId) => {
     if (!hasElectronAPI) return;
+
+    // Collect message IDs before purging (for audio TTS cleanup)
+    const messageIds = (get().messages[sessionId] || []).map(m => m.id);
+
     await window.electronAPI.sessions.delete(sessionId);
-    set((state) => ({
-      sessions: state.sessions.filter((s) => s.id !== sessionId),
-      activeSessionId: state.activeSessionId === sessionId ? null : state.activeSessionId,
-    }));
+    set((state) => {
+      const clean = <T,>(rec: Record<string, T>): Record<string, T> => {
+        const { [sessionId]: _, ...rest } = rec;
+        return rest;
+      };
+      return {
+        sessions: state.sessions.filter((s) => s.id !== sessionId),
+        activeSessionId: state.activeSessionId === sessionId ? null : state.activeSessionId,
+        messages: clean(state.messages),
+        isStreaming: clean(state.isStreaming),
+        streamEvents: clean(state.streamEvents),
+        currentStreamContent: clean(state.currentStreamContent),
+        currentThinkingContent: clean(state.currentThinkingContent),
+        currentToolCalls: clean(state.currentToolCalls),
+        currentSystemInfo: clean(state.currentSystemInfo),
+        permissionMode: clean(state.permissionMode),
+        thinkingMode: clean(state.thinkingMode),
+        selectedModel: clean(state.selectedModel),
+        pendingPermission: clean(state.pendingPermission),
+        pendingQuestion: clean(state.pendingQuestion),
+        pendingPlanApproval: clean(state.pendingPlanApproval),
+        setupProgress: clean(state.setupProgress),
+        compactionStatus: clean(state.compactionStatus),
+        messageQueue: clean(state.messageQueue),
+        backgroundTasks: clean(state.backgroundTasks),
+        agentColorMap: clean(state.agentColorMap),
+      };
+    });
+
+    // Clean up cross-store session data (dynamic imports to avoid circular deps)
+    import('./ui.store').then(({ useUIStore }) => {
+      useUIStore.getState().cleanupSessionBrowser(sessionId);
+      useUIStore.getState().clearPlanContent(sessionId);
+    });
+
+    // Clean up TTS audio chunks keyed by messageId
+    if (messageIds.length > 0) {
+      import('./audio.store').then(({ useAudioStore }) => {
+        useAudioStore.getState().clearSessionTTS(messageIds);
+      });
+    }
   },
 
   updateSession: async (sessionId, updates) => {

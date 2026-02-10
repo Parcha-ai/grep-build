@@ -2798,6 +2798,34 @@ Begin by creating the task structure now.
     }
   }
 
+  /**
+   * Clean up all data associated with a deleted session.
+   * Called from SESSION_DELETE handler only — never during streaming lifecycle.
+   */
+  cleanupSession(sessionId: string): void {
+    // Abort active query if any
+    const controller = this.activeQueries.get(sessionId);
+    if (controller) controller.abort();
+    this.activeQueries.delete(sessionId);
+    this.activeQueryObjects.delete(sessionId);
+
+    // Session-keyed maps
+    this.sessionPermissionModes.delete(sessionId);
+    this.prePlanPermissionModes.delete(sessionId);
+    this.sessionPlanFiles.delete(sessionId);
+    this.browserMcpServers.delete(sessionId);
+
+    // requestId-keyed maps — iterate and find matching sessionId
+    for (const [reqId, pending] of this.pendingPermissions.entries()) {
+      if (pending.sessionId === sessionId) {
+        pending.reject(new Error('Session deleted'));
+        this.pendingPermissions.delete(reqId);
+      }
+    }
+    // pendingQuestions and pendingPlanApprovals lack sessionId field —
+    // they self-clean via existing timeouts. Acceptable for deletion.
+  }
+
   cancelQuery(sessionId: string): void {
     const controller = this.activeQueries.get(sessionId);
     if (controller) {

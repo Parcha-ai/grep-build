@@ -2,6 +2,8 @@ import { IpcMain } from 'electron';
 import { IPC_CHANNELS } from '../../shared/constants/channels';
 import { SessionService } from '../services/session.service';
 import { getMainWindow } from '../index';
+import { browserService } from '../services/browser.service';
+import { claudeService } from './claude.ipc';
 
 const sessionService = new SessionService();
 
@@ -38,6 +40,9 @@ export function registerSessionHandlers(ipcMain: IpcMain): void {
   });
 
   ipcMain.handle(IPC_CHANNELS.SESSION_DELETE, async (_, sessionId: string) => {
+    // Clean up service-level Maps before deleting the session data
+    claudeService.cleanupSession(sessionId);
+    browserService.cleanupSession(sessionId);
     return sessionService.deleteSession(sessionId);
   });
 

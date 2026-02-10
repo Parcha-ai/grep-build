@@ -992,6 +992,25 @@ export class BrowserService {
   }
 
   /**
+   * Clean up all data associated with a deleted session
+   */
+  cleanupSession(sessionId: string): void {
+    this.webviewSnapshots.delete(sessionId);
+    this.consoleLogs.delete(sessionId);
+    this.networkRequests.delete(sessionId);
+    this.enabledDomains.delete(sessionId);
+
+    const webContentsId = this.sessionWebContents.get(sessionId);
+    if (webContentsId !== undefined) {
+      this.detachDebugger(webContentsId);
+      this.webContentsToSession.delete(webContentsId);
+      this.sessionWebContents.delete(sessionId);
+      this.debuggerListenersAttached.delete(webContentsId);
+      this.attachedDebuggers.delete(webContentsId);
+    }
+  }
+
+  /**
    * Get the last captured snapshot for a session
    */
   getSnapshot(sessionId: string): BrowserSnapshot | null {
