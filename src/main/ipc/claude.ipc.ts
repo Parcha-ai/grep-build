@@ -116,19 +116,6 @@ export function registerClaudeHandlers(ipcMain: IpcMain): void {
       const mainWindow = getMainWindow();
       if (!mainWindow) return;
 
-      // Guard: If there's already an active query for this session, silently reject.
-      // This prevents the catastrophic scenario where two concurrent queries
-      // run for the same session, causing "aborted by user" ghost errors
-      // and lost intermediate messages. The renderer should have queued this,
-      // but this is a safety net for race conditions.
-      if (claudeService.hasActiveQuery(sessionId)) {
-        console.error(`[Claude IPC] BLOCKED: sendMessage called while session ${sessionId} already has an active query. Message: "${message.slice(0, 80)}..."`);
-        // Do NOT send STREAM_ERROR here — that would trigger setStreaming(false)
-        // and queue processing, potentially creating an infinite loop.
-        // The message will be lost, but that's better than corrupting the session.
-        return;
-      }
-
       // Ensure claudeService has the mainWindow reference for browser updates
       claudeService.setMainWindow(mainWindow);
 

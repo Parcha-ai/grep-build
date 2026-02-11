@@ -796,32 +796,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     console.log(`[SessionStore] sendMessage called for session ${sessionId}`);
     console.log(`[SessionStore] isStreaming: ${currentIsStreaming}, isProcessingQueue: ${currentIsProcessingQueue}, queueLength: ${currentQueueLength}`);
     console.log(`[SessionStore] Message: "${message.slice(0, 80)}..."`);
-    if (!currentIsStreaming && !currentIsProcessingQueue) {
-      console.log(`[SessionStore] ⚠️ SENDING DIRECTLY (not queuing) — stack:`, new Error().stack);
-    }
-    console.log('[SessionStore] sendMessage called with attachments:', attachments?.length || 0);
-    if (attachments) {
-      attachments.forEach((a: any, i: number) => {
-        console.log(`[SessionStore] Attachment ${i}: type=${a?.type}, name=${a?.name}, content length=${a?.content?.length || 0}`);
-      });
-    }
 
-    // Check backend for active query as a safety net —
-    // isStreaming can be stale if a stream event was missed or if state got out of sync
-    let backendHasActiveQuery = false;
-    if (!currentIsStreaming && !currentIsProcessingQueue) {
-      try {
-        backendHasActiveQuery = await window.electronAPI.claude.hasActiveQuery(sessionId);
-        if (backendHasActiveQuery) {
-          console.warn(`[SessionStore] ⚠️ isStreaming is FALSE but backend has active query! Forcing queue.`);
-        }
-      } catch {
-        // If the IPC call fails, proceed with frontend-only check
-      }
-    }
-
-    // If already streaming OR queue is being processed OR backend has active query, queue the message
-    if (state.isStreaming[sessionId] || state.isProcessingQueue[sessionId] || backendHasActiveQuery) {
+    // If already streaming, queue the message
+    if (state.isStreaming[sessionId]) {
       const queuedMsg = {
         id: `msg-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
         message,
@@ -963,9 +940,50 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         completedAt: tc.completedAt,
       });
 
-      // Queued messages are processed when streaming fully ends (in setStreaming(false))
-      // Previously this eagerly injected queued messages on every tool completion,
-      // which interrupted the agent mid-conversation
+      // Check if there are queued messages to inject after this tool completes
+      const currentState = get();
+      const queue = currentState.messageQueue[sessionId] || [];
+      if (queue.length > 0) {
+        const nextMessage = queue[0];
+        console.log(`[SessionStore] Tool completed, injecting queued message: "${nextMessage.message.slice(0, 50)}..."`);
+
+        // First, add the user message to the chat so it's visible immediately
+        const userMessage: ChatMessage = {
+          id: nextMessage.id,
+          role: 'user',
+          content: nextMessage.message,
+          timestamp: new Date(nextMessage.timestamp),
+        };
+
+        // Add message and remove from queue in a single state update for consistency
+        set((state) => ({
+          messages: {
+            ...state.messages,
+            [sessionId]: [...(state.messages[sessionId] || []), userMessage],
+          },
+          messageQueue: {
+            ...state.messageQueue,
+            [sessionId]: (state.messageQueue[sessionId] || []).slice(1),
+          },
+        }));
+
+        console.log(`[SessionStore] User message added to chat: "${nextMessage.message.slice(0, 50)}..."`);
+
+        // Inject into the active query via streamInput
+        try {
+          const success = await window.electronAPI.claude.injectMessage(
+            sessionId,
+            nextMessage.message,
+            nextMessage.attachments as any[]
+          );
+          console.log(`[SessionStore] Message injection result:`, success);
+          if (!success) {
+            console.warn('[SessionStore] Message injection returned false - query may have ended');
+          }
+        } catch (error) {
+          console.error('[SessionStore] Failed to inject message:', error);
+        }
+      }
     });
 
     const unsubSystemInfo = window.electronAPI.claude.onSystemInfo(({ sessionId, systemInfo }) => {
