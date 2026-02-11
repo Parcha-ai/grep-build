@@ -227,6 +227,22 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       // Load messages for this session from SDK transcripts
       await loadMessages(sessionId);
 
+      // For SSH sessions, check if there's a persistent remote session running
+      // If so, set isStreaming = true to prevent queue bypass
+      if (session?.sshConfig) {
+        try {
+          const persistentInfo = await window.electronAPI.ssh.checkPersistentSession(sessionId, session.sshConfig);
+          if (persistentInfo?.isRunning) {
+            console.log(`[SessionStore] SSH session ${sessionId} has active remote Claude process — setting isStreaming = true`);
+            set((state) => ({
+              isStreaming: { ...state.isStreaming, [sessionId]: true },
+            }));
+          }
+        } catch (error) {
+          console.error('[SessionStore] Failed to check persistent session:', error);
+        }
+      }
+
       // Check if this session has worktree instructions that haven't been sent yet
       const currentSession = get().sessions.find(s => s.id === sessionId);
       if (currentSession?.worktreeInstructions && !currentSession.worktreeInstructionsSent) {

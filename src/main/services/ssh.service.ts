@@ -1674,6 +1674,12 @@ export class SSHService {
   ): Promise<void> {
     // Use Unix socket for bidirectional communication (avoids FIFO deadlock)
     const setupScript = `
+      # Check if socat is available
+      if ! command -v socat >/dev/null 2>&1; then
+        echo "ERROR: socat not found. Install with: apt-get install socat (Debian/Ubuntu) or yum install socat (RHEL/CentOS)"
+        exit 1
+      fi
+
       # Clean up any existing socket
       rm -f "${socketPath}" 2>/dev/null
 
