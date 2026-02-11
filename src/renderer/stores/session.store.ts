@@ -1008,7 +1008,13 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     });
 
     const unsubError = window.electronAPI.claude.onStreamError(({ sessionId, error }) => {
-      setStreaming(sessionId, false);
+      // On error, clear streaming flag WITHOUT processing queue.
+      // Errors mean the query is dead — don't send queued messages into a broken state.
+      // Set streaming to false directly without triggering queue drain.
+      set((state) => ({
+        isStreaming: { ...state.isStreaming, [sessionId]: false },
+      }));
+
       const errorMessage: ChatMessage = {
         id: Date.now().toString(),
         role: 'assistant',
@@ -1016,6 +1022,15 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         timestamp: new Date(),
       };
       addMessage(sessionId, errorMessage);
+
+      // Clear the queue — errored sessions shouldn't continue processing queued messages
+      const queueLength = (get().messageQueue[sessionId] || []).length;
+      if (queueLength > 0) {
+        console.warn(`[SessionStore] Stream error — clearing ${queueLength} queued messages`);
+        set((state) => ({
+          messageQueue: { ...state.messageQueue, [sessionId]: [] },
+        }));
+      }
     });
 
     // Subscribe to permission requests
