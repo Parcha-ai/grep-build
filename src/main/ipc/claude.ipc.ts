@@ -133,6 +133,9 @@ export function registerClaudeHandlers(ipcMain: IpcMain): void {
       let loopIteration = 0;
       const MAX_RALPH_LOOP_ITERATIONS = 50; // Safety limit to prevent infinite loops
 
+      // Accumulate content across ALL Ralph Loop iterations (not per-iteration)
+      let fullMessageContent = '';
+
       // Ralph Loop - keep processing until task is complete
       // eslint-disable-next-line no-constant-condition
       while (true) {
@@ -159,7 +162,6 @@ export function registerClaudeHandlers(ipcMain: IpcMain): void {
           (content) => mainWindow.webContents.send(IPC_CHANNELS.CLAUDE_THINKING_CHUNK, { sessionId, content })
         );
 
-        let fullMessageContent = '';
         let shouldContinue = false;
         let hadError = false;
 
@@ -222,9 +224,14 @@ export function registerClaudeHandlers(ipcMain: IpcMain): void {
                   });
                 } else {
                   // Task is complete or Ralph Loop is disabled
+                  // Use event.message but ensure content is from accumulated stream if empty
+                  const finalMessage = {
+                    ...event.message,
+                    content: event.message.content || fullMessageContent,
+                  };
                   mainWindow.webContents.send(IPC_CHANNELS.CLAUDE_STREAM_END, {
                     sessionId,
-                    message: event.message,
+                    message: finalMessage,
                   });
                 }
                 break;

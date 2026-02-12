@@ -200,8 +200,50 @@ export class ClaudeService {
     return this.store.get('anthropicApiKey') as string | undefined;
   }
 
-  // Get available Claude models
-  getAvailableModels(): Array<{ id: string; name: string; description: string }> {
+  // Get available Claude models - use Foundry models if configured
+  async getAvailableModels(): Promise<Array<{ id: string; name: string; description: string }>> {
+    // Check if Anthropic Foundry (Azure) is configured
+    const settings = this.store.get('settings', {}) as Record<string, unknown>;
+    const foundryEnabled = settings.foundryEnabled as boolean | undefined;
+
+    if (foundryEnabled) {
+      const sonnetModel = settings.foundryDefaultSonnetModel as string | undefined;
+      const haikuModel = settings.foundryDefaultHaikuModel as string | undefined;
+      const opusModel = settings.foundryDefaultOpusModel as string | undefined;
+
+      const foundryModels = [];
+
+      // Add configured Foundry models
+      if (opusModel) {
+        foundryModels.push({
+          id: opusModel,
+          name: 'Opus (Foundry)',
+          description: 'Most capable model'
+        });
+      }
+      if (sonnetModel) {
+        foundryModels.push({
+          id: sonnetModel,
+          name: 'Sonnet (Foundry)',
+          description: 'Balanced performance'
+        });
+      }
+      if (haikuModel) {
+        foundryModels.push({
+          id: haikuModel,
+          name: 'Haiku (Foundry)',
+          description: 'Fastest model'
+        });
+      }
+
+      if (foundryModels.length > 0) {
+        console.log('[Claude Service] Using Foundry models:', foundryModels.map(m => m.id).join(', '));
+        return foundryModels;
+      }
+    }
+
+    // Fallback to default Anthropic models
+    console.log('[Claude Service] Using default Anthropic model list');
     return [
       {
         id: 'claude-opus-4-6',
@@ -1752,7 +1794,35 @@ ${memoriesPrompt}
       // IMPORTANT: Opus models have a max output token limit of 64,000
       // The thinking tokens count towards this limit, so we cap ultrathink at 60,000
       // to leave room for the actual response (~4,000 tokens buffer)
-      const selectedModel = model || 'claude-opus-4-5-20251101';
+      // Model selection priority:
+      // 1. Explicit model parameter (from UI selector)
+      // 2. Session's saved model (session.model)
+      // 3. Foundry default sonnet (if Foundry enabled)
+      // 4. Anthropic default (claude-opus-4-5-20251101)
+      let selectedModel = model;
+
+      if (!selectedModel && session.model) {
+        selectedModel = session.model;
+        console.log('[Claude Service] Using session model:', selectedModel);
+      }
+
+      if (!selectedModel) {
+        const settings = this.store.get('settings', {}) as Record<string, unknown>;
+        const foundryEnabled = settings.foundryEnabled as boolean | undefined;
+        if (foundryEnabled) {
+          const foundrySonnet = settings.foundryDefaultSonnetModel as string | undefined;
+          if (foundrySonnet) {
+            selectedModel = foundrySonnet;
+            console.log('[Claude Service] Using Foundry default sonnet:', selectedModel);
+          }
+        }
+      }
+
+      if (!selectedModel) {
+        selectedModel = 'claude-opus-4-5-20251101';
+        console.log('[Claude Service] Using Anthropic default:', selectedModel);
+      }
+
       const isOpus = selectedModel.includes('opus');
 
       // Opus has stricter limits, other models can use full 100k
@@ -2085,13 +2155,14 @@ Begin by creating the task structure now.
           // Add MCP servers (browser tools + QMD semantic search if available)
           mcpServers: mcpServersConfig,
           // SSH remote execution: spawn Claude Code on remote machine instead of locally
-          // Use persistent tmux with Unix socket IPC (fixed FIFO blocking issues)
+          // Note: Using non-persistent createRemoteProcess - the persistent tmux/FIFO approach
+          // has blocking issues with named pipes that cause the read channel to close immediately
           ...(session.sshConfig ? {
             spawnClaudeCodeProcess: (options: { command: string; args: string[]; cwd?: string; env: Record<string, string | undefined>; signal: AbortSignal }) => {
-              console.log('[Claude Service] Creating persistent SSH remote process for session:', sessionId);
+              console.log('[Claude Service] Creating SSH remote process for session:', sessionId);
               console.log('[Claude Service] SDK spawn options:', { command: options.command, args: options.args, cwd: options.cwd });
-              // Use tmux with socket-based IPC for persistence across disconnects
-              return sshService.createPersistentRemoteProcess(
+              // Use direct SSH exec - simpler and more reliable than tmux/FIFO
+              return sshService.createRemoteProcess(
                 sessionId,
                 session.sshConfig!,
                 options
@@ -2334,6 +2405,7 @@ Begin by creating the task structure now.
         return null;
       };
 
+      let queryComplete = false;
       for await (const msg of messages) {
         if (abortController.signal.aborted) {
           yield { type: 'error', error: 'Query cancelled' };
@@ -2701,7 +2773,7 @@ Begin by creating the task structure now.
               return;
             }
 
-            // Final result message with cost info - no action needed
+            // Final result message with cost info - this marks end of query
             // Flush any remaining buffered content
             const finalFlushed = flushBuffers();
             if (finalFlushed?.text) {
@@ -2710,12 +2782,21 @@ Begin by creating the task structure now.
             if (finalFlushed?.thinking) {
               yield { type: 'thinking_delta', content: finalFlushed.thinking };
             }
+            // Mark query as complete so we exit the loop
+            // (For SSH sessions, the process stays alive for next query, so iterator won't close naturally)
+            queryComplete = true;
             break;
           }
 
           default:
             // Silently ignore unhandled message types
             break;
+        }
+
+        // If query is complete (result message received), exit the loop
+        if (queryComplete) {
+          console.log('[Claude SDK] Query complete, exiting message loop');
+          break;
         }
       }
 

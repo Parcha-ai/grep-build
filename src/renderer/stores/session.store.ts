@@ -227,19 +227,27 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       // Load messages for this session from SDK transcripts
       await loadMessages(sessionId);
 
-      // For SSH sessions, check if there's a persistent remote session running
-      // If so, set isStreaming = true to prevent queue bypass
+      // For SSH sessions, check if actually streaming before clearing state
       if (session?.sshConfig) {
         try {
+          // Check backend to see if session is actually running a query
+          const isActuallyStreaming = await window.electronAPI.claude.isQueryActive(sessionId);
+
+          if (!isActuallyStreaming) {
+            console.log(`[SessionStore] SSH session not actively streaming, safe to clear state`);
+            set((state) => ({
+              isStreaming: { ...state.isStreaming, [sessionId]: false },
+            }));
+          } else {
+            console.log(`[SessionStore] SSH session IS actively streaming, preserving state`);
+          }
+
           const persistentInfo = await window.electronAPI.ssh.checkPersistentSession(sessionId, session.sshConfig);
           if (persistentInfo?.isRunning) {
-            console.log(`[SessionStore] SSH session ${sessionId} has active remote Claude process — setting isStreaming = true`);
-            set((state) => ({
-              isStreaming: { ...state.isStreaming, [sessionId]: true },
-            }));
+            console.log(`[SessionStore] SSH session ${sessionId} has active remote Claude in tmux`);
           }
         } catch (error) {
-          console.error('[SessionStore] Failed to check persistent session:', error);
+          console.error('[SessionStore] Failed to check SSH session state:', error);
         }
       }
 
@@ -869,12 +877,17 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
     try {
       console.log('[SessionStore] Calling electronAPI.claude.sendMessage with', attachments?.length || 0, 'attachments, model:', model);
-      await window.electronAPI.claude.sendMessage(sessionId, message, attachments, mode, thinking, model);
+      console.log('[SessionStore] sendMessage params:', { sessionId: sessionId.substring(0, 8), messageLen: message.length, mode, thinking, model });
+
+      const result = await window.electronAPI.claude.sendMessage(sessionId, message, attachments, mode, thinking, model);
+      console.log('[SessionStore] sendMessage returned:', result);
+
       // Update timestamp in backend as well
       window.electronAPI.sessions.update(sessionId, { updatedAt: new Date() });
     } catch (error) {
       setStreaming(sessionId, false);
-      console.error('Failed to send message:', error);
+      console.error('[SessionStore] Failed to send message:', error);
+      console.error('[SessionStore] Error stack:', error instanceof Error ? error.stack : 'No stack');
     }
   },
 
@@ -1014,26 +1027,83 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     const unsubEnd = window.electronAPI.claude.onStreamEnd(({ sessionId, message }) => {
       const currentState = get();
       const queueLength = (currentState.messageQueue[sessionId] || []).length;
-      console.log(`[SessionStore] onStreamEnd received for ${sessionId}. Message length: ${message.content?.length || 0}`);
+
+      // Get the accumulated stream content - this is what was actually streamed
+      const streamedContent = currentState.currentStreamContent[sessionId] || '';
+      const messageContent = message.content || streamedContent;
+
+      console.log(`[SessionStore] onStreamEnd received for ${sessionId}. Backend message length: ${message.content?.length || 0}, streamed content length: ${streamedContent.length}`);
       console.log(`[SessionStore] onStreamEnd - Queue has ${queueLength} messages waiting`);
+
       setStreaming(sessionId, false);
-      addMessage(sessionId, message);
+
+      // Use the streamed content if the backend message is empty (e.g., interrupted)
+      const finalMessage: ChatMessage = {
+        ...message,
+        content: messageContent,
+      };
+
+      addMessage(sessionId, finalMessage);
+
+      // Clear stream content after adding to messages
+      set((state) => ({
+        currentStreamContent: { ...state.currentStreamContent, [sessionId]: '' },
+        streamEvents: { ...state.streamEvents, [sessionId]: [] },
+      }));
 
       // Auto-play TTS if audio mode is active and message has content
-      if (message.content && message.role === 'assistant') {
+      if (messageContent && finalMessage.role === 'assistant') {
         // Import audio store and trigger auto-play
         import('./audio.store').then(({ useAudioStore }) => {
-          useAudioStore.getState().triggerAutoPlayTTS(sessionId, message.id, message.content);
+          useAudioStore.getState().triggerAutoPlayTTS(sessionId, finalMessage.id, messageContent);
         });
+      }
+
+      // Process next queued message if any
+      const queue = get().messageQueue[sessionId] || [];
+      if (queue.length > 0) {
+        console.log(`[SessionStore] Stream ended, processing next queued message (${queue.length} in queue)`);
+        const nextMsg = queue[0];
+
+        // Remove from queue
+        set((state) => ({
+          messageQueue: {
+            ...state.messageQueue,
+            [sessionId]: state.messageQueue[sessionId].slice(1),
+          },
+        }));
+
+        // Send the next message
+        setTimeout(() => {
+          get().sendMessage(sessionId, nextMsg.message, nextMsg.attachments);
+        }, 100);
       }
     });
 
     const unsubError = window.electronAPI.claude.onStreamError(({ sessionId, error }) => {
+      const currentState = get();
+
+      // Get any streamed content before the error
+      const streamedContent = currentState.currentStreamContent[sessionId] || '';
+
+      // If we have streamed content, save it as a partial message before showing error
+      if (streamedContent.trim()) {
+        const partialMessage: ChatMessage = {
+          id: `partial-${Date.now()}`,
+          role: 'assistant',
+          content: streamedContent,
+          timestamp: new Date(),
+        };
+        addMessage(sessionId, partialMessage);
+      }
+
       // On error, clear streaming flag WITHOUT processing queue.
       // Errors mean the query is dead — don't send queued messages into a broken state.
       // Set streaming to false directly without triggering queue drain.
       set((state) => ({
         isStreaming: { ...state.isStreaming, [sessionId]: false },
+        currentStreamContent: { ...state.currentStreamContent, [sessionId]: '' },
+        streamEvents: { ...state.streamEvents, [sessionId]: [] },
       }));
 
       const errorMessage: ChatMessage = {
@@ -1045,7 +1115,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       addMessage(sessionId, errorMessage);
 
       // Clear the queue — errored sessions shouldn't continue processing queued messages
-      const queueLength = (get().messageQueue[sessionId] || []).length;
+      const queueLength = (currentState.messageQueue[sessionId] || []).length;
       if (queueLength > 0) {
         console.warn(`[SessionStore] Stream error — clearing ${queueLength} queued messages`);
         set((state) => ({

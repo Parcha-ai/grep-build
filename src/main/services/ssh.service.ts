@@ -452,10 +452,9 @@ export class SSHService {
     passThrough.stdin.on('end', () => {
       console.log('[SSH Service] stdin ended, channelReady:', channelReady);
       stdinEnded = true;
-      if (channelReady && channel) {
-        console.log('[SSH Service] Ending channel stdin');
-        channel.stdin.end();
-      }
+      // DON'T end channel stdin - this kills the remote Claude process
+      // The remote process should stay alive between queries
+      // It will be killed when the abort signal fires or connection closes
     });
 
     // Establish connection and create channel asynchronously
@@ -482,11 +481,7 @@ export class SSHService {
           }
           pendingData.length = 0; // Clear the buffer
 
-          // If stdin already ended, end the channel stdin too
-          if (stdinEnded) {
-            console.log('[SSH Service] stdin already ended, ending channel stdin');
-            ch.stdin.end();
-          }
+          // Don't end stdin automatically - remote process should stay alive
 
           // Log channel events for debugging
           ch.on('end', () => {
@@ -1491,8 +1486,8 @@ export class SSHService {
     let exitCode: number | null = null;
     const emitter = new EventEmitter();
     const tmuxSessionName = `grep-${sessionId.substring(0, 8)}`;
-    // Use Unix socket instead of FIFOs to avoid deadlock
-    const socketPath = `${config.remoteWorkdir}/.grep-socket-${sessionId.substring(0, 8)}`;
+    const fifoIn = `/tmp/grep-${sessionId.substring(0, 8)}-in`;
+    const fifoOut = `/tmp/grep-${sessionId.substring(0, 8)}-out`;
 
     // Build environment exports
     const includeVars = [
@@ -1555,8 +1550,8 @@ export class SSHService {
 
         if (existingSession?.isRunning) {
           console.log(`[SSH Service] Reattaching to existing persistent session: ${tmuxSessionName}`);
-          // Session exists and Claude is running - reattach to the socket
-          await this.attachToExistingSession(client, socketPath, socketPath, passThrough, emitter, sdkOptions);
+          // Session exists and Claude is running - reattach to the FIFOs
+          await this.attachToExistingSession(client, fifoIn, fifoOut, passThrough, emitter, sdkOptions);
         } else {
           // Need to create a new tmux session
           if (existingSession) {
@@ -1567,7 +1562,7 @@ export class SSHService {
 
           console.log(`[SSH Service] Creating new persistent session: ${tmuxSessionName}`);
           await this.createNewPersistentSession(
-            client, config, tmuxSessionName, socketPath,
+            client, config, tmuxSessionName, fifoIn, fifoOut,
             claudePaths, envExports, escapedArgs, passThrough, emitter, sdkOptions
           );
         }
@@ -1614,45 +1609,49 @@ export class SSHService {
     emitter: EventEmitter,
     sdkOptions: SDKSpawnOptions
   ): Promise<void> {
-    // Extract socketPath from fifoIn path (we're reusing the param name but it's actually a socket path now)
-    const socketPath = fifoIn; // fifoIn param is actually the socket path
-
-    // Use socat to connect to the Unix socket with bidirectional I/O
-    const socatCmd = `socat - UNIX-CONNECT:"${socketPath}"`;
-
-    client.exec(socatCmd, (err, channel) => {
+    // Open a channel to read from the output FIFO
+    const readCmd = `cat "${fifoOut}"`;
+    client.exec(readCmd, (err, readChannel) => {
       if (err) {
         emitter.emit('error', err);
         return;
       }
 
-      // Bidirectional pipe: channel stdout -> passThrough.stdout
-      channel.on('data', (data: Buffer) => {
+      readChannel.on('data', (data: Buffer) => {
         console.log('[SSH Service] Received from persistent session:', data.toString().substring(0, 200));
         passThrough.stdout.write(data);
       });
 
-      channel.stderr.on('data', (data: Buffer) => {
-        console.log('[SSH Service] Socket stderr:', data.toString());
-      });
-
-      channel.on('close', () => {
-        console.log('[SSH Service] Socket channel closed');
+      readChannel.on('close', () => {
+        console.log('[SSH Service] Read channel closed');
         passThrough.stdout.end();
       });
 
-      channel.on('error', (error: Error) => {
+      readChannel.on('error', (error: Error) => {
         emitter.emit('error', error);
       });
+    });
 
-      // Bidirectional pipe: passThrough.stdin -> channel stdin
+    // Open a channel to write to the input FIFO
+    const writeCmd = `cat > "${fifoIn}"`;
+    client.exec(writeCmd, (err, writeChannel) => {
+      if (err) {
+        emitter.emit('error', err);
+        return;
+      }
+
+      // Pipe our stdin to the write channel
       passThrough.stdin.on('data', (data: Buffer) => {
         console.log('[SSH Service] Sending to persistent session:', data.toString().substring(0, 100));
-        channel.stdin.write(data);
+        writeChannel.stdin.write(data);
       });
 
       passThrough.stdin.on('end', () => {
-        channel.stdin.end();
+        writeChannel.stdin.end();
+      });
+
+      writeChannel.on('error', (error: Error) => {
+        console.error('[SSH Service] Write channel error:', error);
       });
     });
   }
@@ -1664,7 +1663,8 @@ export class SSHService {
     client: Client,
     config: SSHConfig,
     tmuxSessionName: string,
-    socketPath: string,
+    fifoIn: string,
+    fifoOut: string,
     claudePaths: string,
     envExports: string,
     escapedArgs: string,
@@ -1672,33 +1672,23 @@ export class SSHService {
     emitter: EventEmitter,
     sdkOptions: SDKSpawnOptions
   ): Promise<void> {
-    // Use Unix socket for bidirectional communication (avoids FIFO deadlock)
+    // Create FIFOs and tmux session with Claude running inside
     const setupScript = `
-      # Check if socat is available
-      if ! command -v socat >/dev/null 2>&1; then
-        echo "ERROR: socat not found. Install with: apt-get install socat (Debian/Ubuntu) or yum install socat (RHEL/CentOS)"
-        exit 1
-      fi
+      # Clean up any existing FIFOs
+      rm -f "${fifoIn}" "${fifoOut}" 2>/dev/null
 
-      # Clean up any existing socket
-      rm -f "${socketPath}" 2>/dev/null
+      # Create named pipes
+      mkfifo "${fifoIn}" "${fifoOut}"
 
-      # Start tmux session with Claude piped through socat for socket IPC
+      # Start tmux session with Claude reading from input FIFO and writing to output FIFO
       tmux new-session -d -s "${tmuxSessionName}" -c "${config.remoteWorkdir}" \
-        "export PATH=\\"${claudePaths}:\\$PATH\\"; ${envExports}; socat UNIX-LISTEN:\\"${socketPath}\\",fork,reuseaddr EXEC:\\"claude ${escapedArgs}\\",pty,stderr 2>&1"
+        "export PATH=\\"${claudePaths}:\\$PATH\\"; ${envExports}; exec claude ${escapedArgs} < \\"${fifoIn}\\" > \\"${fifoOut}\\" 2>&1"
 
-      # Give tmux and socat a moment to start and create the socket
-      for i in {1..10}; do
-        [ -S "${socketPath}" ] && break
-        sleep 0.1
-      done
+      # Give tmux a moment to start
+      sleep 0.5
 
-      # Verify session was created and socket exists
-      if tmux has-session -t "${tmuxSessionName}" 2>/dev/null && [ -S "${socketPath}" ]; then
-        echo "SESSION_CREATED"
-      else
-        echo "SESSION_FAILED"
-      fi
+      # Verify session was created
+      tmux has-session -t "${tmuxSessionName}" 2>/dev/null && echo "SESSION_CREATED" || echo "SESSION_FAILED"
     `;
 
     console.log('[SSH Service] Creating persistent session with script');
@@ -1709,10 +1699,10 @@ export class SSHService {
       throw new Error(`Failed to create tmux session: ${setupResult}`);
     }
 
-    console.log('[SSH Service] Persistent tmux session created, attaching to socket...');
+    console.log('[SSH Service] Persistent tmux session created, attaching to FIFOs...');
 
-    // Now attach to the socket
-    await this.attachToExistingSession(client, socketPath, socketPath, passThrough, emitter, sdkOptions);
+    // Now attach to the FIFOs
+    await this.attachToExistingSession(client, fifoIn, fifoOut, passThrough, emitter, sdkOptions);
   }
 
   /**

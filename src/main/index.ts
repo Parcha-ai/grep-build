@@ -6,13 +6,33 @@ import { pathToFileURL } from 'url';
 export const DEV_INSTANCE_NAME = process.env.DEV_INSTANCE_NAME || null;
 
 // Enable remote debugging for CDP access (used by Stagehand to control webviews)
-app.commandLine.appendSwitch('remote-debugging-port', '9222');
+// Use different port for dev (9223) vs production (9222) to allow both to run simultaneously
+const CDP_PORT = process.env.NODE_ENV === 'development' || DEV_INSTANCE_NAME ? '9223' : '9222';
+app.commandLine.appendSwitch('remote-debugging-port', CDP_PORT);
+console.log(`[Electron] Using CDP port: ${CDP_PORT}`);
 
 // CRITICAL: Fix PATH for packaged macOS apps launched from Finder
 // Without this, spawned processes (like Claude Code) can't find 'node' because
 // GUI apps don't inherit the user's shell PATH
 import fixPath from 'fix-path';
 fixPath();
+
+// ADDITIONAL PATH FIX: Ensure common node locations are in PATH
+// fix-path doesn't always work reliably, so add explicit fallbacks
+const commonNodePaths = [
+  '/usr/local/bin',
+  '/opt/homebrew/bin',
+  '/opt/local/bin',
+  `${process.env.HOME}/.nvm/versions/node/v*/bin`,
+  `${process.env.HOME}/.nodenv/shims`,
+  `${process.env.HOME}/.asdf/shims`,
+];
+const currentPath = process.env.PATH || '';
+const missingPaths = commonNodePaths.filter(p => !currentPath.includes(p.replace('*', '')));
+if (missingPaths.length > 0) {
+  process.env.PATH = [...missingPaths, currentPath].join(':');
+  console.log('[Electron] Added missing PATH entries:', missingPaths);
+}
 import { registerAuthHandlers } from './ipc/auth.ipc';
 import { registerSessionHandlers } from './ipc/session.ipc';
 import { registerGitHandlers } from './ipc/git.ipc';
