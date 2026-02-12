@@ -1,7 +1,7 @@
 {
   "name": "grep-build",
   "productName": "Grep Build",
-  "version": "0.0.43",
+  "version": "0.0.50",
   "description": "AI-powered development environment with intelligent code search, multi-session support, and live browser preview",
   "main": ".webpack/main",
   "scripts": {
@@ -42,6 +42,7 @@
     "@typescript-eslint/parser": "^5.62.0",
     "@vercel/webpack-asset-relocator-loader": "^1.7.3",
     "autoprefixer": "^10.4.22",
+    "chrome-remote-interface": "^0.34.0",
     "css-loader": "^6.11.0",
     "dotenv": "^17.2.3",
     "electron": "^38.7.2",
