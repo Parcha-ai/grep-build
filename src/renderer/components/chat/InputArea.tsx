@@ -696,41 +696,12 @@ export default function InputArea({ sessionId, disabled, systemInfo, isStreaming
       return;
     }
 
-    // CMD+Enter: Force send - interrupt agent if streaming and send immediately
-    if (e.key === 'Enter' && e.metaKey) {
-      e.preventDefault();
-      if (!message.trim() && attachments.length === 0) return;
-      if (disabled) return;
-
-      // Save to history before sending
-      saveToHistory(message.trim());
-
-      // Deactivate audio mode when typing manually
-      setAudioMode(sessionId, false);
-
-      // Build message with file context
-      let fullMessage = message.trim();
-      const fileMentions = attachments.filter((a) => a.type === 'mention');
-      if (fileMentions.length > 0) {
-        const fileContext = fileMentions.map((m) => `@${m.name}`).join(', ');
-        if (fullMessage) {
-          fullMessage = `[Files: ${fileContext}]\n\n${fullMessage}`;
-        } else {
-          fullMessage = `Looking at: ${fileContext}`;
-        }
-      }
-
-      const otherAttachments = attachments.filter((a) => a.type !== 'mention');
-      const attachmentsToSend = otherAttachments.length > 0 ? [...otherAttachments] : undefined;
-
-      // Clear input immediately
-      setMessage('');
-      setAttachments([]);
-
-      // Use interruptAndSend which properly cancels stream then sends
-      interruptAndSend(sessionId, fullMessage, attachmentsToSend);
-      return;
-    }
+    // CMD+Enter: DISABLED - was causing accidental interrupts
+    // User was unconsciously pressing Cmd+Enter which interrupted queries
+    // if (e.key === 'Enter' && e.metaKey) {
+    //   e.preventDefault();
+    //   // ... interrupt logic disabled
+    // }
 
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();

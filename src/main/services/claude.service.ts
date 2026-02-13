@@ -11,6 +11,7 @@ import { BrowserWindow } from 'electron';
 import { IPC_CHANNELS } from '../../shared/constants/channels';
 import { browserService } from './browser.service';
 import { stagehandService } from './stagehand.service';
+import { computerUseService } from './computer-use.service';
 import { documentService } from './document.service';
 import { sshService } from './ssh.service';
 import { memoryService, MemoryCategory } from './memory.service';
@@ -138,6 +139,44 @@ export class ClaudeService {
    */
   getSessionPermissionMode(sessionId: string): string | undefined {
     return this.sessionPermissionModes.get(sessionId);
+  }
+
+  /**
+   * Trigger manual compaction for a session by sending /compact command
+   * This proactively compacts the conversation history before it gets too large
+   */
+  async triggerManualCompaction(sessionId: string): Promise<boolean> {
+    const queryObj = this.activeQueryObjects.get(sessionId);
+    if (!queryObj) {
+      console.log('[Claude Service] Cannot compact - no active query for session:', sessionId);
+      return false;
+    }
+
+    try {
+      console.log('[Claude Service] Triggering manual compaction for session:', sessionId);
+
+      // Send /compact command via streamInput
+      const compactCommand: AsyncIterable<any> = {
+        [Symbol.asyncIterator]: async function* () {
+          yield {
+            type: 'user',
+            message: {
+              role: 'user',
+              content: '/compact',
+            },
+            parent_tool_use_id: null,
+            session_id: sessionId,
+          };
+        }
+      };
+
+      await queryObj.streamInput(compactCommand);
+      console.log('[Claude Service] Manual compaction triggered successfully');
+      return true;
+    } catch (error) {
+      console.error('[Claude Service] Failed to trigger compaction:', error);
+      return false;
+    }
   }
 
   /**
@@ -271,6 +310,33 @@ export class ClaudeService {
         description: 'Fastest model - best for simple tasks'
       },
     ];
+  }
+
+  /**
+   * Check if model supports Computer Use API
+   */
+  private supportsComputerUse(model: string): boolean {
+    const supportedModels = [
+      'claude-opus-4-6',
+      'claude-opus-4-5',
+      'claude-sonnet-4-5',
+      'claude-3-7-sonnet',
+      'claude-sonnet-4',
+    ];
+
+    return supportedModels.some(m => model.includes(m));
+  }
+
+  /**
+   * Get Computer Use beta header for the model
+   */
+  private getComputerUseBetaHeader(model: string): string {
+    // Opus 4.6 and 4.5 use newer beta version
+    if (model.includes('opus-4-6') || model.includes('opus-4-5')) {
+      return 'computer-use-2025-11-24';
+    }
+    // Other models use older beta version
+    return 'computer-use-2025-01-24';
   }
 
   /**
@@ -507,6 +573,54 @@ ${memoriesPrompt}
               text: `Failed to navigate: ${error instanceof Error ? error.message : String(error)}`,
             }],
             isError: true,
+          };
+        }
+      }
+    );
+
+    // ============ COMPUTER USE API TOOL ============
+    // Claude-powered visual browser automation using screenshot-based interaction
+
+    const computerUseTool = tool(
+      'computer',
+      'Interact with the browser using visual coordination. Takes screenshots and performs mouse/keyboard actions based on pixel coordinates. Use this for precise browser automation when you need to interact with visual elements. Coordinate space is 1024x768 virtual pixels.',
+      {
+        action: z.string().describe('Action to perform: screenshot, left_click, type, key, mouse_move, scroll, left_click_drag, right_click, middle_click, double_click, triple_click, left_mouse_down, left_mouse_up, hold_key, wait'),
+        coordinate: z.tuple([z.number(), z.number()]).optional().describe('Pixel coordinates [x, y] for mouse actions (in 1024x768 virtual space)'),
+        coordinate_end: z.tuple([z.number(), z.number()]).optional().describe('End coordinates for drag actions'),
+        text: z.string().optional().describe('Text to type or key name to press'),
+        scroll_direction: z.string().optional().describe('Scroll direction: up, down, left, right'),
+        scroll_amount: z.number().optional().describe('Scroll amount (default: 5)'),
+        duration: z.number().optional().describe('Duration in seconds for hold_key or wait'),
+      },
+      async (args) => {
+        try {
+          // Ensure browser panel is open
+          await this.ensureBrowserPanelOpen(sessionId);
+
+          console.log('[Claude Service] Computer Use action:', args.action);
+          const result = await computerUseService.executeAction(sessionId, args as any);
+
+          const content: Array<{ type: string; text?: string; data?: string; mimeType?: string }> = [
+            { type: 'text', text: result.message }
+          ];
+
+          if (result.screenshot) {
+            content.push({
+              type: 'image',
+              data: result.screenshot,
+              mimeType: 'image/png'
+            });
+
+            // Emit browser update with screenshot
+            this.emitBrowserUpdate(sessionId, result.screenshot);
+          }
+
+          return { content, isError: !result.success };
+        } catch (error) {
+          return {
+            content: [{ type: 'text', text: `Computer use error: ${error instanceof Error ? error.message : String(error)}` }],
+            isError: true
           };
         }
       }
@@ -1419,6 +1533,10 @@ ${memoriesPrompt}
       name: 'claudette-browser',
       version: '2.0.0', // Upgraded to Stagehand-powered automation
       tools: [
+        // ============ COMPUTER USE API TOOL ============
+        // Claude-powered visual automation
+        computerUseTool,          // Screenshot-based interaction (CLAUDE NATIVE)
+
         // ============ STAGEHAND AI-POWERED TOOLS ONLY ============
         // These use Stagehand's AI for browser automation
         browserActTool,           // Natural language actions (PRIMARY)
@@ -2039,6 +2157,82 @@ ${memoriesPrompt}
         }];
       }
 
+      // Ralph Loop: Add Stop hook for Grep It mode (bypassPermissions)
+      // This intercepts session exit to continue iteration until task is complete
+      const audioSettings = this.store.get('audioSettings') as any;
+      const ralphLoopEnabled = audioSettings?.ralphLoopEnabled ?? false;
+
+      if (permissionMode === 'bypassPermissions' && ralphLoopEnabled) {
+        hooks.Stop = [async (options: { fullContent: string; signal: AbortSignal }) => {
+          const completionMarker = '<promise>COMPLETE</promise>';
+          const hasCompletionMarker = options.fullContent.includes(completionMarker);
+
+          if (hasCompletionMarker) {
+            console.log('[Ralph Loop] Completion marker found, allowing exit');
+            return { decision: 'allow' as const };
+          }
+
+          console.log('[Ralph Loop] Task not complete, continuing iteration...');
+          return {
+            decision: 'block' as const,
+            prompt: message,  // Re-feed original prompt
+          };
+        }];
+      }
+
+      // Computer Use Stop hook for iteration control (similar to Ralph Loop)
+      const computerUseEnabled = audioSettings?.computerUseEnabled ?? false;
+      const maxComputerUseIterations = audioSettings?.maxComputerUseIterations ?? 20;
+
+      if (permissionMode === 'bypassPermissions' && computerUseEnabled) {
+        hooks.Stop = [async (options: { fullContent: string; signal: AbortSignal }) => {
+          // Check for explicit completion markers
+          const completionMarkers = [
+            '<promise>COMPLETE</promise>',
+            'Task completed successfully',
+            'I have finished'
+          ];
+
+          const hasCompletion = completionMarkers.some(marker =>
+            options.fullContent.toLowerCase().includes(marker.toLowerCase())
+          );
+
+          if (hasCompletion) {
+            console.log('[Computer Use] Task completion detected');
+            return { decision: 'allow' as const };
+          }
+
+          // Check if Claude stopped using tools (likely stuck or done)
+          const recentToolUse = options.fullContent.includes('"type":"tool_use"');
+          if (!recentToolUse) {
+            console.log('[Computer Use] No recent tool use, allowing exit');
+            return { decision: 'allow' as const };
+          }
+
+          // Initialize iteration counter if not present
+          if (!session.computerUseIterations) {
+            session.computerUseIterations = 0;
+          }
+
+          // Increment iteration counter
+          session.computerUseIterations++;
+          console.log(`[Computer Use] Iteration ${session.computerUseIterations}/${maxComputerUseIterations}`);
+
+          // Check iteration limit
+          if (session.computerUseIterations >= maxComputerUseIterations) {
+            console.log('[Computer Use] Max iterations reached');
+            return { decision: 'allow' as const };
+          }
+
+          // Continue iteration
+          console.log('[Computer Use] Continuing task iteration...');
+          return {
+            decision: 'block' as const,
+            prompt: message
+          };
+        }];
+      }
+
       // Add ultra plan mode hooks if enabled
       if (ultraPlanEnabled) {
         hooks.PostToolUse = [{
@@ -2128,7 +2322,10 @@ Begin by creating the task structure now.
           includePartialMessages: true,
           // Use selected model or default to Claude Opus 4.6
           model: model || 'claude-opus-4-6',
-          // Enable 1M context window (beta) for Opus 4.6 and Sonnet 4.5
+          // CRITICAL: Always send context-1m beta header for 1M context window
+          // This is essential to avoid hitting the 200K limit too quickly
+          // Note: When Computer Use is enabled, the SDK also adds computer-use beta automatically,
+          // which may cause a warning from Foundry but the context-1m header still works
           betas: ['context-1m-2025-08-07'],
           ...(maxThinkingTokens ? { maxThinkingTokens } : {}),
           // Ultra Plan Mode: Add hooks if enabled
@@ -2767,6 +2964,29 @@ Begin by creating the task structure now.
               return;
             }
 
+            // Check for "Prompt is too long" error - this means conversation is ALREADY too long
+            // By this point, compaction will also fail. We need to ask user to rewind.
+            if (resultMsg.is_error && resultMsg.result?.toLowerCase().includes('prompt is too long')) {
+              console.error('[Claude SDK] Conversation too long - compaction will also fail at this point');
+
+              yield {
+                type: 'error',
+                error: '❌ Your conversation history has exceeded the maximum length. Compaction cannot run at this point. Please use the /rewind command to go back a few messages and try again, or start a new session.'
+              };
+              return;
+            }
+
+            // Check for compaction failure error (conversation already too long for compaction)
+            if (resultMsg.is_error && resultMsg.result?.toLowerCase().includes('conversation too long')) {
+              console.error('[Claude SDK] Conversation too long for compaction');
+
+              yield {
+                type: 'error',
+                error: '❌ Your conversation history is too long to compact. Please use the /rewind command to go back a few messages, or start a new session.'
+              };
+              return;
+            }
+
             // Check for other API errors
             if (resultMsg.is_error && resultMsg.result) {
               yield { type: 'error', error: resultMsg.result };
@@ -2782,6 +3002,24 @@ Begin by creating the task structure now.
             if (finalFlushed?.thinking) {
               yield { type: 'thinking_delta', content: finalFlushed.thinking };
             }
+
+            // Track token usage for logging (proactive compaction handled by always sending context-1m beta)
+            // Extract usage from successful result message
+            const successResult = resultMsg as SDKMessage & { usage?: { input_tokens?: number }; model?: string };
+            if (successResult.usage?.input_tokens) {
+              const inputTokens = successResult.usage.input_tokens;
+              const currentModel = successResult.model || selectedModel || 'claude-opus-4-6';
+              const hasLargeContext = currentModel.includes('opus-4-6') || currentModel.includes('sonnet-4-5');
+              const contextWindowSize = hasLargeContext ? 1000000 : 200000;
+
+              console.log(`[Claude SDK] Conversation tokens: ${inputTokens}/${contextWindowSize} (${Math.round((inputTokens / contextWindowSize) * 100)}%)`);
+
+              // Log warning when approaching 75% of limit (but don't show to user - just for monitoring)
+              if (inputTokens >= contextWindowSize * 0.75) {
+                console.warn(`[Claude SDK] ⚠️ Conversation approaching context limit: ${Math.round((inputTokens / contextWindowSize) * 100)}%`);
+              }
+            }
+
             // Mark query as complete so we exit the loop
             // (For SSH sessions, the process stays alive for next query, so iterator won't close naturally)
             queryComplete = true;

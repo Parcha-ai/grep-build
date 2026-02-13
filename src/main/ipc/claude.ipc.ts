@@ -11,33 +11,11 @@ import { DEFAULT_AUDIO_SETTINGS } from '../../shared/types/audio';
 const settingsStore = new Store({ name: 'claudette-settings' }) as any;
 
 // Ralph Loop completion marker
+// Ralph Loop uses Stop hook in claude.service.ts (Anthropic SDK pattern)
+// Completion marker checked by the Stop hook
 const RALPH_LOOP_COMPLETION_MARKER = '<promise>COMPLETE</promise>';
 
 const claudeService = new ClaudeService();
-
-/**
- * Check if Ralph Loop should continue based on settings and completion state
- */
-function shouldRalphLoopContinue(permissionMode: string | undefined, messageContent: string): boolean {
-  // Only applies in Grep It mode (bypassPermissions)
-  if (permissionMode !== 'bypassPermissions') {
-    return false;
-  }
-
-  // Check if Ralph Loop is enabled in settings
-  const audioSettings = settingsStore.get('audioSettings') as typeof DEFAULT_AUDIO_SETTINGS | undefined;
-  const ralphLoopEnabled = audioSettings?.ralphLoopEnabled ?? DEFAULT_AUDIO_SETTINGS.ralphLoopEnabled;
-
-  if (!ralphLoopEnabled) {
-    return false;
-  }
-
-  // Check if the completion marker is present
-  const hasCompletionMarker = messageContent.includes(RALPH_LOOP_COMPLETION_MARKER);
-
-  // Continue if no completion marker found
-  return !hasCompletionMarker;
-}
 
 // Batching helper to reduce IPC overhead
 class ChunkBatcher {
@@ -126,48 +104,20 @@ export function registerClaudeHandlers(ipcMain: IpcMain): void {
         });
       }
 
-      // Ralph Loop state
-      const originalMessage = message;
-      let currentMessage = message;
-      let currentAttachments = attachments;
-      let loopIteration = 0;
-      const MAX_RALPH_LOOP_ITERATIONS = 50; // Safety limit to prevent infinite loops
+      // Create batcher for this session
+      const batcher = new ChunkBatcher(
+        sessionId,
+        (content, agentId) => mainWindow.webContents.send(IPC_CHANNELS.CLAUDE_STREAM_CHUNK, { sessionId, content, agentId }),
+        (content) => mainWindow.webContents.send(IPC_CHANNELS.CLAUDE_THINKING_CHUNK, { sessionId, content })
+      );
 
-      // Accumulate content across ALL Ralph Loop iterations (not per-iteration)
       let fullMessageContent = '';
-
-      // Ralph Loop - keep processing until task is complete
-      // eslint-disable-next-line no-constant-condition
-      while (true) {
-        loopIteration++;
-
-        // Safety check for infinite loops
-        if (loopIteration > MAX_RALPH_LOOP_ITERATIONS) {
-          console.warn('[Claude IPC] Ralph Loop hit max iterations, stopping');
-          mainWindow.webContents.send(IPC_CHANNELS.CLAUDE_STREAM_ERROR, {
-            sessionId,
-            error: 'Ralph Loop reached maximum iterations (50). Add <promise>COMPLETE</promise> to signal task completion.',
-          });
-          break;
-        }
-
-        if (loopIteration > 1) {
-          console.log(`[Claude IPC] Ralph Loop iteration ${loopIteration} - continuing work...`);
-        }
-
-        // Create batcher for this session
-        const batcher = new ChunkBatcher(
-          sessionId,
-          (content, agentId) => mainWindow.webContents.send(IPC_CHANNELS.CLAUDE_STREAM_CHUNK, { sessionId, content, agentId }),
-          (content) => mainWindow.webContents.send(IPC_CHANNELS.CLAUDE_THINKING_CHUNK, { sessionId, content })
-        );
-
-        let shouldContinue = false;
-        let hadError = false;
+      let hadError = false;
+      let needsCompactionRetry = false;
 
         try {
-          // Stream the response
-          for await (const event of claudeService.streamMessage(sessionId, currentMessage, currentAttachments, permissionMode, thinkingMode, model)) {
+          // Stream the response (Stop hook handles Ralph Loop iteration)
+          for await (const event of claudeService.streamMessage(sessionId, message, attachments, permissionMode, thinkingMode, model)) {
             switch (event.type) {
               case 'text_delta':
                 batcher.addText(event.content || '', event.agentId);
@@ -208,36 +158,117 @@ export function registerClaudeHandlers(ipcMain: IpcMain): void {
                 });
                 break;
 
+              case 'compaction_status':
+                // Forward compaction status to renderer
+                mainWindow.webContents.send(IPC_CHANNELS.CLAUDE_COMPACTION_STATUS, event.compactionStatus);
+                break;
+
+              case 'compaction_complete':
+                // Forward compaction complete to renderer
+                mainWindow.webContents.send(IPC_CHANNELS.CLAUDE_COMPACTION_COMPLETE, event.compactionComplete);
+
+                // If we're waiting to retry after compaction, do it now
+                if (needsCompactionRetry) {
+                  console.log('[Claude IPC] Compaction complete - auto-retrying message');
+                  needsCompactionRetry = false;
+
+                  // Wait a moment for SDK to fully settle
+                  await new Promise(resolve => setTimeout(resolve, 1000));
+
+                  // Show retrying message to user
+                  mainWindow.webContents.send(IPC_CHANNELS.CLAUDE_SYSTEM_INFO, {
+                    sessionId,
+                    systemInfo: { message: 'Compaction complete - retrying your message...' },
+                  });
+
+                  // Retry by starting a new stream with the same message
+                  console.log('[Claude IPC] Starting retry stream after compaction');
+                  try {
+                    for await (const retryEvent of claudeService.streamMessage(sessionId, message, attachments, permissionMode, thinkingMode, model)) {
+                      // Process retry events the same way
+                      switch (retryEvent.type) {
+                        case 'text_delta':
+                          batcher.addText(retryEvent.content || '', retryEvent.agentId);
+                          fullMessageContent += retryEvent.content || '';
+                          break;
+                        case 'thinking_delta':
+                          batcher.addThinking(retryEvent.content || '');
+                          break;
+                        case 'message_complete':
+                          batcher.flush();
+                          const retryMessage = retryEvent.message || {
+                            id: Date.now().toString(),
+                            role: 'assistant' as const,
+                            content: fullMessageContent,
+                            timestamp: new Date(),
+                          };
+                          mainWindow.webContents.send(IPC_CHANNELS.CLAUDE_STREAM_END, {
+                            sessionId,
+                            message: retryMessage,
+                          });
+                          break;
+                        case 'error':
+                          batcher.flush();
+                          mainWindow.webContents.send(IPC_CHANNELS.CLAUDE_STREAM_ERROR, {
+                            sessionId,
+                            error: retryEvent.error,
+                          });
+                          break;
+                        // Handle other event types as needed
+                      }
+                    }
+                  } catch (retryError) {
+                    console.error('[Claude IPC] Retry after compaction failed:', retryError);
+                    mainWindow.webContents.send(IPC_CHANNELS.CLAUDE_STREAM_ERROR, {
+                      sessionId,
+                      error: 'Failed to retry after compaction',
+                    });
+                  }
+                  return; // Exit after successful retry
+                }
+                break;
+
               case 'message_complete':
                 // Flush any remaining batched content
                 batcher.flush();
 
-                // Check if Ralph Loop should continue
-                shouldContinue = shouldRalphLoopContinue(permissionMode, fullMessageContent);
-
-                if (shouldContinue) {
-                  // Don't send STREAM_END yet - we're continuing
-                  // Send a special event to indicate we're looping
-                  mainWindow.webContents.send(IPC_CHANNELS.CLAUDE_STREAM_CHUNK, {
-                    sessionId,
-                    content: '\n\n---\n*[Ralph Loop: Task not complete, continuing...]*\n\n',
-                  });
-                } else {
-                  // Task is complete or Ralph Loop is disabled
-                  // Use event.message but ensure content is from accumulated stream if empty
-                  const finalMessage = {
-                    ...event.message,
-                    content: event.message.content || fullMessageContent,
-                  };
-                  mainWindow.webContents.send(IPC_CHANNELS.CLAUDE_STREAM_END, {
-                    sessionId,
-                    message: finalMessage,
-                  });
-                }
+                // Send STREAM_END (Stop hook handles Ralph Loop iteration)
+                const finalMessage = event.message ? {
+                  ...event.message,
+                  content: event.message.content || fullMessageContent,
+                } : {
+                  id: Date.now().toString(),
+                  role: 'assistant' as const,
+                  content: fullMessageContent,
+                  timestamp: new Date(),
+                };
+                mainWindow.webContents.send(IPC_CHANNELS.CLAUDE_STREAM_END, {
+                  sessionId,
+                  message: finalMessage,
+                });
                 break;
 
               case 'error':
-                // Flush any remaining batched content before error
+                // Check if this is a compaction error (prompt too long)
+                const isCompactionError = event.error?.includes('conversation history is being compacted');
+
+                if (isCompactionError) {
+                  console.log('[Claude IPC] Compaction error detected - will auto-retry after compaction');
+                  needsCompactionRetry = true;
+
+                  // Show user-friendly compaction message
+                  batcher.flush();
+                  mainWindow.webContents.send(IPC_CHANNELS.CLAUDE_STREAM_ERROR, {
+                    sessionId,
+                    error: event.error,
+                  });
+
+                  // Don't mark as hadError since we'll retry
+                  // Continue processing events to catch compaction_complete
+                  break;
+                }
+
+                // Regular error handling
                 batcher.flush();
                 mainWindow.webContents.send(IPC_CHANNELS.CLAUDE_STREAM_ERROR, {
                   sessionId,
@@ -256,17 +287,6 @@ export function registerClaudeHandlers(ipcMain: IpcMain): void {
           });
           hadError = true;
         }
-
-        // Exit the loop if there was an error or if we shouldn't continue
-        if (hadError || !shouldContinue) {
-          break;
-        }
-
-        // Prepare for next iteration
-        // Use a continuation prompt that references the original task
-        currentMessage = `Continue working on the original task. The original request was:\n\n"${originalMessage}"\n\nYou have not yet output <promise>COMPLETE</promise> to indicate the task is finished. Please continue until the task is objectively complete, then output <promise>COMPLETE</promise>.`;
-        currentAttachments = undefined; // Don't re-send attachments on continuation
-      }
     }
   );
 

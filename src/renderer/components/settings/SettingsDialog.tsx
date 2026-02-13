@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { X, Eye, EyeOff, Check, Loader2, Search, Download, Sparkles, Settings, Key, History } from 'lucide-react';
 import { useUIStore } from '../../stores/ui.store';
 import { useAudioStore } from '../../stores/audio.store';
+import { useSessionStore } from '../../stores/session.store';
 import ReleaseNotes from '../common/ReleaseNotes';
 
 type TabId = 'general' | 'apiKeys' | 'releases';
@@ -66,6 +67,7 @@ const TABS: TabConfig[] = [
 export default function SettingsDialog() {
   const { isSettingsOpen, closeSettings } = useUIStore();
   const { settings: audioSettings, loadSettings, updateSettings } = useAudioStore();
+  const loadAvailableModels = useSessionStore((s) => s.loadAvailableModels);
 
   // Active tab state
   const [activeTab, setActiveTab] = useState<TabId>('general');
@@ -86,6 +88,8 @@ export default function SettingsDialog() {
   // Audio settings
   const [voiceModeEnabled, setVoiceModeEnabled] = useState(false);
   const [ralphLoopEnabled, setRalphLoopEnabled] = useState(false);
+  const [computerUseEnabled, setComputerUseEnabled] = useState(false);
+  const [maxComputerUseIterations, setMaxComputerUseIterations] = useState(20);
 
   // General settings
   const [qmdEnabled, setQmdEnabled] = useState(false);
@@ -130,10 +134,17 @@ export default function SettingsDialog() {
     try {
       await window.electronAPI.settings.set(updates);
       console.log('[SettingsDialog] Auto-saved app settings:', updates);
+
+      // Reload available models if Foundry settings changed
+      const isFoundryUpdate = 'foundryEnabled' in updates || 'foundryDefaultSonnetModel' in updates || 'foundryDefaultHaikuModel' in updates || 'foundryDefaultOpusModel' in updates;
+      if (isFoundryUpdate) {
+        console.log('[SettingsDialog] Foundry settings changed, reloading available models');
+        await loadAvailableModels();
+      }
     } catch (error) {
       console.error('Failed to auto-save app settings:', error);
     }
-  }, [showSaveIndicator]);
+  }, [showSaveIndicator, loadAvailableModels]);
 
   // Auto-save audio settings
   const autoSaveAudioSettings = useCallback(async (updates: Partial<typeof audioSettings>) => {
@@ -220,6 +231,8 @@ export default function SettingsDialog() {
     if (audioSettings) {
       setVoiceModeEnabled(audioSettings.voiceModeEnabled || false);
       setRalphLoopEnabled(audioSettings.ralphLoopEnabled || false);
+      setComputerUseEnabled(audioSettings.computerUseEnabled || false);
+      setMaxComputerUseIterations(audioSettings.maxComputerUseIterations || 20);
     }
   }, [audioSettings]);
 
@@ -462,6 +475,57 @@ export default function SettingsDialog() {
             }}
             disabled={isLoading}
             color="bg-purple-500"
+          />
+        </div>
+
+        {/* Computer Use API Settings */}
+        <div className="flex items-center justify-between">
+          <div>
+            <label className="block text-xs font-mono text-claude-text-secondary uppercase tracking-wider">
+              Computer Use Mode (Visual Automation)
+            </label>
+            <p className="text-[10px] font-mono text-claude-text-secondary mt-1">
+              Enable Claude-powered screenshot-based browser automation
+            </p>
+            {computerUseEnabled && (
+              <p className="text-[10px] font-mono text-amber-500 mt-1">
+                ⚠️ Requires Anthropic API (not compatible with Foundry)
+              </p>
+            )}
+          </div>
+          <Toggle
+            enabled={computerUseEnabled}
+            onChange={(value) => {
+              setComputerUseEnabled(value);
+              autoSaveAudioSettings({ computerUseEnabled: value });
+            }}
+            disabled={isLoading}
+            color="bg-blue-500"
+          />
+        </div>
+
+        {/* Max Computer Use Iterations */}
+        <div className="flex items-center justify-between">
+          <div className="flex-1">
+            <label className="block text-xs font-mono text-claude-text-secondary uppercase tracking-wider">
+              Max Computer Use Iterations
+            </label>
+            <p className="text-[10px] font-mono text-claude-text-secondary mt-1">
+              Limit iterations to prevent runaway loops (default: 20)
+            </p>
+          </div>
+          <input
+            type="number"
+            min="1"
+            max="50"
+            value={maxComputerUseIterations}
+            onChange={(e) => {
+              const value = parseInt(e.target.value) || 20;
+              setMaxComputerUseIterations(value);
+              autoSaveAudioSettings({ maxComputerUseIterations: value });
+            }}
+            disabled={isLoading}
+            className="w-20 px-2 py-1 bg-claude-surface border border-claude-border text-claude-text text-xs font-mono rounded focus:outline-none focus:ring-1 focus:ring-purple-500"
           />
         </div>
       </div>

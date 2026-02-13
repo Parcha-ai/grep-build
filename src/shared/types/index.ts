@@ -56,6 +56,8 @@ export interface Session {
   // Starring/favorites
   isStarred?: boolean; // True if session is starred
   starredAt?: Date; // When it was starred (for stable ordering)
+  // Computer Use API iteration tracking (per-session counter for Stop hook)
+  computerUseIterations?: number; // Current iteration count (for Stop hook)
 }
 
 export type SessionStatus = 'creating' | 'starting' | 'setup' | 'running' | 'stopping' | 'stopped' | 'error';

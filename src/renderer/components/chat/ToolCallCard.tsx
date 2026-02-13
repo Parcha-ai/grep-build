@@ -739,9 +739,44 @@ function ExpandedContent({ toolCall, priority = false }: { toolCall: ToolCall; p
   const resultStr = typeof result === 'string' ? result : '';
   const base64Image = extractBase64Image(resultStr);
 
+  // Check for Anthropic API image format: { type: "image", source: { data: "...", media_type: "image/png", type: "base64" } }
+  let anthropicImage: string | null = null;
+  if (!base64Image && typeof result === 'object' && result !== null) {
+    const resultObj = result as Record<string, unknown>;
+
+    // Check if result is a single image content block
+    if (resultObj.type === 'image' && typeof resultObj.source === 'object' && resultObj.source !== null) {
+      const source = resultObj.source as Record<string, unknown>;
+      if (source.type === 'base64' && typeof source.data === 'string') {
+        const mediaType = (source.media_type as string) || 'image/png';
+        anthropicImage = `data:${mediaType};base64,${source.data}`;
+      }
+    }
+
+    // Check if result has a content array with image blocks
+    if (!anthropicImage && Array.isArray(resultObj.content)) {
+      const imageBlock = resultObj.content.find((block: unknown) => {
+        if (typeof block === 'object' && block !== null) {
+          const b = block as Record<string, unknown>;
+          return b.type === 'image' && typeof b.source === 'object';
+        }
+        return false;
+      });
+
+      if (imageBlock) {
+        const block = imageBlock as Record<string, unknown>;
+        const source = block.source as Record<string, unknown>;
+        if (source.type === 'base64' && typeof source.data === 'string') {
+          const mediaType = (source.media_type as string) || 'image/png';
+          anthropicImage = `data:${mediaType};base64,${source.data}`;
+        }
+      }
+    }
+  }
+
   // Also check for screenshot field in object results (common for browser/MCP tools)
   let screenshotFromObject: string | null = null;
-  if (!base64Image && typeof result === 'object' && result !== null) {
+  if (!base64Image && !anthropicImage && typeof result === 'object' && result !== null) {
     const resultObj = result as Record<string, unknown>;
     // Look for common screenshot field names
     const screenshotField = resultObj.screenshot || resultObj.image || resultObj.imageData;
@@ -782,6 +817,30 @@ function ExpandedContent({ toolCall, priority = false }: { toolCall: ToolCall; p
               type="image"
               alt="Tool result"
             />
+          ) : anthropicImage ? (
+            <div className="space-y-2">
+              <MediaPreview src={anthropicImage} type="image" alt="Tool result" />
+              {/* Show text content if present alongside the image */}
+              {(() => {
+                if (typeof result !== 'object' || result === null) return null;
+                const resultObj = result as Record<string, unknown>;
+                if (!('content' in resultObj) || !Array.isArray(resultObj.content)) return null;
+
+                return resultObj.content.map((block: unknown, idx: number) => {
+                  if (typeof block === 'object' && block !== null) {
+                    const b = block as Record<string, unknown>;
+                    if (b.type === 'text' && typeof b.text === 'string') {
+                      return (
+                        <pre key={idx} className="whitespace-pre-wrap text-claude-text bg-claude-bg/50 p-2 overflow-x-auto max-h-60 overflow-y-auto">
+                          {b.text}
+                        </pre>
+                      );
+                    }
+                  }
+                  return null;
+                });
+              })()}
+            </div>
           ) : screenshotFromObject ? (
             <div className="space-y-2">
               <MediaPreview src={screenshotFromObject} type="image" alt="Screenshot" />

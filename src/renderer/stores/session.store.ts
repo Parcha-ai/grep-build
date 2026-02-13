@@ -227,27 +227,23 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       // Load messages for this session from SDK transcripts
       await loadMessages(sessionId);
 
-      // For SSH sessions, check if actually streaming before clearing state
+      // For SSH sessions, don't clear isStreaming state if already streaming
+      // The stream events will properly manage the streaming state
       if (session?.sshConfig) {
+        const currentlyStreaming = get().isStreaming[sessionId];
+        if (!currentlyStreaming) {
+          console.log(`[SessionStore] SSH session not streaming, state is already clear`);
+        } else {
+          console.log(`[SessionStore] SSH session IS streaming, preserving state`);
+        }
+
         try {
-          // Check backend to see if session is actually running a query
-          const isActuallyStreaming = await window.electronAPI.claude.isQueryActive(sessionId);
-
-          if (!isActuallyStreaming) {
-            console.log(`[SessionStore] SSH session not actively streaming, safe to clear state`);
-            set((state) => ({
-              isStreaming: { ...state.isStreaming, [sessionId]: false },
-            }));
-          } else {
-            console.log(`[SessionStore] SSH session IS actively streaming, preserving state`);
-          }
-
           const persistentInfo = await window.electronAPI.ssh.checkPersistentSession(sessionId, session.sshConfig);
           if (persistentInfo?.isRunning) {
             console.log(`[SessionStore] SSH session ${sessionId} has active remote Claude in tmux`);
           }
         } catch (error) {
-          console.error('[SessionStore] Failed to check SSH session state:', error);
+          console.error('[SessionStore] Failed to check persistent session:', error);
         }
       }
 
