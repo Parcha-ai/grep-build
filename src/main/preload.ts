@@ -68,6 +68,10 @@ const electronAPI = {
       ipcRenderer.invoke(IPC_CHANNELS.SESSION_UPDATE, sessionId, updates),
     rewindAndFork: (sessionId: string, rewindToMessageId: string): Promise<Session> =>
       ipcRenderer.invoke(IPC_CHANNELS.SESSION_REWIND_FORK, sessionId, rewindToMessageId),
+    createFork: (parentSessionId: string, forkPoint: string, initialMessage?: string): Promise<Session> =>
+      ipcRenderer.invoke(IPC_CHANNELS.SESSION_CREATE_FORK, parentSessionId, forkPoint, initialMessage),
+    getForkGroup: (sessionId: string): Promise<Session[]> =>
+      ipcRenderer.invoke(IPC_CHANNELS.SESSION_GET_FORK_GROUP, sessionId),
     onStatusChanged: (callback: (session: Session) => void) => {
       const handler = (_: IpcRendererEvent, session: Session) => callback(session);
       ipcRenderer.on(IPC_CHANNELS.SESSION_STATUS_CHANGED, handler);
@@ -729,6 +733,10 @@ const electronAPI = {
       ipcRenderer.on(IPC_CHANNELS.SSH_DOWNLOAD_PROGRESS, handler);
       return () => ipcRenderer.removeListener(IPC_CHANNELS.SSH_DOWNLOAD_PROGRESS, handler);
     },
+    reconnect: (sessionId: string): Promise<{
+      success: boolean;
+      error?: string;
+    }> => ipcRenderer.invoke(IPC_CHANNELS.SSH_RECONNECT, sessionId),
   },
 
   // Memory (agent memory system)

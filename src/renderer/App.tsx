@@ -15,7 +15,7 @@ import FileContentSearch from './components/editor/FileContentSearch';
 import SessionSwitcher from './components/session/SessionSwitcher';
 import QMDPrompt from './components/qmd/QMDPrompt';
 import LunchLockModal from './components/layout/LunchLockModal';
-import { Terminal, Globe, PanelRight, Settings, PanelLeftClose, Monitor, AlertTriangle, Package, FileText, FileCode } from 'lucide-react';
+import { Terminal, Globe, PanelRight, Settings, PanelLeftClose, Monitor, AlertTriangle, Package, FileText, FileCode, ClipboardList } from 'lucide-react';
 
 // Check if we're running in Electron (has electronAPI) or browser preview mode
 const isElectron = typeof window !== 'undefined' && !!window.electronAPI;
@@ -466,7 +466,7 @@ function ElectronApp() {
             }`}
             title="Toggle Plan"
           >
-            <FileText size={14} />
+            <ClipboardList size={14} />
           </button>
           <button
             onClick={toggleEditorPanel}

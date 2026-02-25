@@ -763,6 +763,253 @@ Only return the title, nothing else.`
     return forkedSession;
   }
 
+  /**
+   * Create a conversation fork from a parent session
+   * Similar to rewindAndForkSession but focused on conversation branching rather than git worktrees
+   * @param parentSessionId ID of the parent session to fork from
+   * @param forkPoint Message ID to fork at, or 'end' to fork at current end of conversation
+   * @param initialUserMessage Optional first message to send to the fork (not added yet, caller handles sending)
+   */
+  async createForkFromInput(
+    parentSessionId: string,
+    forkPoint: string,
+    initialUserMessage?: string
+  ): Promise<Session> {
+    const parentSession = await this.getSession(parentSessionId);
+    if (!parentSession) {
+      throw new Error(`Parent session ${parentSessionId} not found`);
+    }
+
+    // Find the transcript file for the parent session
+    const homeDir = require('os').homedir();
+    const claudeProjectsDir = path.join(homeDir, '.claude', 'projects');
+
+    let transcriptPath: string | null = null;
+    let projectHash: string | null = null;
+
+    try {
+      const entries = await fs.readdir(claudeProjectsDir, { withFileTypes: true });
+      for (const entry of entries) {
+        if (!entry.isDirectory() || entry.name.startsWith('.')) continue;
+
+        const projectDir = path.join(claudeProjectsDir, entry.name);
+        const transcriptFile = `${parentSessionId}.jsonl`;
+        const potentialPath = path.join(projectDir, transcriptFile);
+
+        try {
+          await fs.access(potentialPath);
+          transcriptPath = potentialPath;
+          projectHash = entry.name;
+          break;
+        } catch {
+          // File doesn't exist in this directory, continue searching
+        }
+      }
+    } catch (error) {
+      throw new Error(`Failed to search for transcript: ${error}`);
+    }
+
+    // Handle case where transcript doesn't exist yet (new session with no messages)
+    let truncatedLines: string[] = [];
+    let forkPointMessageId = forkPoint;
+
+    if (!transcriptPath || !projectHash) {
+      console.log(`[Session] No transcript found for parent session ${parentSessionId} - forking empty session`);
+
+      // Derive project hash from repo path (use first project directory as fallback)
+      try {
+        const entries = await fs.readdir(claudeProjectsDir, { withFileTypes: true });
+        const firstProjectDir = entries.find(e => e.isDirectory() && !e.name.startsWith('.'));
+        if (firstProjectDir) {
+          projectHash = firstProjectDir.name;
+        } else {
+          throw new Error('No Claude project directories found');
+        }
+      } catch (error) {
+        throw new Error(`Failed to determine project hash: ${error}`);
+      }
+
+      // Empty transcript - fork will start fresh
+      truncatedLines = [];
+    } else {
+      // Read the transcript
+      const content = await fs.readFile(transcriptPath, 'utf-8');
+      const lines = content.split('\n').filter(l => l.trim());
+
+      // Determine fork point
+      if (forkPoint === 'end') {
+        // Fork at the end - include all messages
+        truncatedLines = lines;
+        forkPointMessageId = 'end';
+      } else {
+        // Fork at specific message ID
+        let foundTargetMessage = false;
+
+        for (let i = 0; i < lines.length; i++) {
+          const line = lines[i];
+          truncatedLines.push(line);
+
+          try {
+            const parsed = JSON.parse(line);
+            if (parsed.uuid === forkPoint) {
+              foundTargetMessage = true;
+              break;
+            }
+          } catch {
+            // Not valid JSON, keep line anyway
+          }
+        }
+
+        if (!foundTargetMessage) {
+          throw new Error(`Fork point message ${forkPoint} not found in transcript`);
+        }
+      }
+    }
+
+    // Generate new session ID for the fork
+    const forkedSessionId = uuid();
+    const forkedTranscriptPath = path.join(
+      claudeProjectsDir,
+      projectHash,
+      `${forkedSessionId}.jsonl`
+    );
+
+    // Update sessionId in all lines to point to the new session
+    const updatedLines = truncatedLines.map(line => {
+      try {
+        const parsed = JSON.parse(line);
+        if (parsed.sessionId === parentSessionId) {
+          parsed.sessionId = forkedSessionId;
+        }
+        return JSON.stringify(parsed);
+      } catch {
+        return line;
+      }
+    });
+
+    // Write the forked transcript (may be empty if parent had no messages)
+    if (updatedLines.length > 0) {
+      await fs.writeFile(forkedTranscriptPath, updatedLines.join('\n') + '\n', 'utf-8');
+    } else {
+      // Create empty transcript file
+      await fs.writeFile(forkedTranscriptPath, '', 'utf-8');
+    }
+
+    // Create the forked session object with conversation fork relationship fields
+    const forkedSession: Session = {
+      ...parentSession,
+      id: forkedSessionId,
+      name: `${parentSession.name} (fork)`, // Temporary name, will be replaced by AI generation
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      forkCreatedAt: new Date(),
+      // Conversation fork relationship fields
+      parentSessionId: parentSessionId,
+      childSessionIds: [],
+      forkPoint: forkPointMessageId,
+      isRoot: false,
+      // Preserve important metadata
+      model: parentSession.model,
+      branch: parentSession.branch,
+      worktreePath: parentSession.worktreePath,
+      repoPath: parentSession.repoPath,
+      isDevMode: parentSession.isDevMode,
+      sshConfig: parentSession.sshConfig,
+    };
+
+    // Store the forked session
+    this.store.set(`sessions.${forkedSessionId}`, forkedSession);
+
+    // Update parent session: add to childSessionIds, mark as root if not already
+    const updatedParent = {
+      ...parentSession,
+      childSessionIds: [...(parentSession.childSessionIds || []), forkedSessionId],
+      isRoot: parentSession.isRoot ?? true, // Mark as root if not explicitly set
+    };
+    this.store.set(`sessions.${parentSessionId}`, updatedParent);
+
+    // Add to discovered sessions cache
+    this.discoveredSessionsCache.set(forkedSessionId, forkedSession);
+    this.persistDiscoveredSessions();
+
+    // Emit event to notify UI of both updates
+    this.emit('sessionsUpdated', this.getMergedSessions());
+
+    console.log(`[Session] Created conversation fork ${forkedSessionId} from parent ${parentSessionId}`);
+
+    // Generate AI name asynchronously (non-blocking)
+    if (initialUserMessage) {
+      this.generateForkName(forkedSessionId, parentSession, initialUserMessage).catch(err => {
+        console.error('[Session] Failed to generate fork name:', err);
+      });
+    }
+
+    return forkedSession;
+  }
+
+  /**
+   * Generate an AI-powered name for a conversation fork
+   * Uses Claude Haiku to create a 2-3 word descriptive name
+   * @param forkedSessionId ID of the forked session to name
+   * @param parentSession Parent session for context
+   * @param userMessage The user's message that created this fork
+   */
+  private async generateForkName(
+    forkedSessionId: string,
+    parentSession: Session,
+    userMessage: string
+  ): Promise<void> {
+    const settingsStore = this.store;
+    const apiKey = settingsStore.get('anthropicApiKey') as string | undefined;
+
+    if (!apiKey) {
+      console.log('[Session] No API key, using fallback fork name');
+      // Use fallback name based on fork count
+      const forkCount = (parentSession.childSessionIds?.length || 0);
+      const fallbackName = `Fork ${forkCount}`;
+      await this.updateSession(forkedSessionId, { aiGeneratedName: fallbackName });
+      return;
+    }
+
+    try {
+      const anthropic = new Anthropic({ apiKey });
+
+      console.log('[Session] Generating AI name for fork:', forkedSessionId);
+
+      const response = await anthropic.messages.create({
+        model: 'claude-3-5-haiku-20241022',
+        max_tokens: 50,
+        messages: [{
+          role: 'user',
+          content: `Generate a concise 2-3 word name for this conversation fork.
+
+Parent conversation: "${parentSession.name}"
+New direction: "${userMessage.slice(0, 200)}"
+
+Only return the short name (2-3 words), nothing else.`
+        }]
+      });
+
+      const generatedName = response.content[0]?.type === 'text'
+        ? response.content[0].text.trim()
+        : null;
+
+      if (generatedName) {
+        await this.updateSession(forkedSessionId, {
+          aiGeneratedName: generatedName,
+          name: generatedName // Update the main name too
+        });
+        console.log('[Session] Generated fork name:', generatedName);
+      }
+    } catch (error) {
+      console.error('[Session] Failed to generate AI fork name:', error);
+      // Use fallback on error
+      const forkCount = (parentSession.childSessionIds?.length || 0);
+      const fallbackName = `Fork ${forkCount}`;
+      await this.updateSession(forkedSessionId, { aiGeneratedName: fallbackName });
+    }
+  }
+
   async updateSession(sessionId: string, updates: Partial<Session>): Promise<Session> {
     const session = await this.getSession(sessionId);
     if (!session) {

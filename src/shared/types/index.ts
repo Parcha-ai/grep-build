@@ -58,6 +58,13 @@ export interface Session {
   starredAt?: Date; // When it was starred (for stable ordering)
   // Computer Use API iteration tracking (per-session counter for Stop hook)
   computerUseIterations?: number; // Current iteration count (for Stop hook)
+  // Conversation fork relationships (separate from git worktree forks)
+  parentSessionId?: string; // ID of parent session (null for root conversation)
+  childSessionIds?: string[]; // Array of child fork session IDs
+  forkPoint?: string; // Message ID where this fork was created from parent
+  aiGeneratedName?: string; // AI-generated short name (2-3 words) for fork tabs
+  isRoot?: boolean; // True for original conversation (no parent)
+  forkCreatedAt?: Date; // When this conversation fork was created
 }
 
 export type SessionStatus = 'creating' | 'starting' | 'setup' | 'running' | 'stopping' | 'stopped' | 'error';
@@ -332,6 +339,7 @@ export interface PlanApprovalRequest {
 export interface PlanApprovalResponse {
   requestId: string;
   approved: boolean;
+  feedback?: string; // Optional feedback message when rejecting
 }
 
 // MCP Server types for display and management

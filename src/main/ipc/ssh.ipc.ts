@@ -190,10 +190,8 @@ export function registerSSHHandlers(ipcMain: IpcMain): void {
           sendSetupProgress(sessionId, 'error', undefined, undefined, session.errorMessage);
         }
 
-        // Save session
-        const sessions = sessionStore.get('sessions') || {};
-        sessions[sessionId] = session;
-        sessionStore.set('sessions', sessions);
+        // Save session (use individual key pattern like SessionService)
+        sessionStore.set(`sessions.${sessionId}`, session);
 
         console.log('[SSH IPC] SSH session created:', sessionId);
         return session;
@@ -326,9 +324,8 @@ export function registerSSHHandlers(ipcMain: IpcMain): void {
       console.log('[SSH IPC] Teleporting session', data.sourceSessionId, 'to', data.destinationConfig.host);
 
       try {
-        // Get source session from store
-        const sessions = sessionStore.get('sessions') || {};
-        const sourceSession = sessions[data.sourceSessionId] as Session | undefined;
+        // Get source session from store (use individual key pattern)
+        const sourceSession = sessionStore.get(`sessions.${data.sourceSessionId}`) as Session | undefined;
 
         if (!sourceSession) {
           return { success: false, error: 'Source session not found' };
@@ -337,6 +334,12 @@ export function registerSSHHandlers(ipcMain: IpcMain): void {
         if (sourceSession.sshConfig) {
           return { success: false, error: 'Cannot teleport an SSH session (already remote)' };
         }
+
+        // Get SDK session ID from either location (new mapping or old session field)
+        const sdkSessionId = sessionStore.get(`sdkSessionMappings.${data.sourceSessionId}`) as string | undefined
+          || sourceSession.sdkSessionId;
+
+        console.log('[SSH IPC] Source session SDK ID:', sdkSessionId);
 
         // Send progress updates
         const sendProgress = (message: string) => {
@@ -392,7 +395,7 @@ export function registerSSHHandlers(ipcMain: IpcMain): void {
         sendProgress('Copying session transcripts...');
         const result = await sshService.teleportSession(
           sourceSession.worktreePath,
-          sourceSession.sdkSessionId,
+          sdkSessionId,
           teleportConfig,
           sendProgress
         );
@@ -423,14 +426,19 @@ export function registerSSHHandlers(ipcMain: IpcMain): void {
           setupOutput,
           isDevMode: true,
           // Preserve SDK session ID so Claude can find the transcript
-          sdkSessionId: sourceSession.sdkSessionId,
+          sdkSessionId: sdkSessionId,
           // Track teleportation origin
           teleportedFrom: data.sourceSessionId,
         };
 
-        // Save new session
-        sessions[newSessionId] = newSession;
-        sessionStore.set('sessions', sessions);
+        // Save new session (use individual key pattern like SessionService)
+        sessionStore.set(`sessions.${newSessionId}`, newSession);
+
+        // Store SDK session mapping so Claude can resume the conversation
+        if (sdkSessionId) {
+          sessionStore.set(`sdkSessionMappings.${newSessionId}`, sdkSessionId);
+          console.log('[SSH IPC] Stored SDK session mapping:', newSessionId, '->', sdkSessionId);
+        }
 
         sendSetupProgress(data.sourceSessionId, 'completed', 'Teleportation complete!');
 
@@ -476,8 +484,7 @@ export function registerSSHHandlers(ipcMain: IpcMain): void {
         // ========================================================================
         // STEP 1: Validate source session
         // ========================================================================
-        const sessions = sessionStore.get('sessions') || {};
-        const sourceSession = sessions[sessionId] as Session | undefined;
+        const sourceSession = sessionStore.get(`sessions.${sessionId}`) as Session | undefined;
 
         if (!sourceSession) {
           return { success: false, error: 'Source session not found' };
@@ -489,8 +496,12 @@ export function registerSSHHandlers(ipcMain: IpcMain): void {
 
         const sshConfig = sourceSession.sshConfig;
         const remoteWorkingDir = sourceSession.worktreePath || sshConfig.remoteWorkdir;
-        const sdkSessionId = sourceSession.sdkSessionId;
 
+        // Get SDK session ID from either location (new mapping or old session field)
+        const sdkSessionId = sessionStore.get(`sdkSessionMappings.${sessionId}`) as string | undefined
+          || sourceSession.sdkSessionId;
+
+        console.log('[SSH IPC] Source session SDK ID:', sdkSessionId);
         sendDownloadProgress('Validating source session...');
 
         // ========================================================================
@@ -746,9 +757,14 @@ export function registerSSHHandlers(ipcMain: IpcMain): void {
           model: sourceSession.model,
         };
 
-        // Save new session
-        sessions[newSessionId] = newSession;
-        sessionStore.set('sessions', sessions);
+        // Save new session (use individual key pattern like SessionService)
+        sessionStore.set(`sessions.${newSessionId}`, newSession);
+
+        // Store SDK session mapping so Claude can resume the conversation
+        if (sdkSessionId) {
+          sessionStore.set(`sdkSessionMappings.${newSessionId}`, sdkSessionId);
+          console.log('[SSH IPC] Stored SDK session mapping:', newSessionId, '->', sdkSessionId);
+        }
 
         sendDownloadProgress('Session created!');
 
@@ -772,6 +788,43 @@ export function registerSSHHandlers(ipcMain: IpcMain): void {
       } catch (error) {
         console.error('[SSH IPC] Download session failed:', error);
         sendDownloadProgress(`Error: ${error instanceof Error ? error.message : 'Unknown error'}`);
+        return {
+          success: false,
+          error: error instanceof Error ? error.message : 'Unknown error',
+        };
+      }
+    }
+  );
+
+  /**
+   * Reconnect an SSH session (disconnect and restart with tmux check)
+   */
+  ipcMain.handle(
+    IPC_CHANNELS.SSH_RECONNECT,
+    async (_event, sessionId: string) => {
+      console.log('[SSH IPC] Reconnecting SSH session:', sessionId);
+
+      try {
+        // Get the session to retrieve SSH config
+        const session = sessionStore.get(`sessions.${sessionId}`) as Session | undefined;
+        if (!session || !session.sshConfig) {
+          throw new Error('Session not found or not an SSH session');
+        }
+
+        // Disconnect existing connection
+        sshService.disconnect(sessionId);
+        console.log('[SSH IPC] Disconnected session:', sessionId);
+
+        // Small delay to ensure clean disconnect
+        await new Promise(resolve => setTimeout(resolve, 500));
+
+        // Reconnection will happen automatically when the session is started again
+        // via the normal session start flow, which will check for persistent tmux sessions
+        console.log('[SSH IPC] Session disconnected. Will reconnect on next start.');
+
+        return { success: true };
+      } catch (error) {
+        console.error('[SSH IPC] Reconnect failed:', error);
         return {
           success: false,
           error: error instanceof Error ? error.message : 'Unknown error',

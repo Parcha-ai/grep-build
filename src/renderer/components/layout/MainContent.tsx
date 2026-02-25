@@ -3,6 +3,7 @@ import { useSessionStore } from '../../stores/session.store';
 import { useUIStore } from '../../stores/ui.store';
 import { useEditorStore } from '../../stores/editor.store';
 import ChatContainer from '../chat/ChatContainer';
+import ForkTabs from '../chat/ForkTabs';
 import TerminalContainer from '../terminal/TerminalContainer';
 import BrowserPreview from '../preview/BrowserPreview';
 import GitExplorer from '../git/GitExplorer';
@@ -246,7 +247,10 @@ export default function MainContent() {
           {isSessionSetup ? (
             <SetupProgress session={activeSession} progress={activeSetupProgress} />
           ) : (
-            <ChatContainer session={activeSession} />
+            <>
+              <ForkTabs sessionId={activeSession.id} />
+              <ChatContainer session={activeSession} />
+            </>
           )}
         </div>
 

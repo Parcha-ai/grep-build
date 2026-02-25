@@ -102,11 +102,18 @@ export const MicrophoneButton = forwardRef<VoiceModeHandle, MicrophoneButtonProp
 
   // Generate context summary for ElevenLabs agent
   const generateContextSummary = useCallback((isInitial = false) => {
-    const recentMessages = messages.slice(-5);
-    const messageSummary = recentMessages
+    // For initial connection, send ALL messages (or last 50 if > 50)
+    // For updates, send last 5 messages
+    const contextMessages = isInitial
+      ? (messages.length > 50 ? messages.slice(-50) : messages)
+      : messages.slice(-5);
+
+    const messageSummary = contextMessages
       .map(m => {
         const content = typeof m.content === 'string' ? m.content : JSON.stringify(m.content);
-        return `${m.role}: ${content.slice(0, 150)}${content.length > 150 ? '...' : ''}`;
+        // For initial context, show more of each message
+        const maxLength = isInitial ? 300 : 150;
+        return `${m.role}: ${content.slice(0, maxLength)}${content.length > maxLength ? '...' : ''}`;
       })
       .join('\n');
 
@@ -115,6 +122,7 @@ export const MicrophoneButton = forwardRef<VoiceModeHandle, MicrophoneButtonProp
 
     if (isInitial) {
       // Rich initial context for when voice mode first connects
+      // Include FULL conversation history so voice agent understands what's been discussed
       return `INITIAL SESSION CONTEXT:
 You are now connected as the voice assistant for Grep (an AI coding tool).
 
@@ -123,8 +131,14 @@ WORKING DIRECTORY: ${session?.repoPath || 'unknown'}
 BRANCH: ${session?.branch || 'main'}
 STATUS: ${isStreaming ? 'Grep is currently working on a task' : 'Grep is idle, ready for instructions'}
 
-RECENT CONVERSATION (last ${recentMessages.length} messages):
+FULL CONVERSATION HISTORY (${contextMessages.length} messages):
 ${messageSummary || 'No conversation yet - this is a fresh session'}
+
+IMPORTANT: Claude Code already has ALL of this context. Do NOT repeat analysis or work that's already been done.
+Your role is to:
+1. Understand what's already been discussed
+2. Help the user communicate new requests to Claude Code
+3. Report on Claude Code's progress when asked
 
 You should greet the user briefly and ask how you can help with their coding work on ${projectName}.`;
     }

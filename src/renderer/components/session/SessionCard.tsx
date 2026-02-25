@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Play, Square, Trash2, GitBranch, GitFork, Server, Upload, Pencil, Star, Download } from 'lucide-react';
+import { Play, Square, Trash2, GitBranch, GitFork, Server, Upload, Pencil, Star, Download, RefreshCw } from 'lucide-react';
 import { useSessionStore } from '../../stores/session.store';
 import type { Session } from '../../../shared/types';
 
@@ -84,6 +84,27 @@ export default function SessionCard({ session, isActive, onClick, isFork = false
     e.stopPropagation();
     if (onDownload && isSSH) {
       onDownload(session);
+    }
+  };
+
+  const handleReconnect = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!isSSH) return;
+
+    try {
+      // Reconnect via SSH service (disconnects and will reconnect on next start)
+      await window.electronAPI.ssh.reconnect(session.id);
+
+      // Stop the session
+      await stopSession(session.id);
+
+      // Small delay to ensure clean stop
+      await new Promise(resolve => setTimeout(resolve, 500));
+
+      // Restart the session (will check for tmux persistence)
+      await startSession(session.id);
+    } catch (error) {
+      console.error('Failed to reconnect:', error);
     }
   };
 
@@ -279,6 +300,17 @@ export default function SessionCard({ session, isActive, onClick, isFork = false
               title="Teleport to SSH remote"
             >
               <Upload size={12} />
+            </button>
+          )}
+          {/* Reconnect - only show for SSH sessions */}
+          {isSSH && (
+            <button
+              onClick={handleReconnect}
+              className="p-1 transition-colors hover:bg-blue-500/20 text-blue-400"
+              style={{ borderRadius: 0 }}
+              title="Reconnect (check tmux persistence)"
+            >
+              <RefreshCw size={12} />
             </button>
           )}
           {/* Download to Local - only show for SSH sessions */}

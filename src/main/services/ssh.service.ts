@@ -127,6 +127,14 @@ export class SSHService {
   private connections: Map<string, SSHConnectionInfo> = new Map();
   private connectionTimeout = 30000; // 30 seconds
 
+  // Performance optimization: Cache remote transcripts with TTL
+  private sshTranscriptCache = new Map<string, {
+    content: string;
+    fetchedAt: number;
+    sessionId: string;
+  }>();
+  private readonly SSH_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+
   /**
    * Test an SSH connection and verify Claude Code is installed on the remote
    */
@@ -1003,7 +1011,17 @@ export class SSHService {
     sdkSessionId: string,
     remoteWorkdir: string
   ): Promise<string | null> {
+    const cacheKey = `${config.host}:${sdkSessionId}`;
+
+    // Check cache first (performance optimization)
+    const cached = this.sshTranscriptCache.get(cacheKey);
+    if (cached && (Date.now() - cached.fetchedAt) < this.SSH_CACHE_TTL) {
+      console.log('[SSH Service] Using cached transcript for', sdkSessionId, `(age: ${Math.round((Date.now() - cached.fetchedAt) / 1000)}s)`);
+      return cached.content;
+    }
+
     try {
+      const perfStart = performance.now();
       const client = await this.getConnection(sessionId, config);
 
       // Construct the expected path to the transcript file
@@ -1035,9 +1053,23 @@ export class SSHService {
           return null;
         }
 
+        // Cache the result (performance optimization)
+        this.sshTranscriptCache.set(cacheKey, {
+          content: altResult,
+          fetchedAt: Date.now(),
+          sessionId: sdkSessionId,
+        });
+        console.log(`[Perf] SSH transcript fetch took ${performance.now() - perfStart}ms (${altResult.length} bytes)`);
         return altResult;
       }
 
+      // Cache the result (performance optimization)
+      this.sshTranscriptCache.set(cacheKey, {
+        content: result,
+        fetchedAt: Date.now(),
+        sessionId: sdkSessionId,
+      });
+      console.log(`[Perf] SSH transcript fetch took ${performance.now() - perfStart}ms (${result.length} bytes)`);
       return result;
     } catch (error) {
       console.error('[SSH Service] Failed to fetch remote transcript:', error);
@@ -1088,6 +1120,23 @@ export class SSHService {
     } catch (error) {
       console.error('[SSH Service] Failed to list remote transcripts:', error);
       return [];
+    }
+  }
+
+  /**
+   * Performance optimization: Invalidate cached transcript for a session
+   * Call this when new messages are sent to force refetch on next load
+   */
+  invalidateTranscriptCache(sessionId: string): void {
+    let invalidatedCount = 0;
+    for (const [key, value] of this.sshTranscriptCache.entries()) {
+      if (value.sessionId === sessionId) {
+        this.sshTranscriptCache.delete(key);
+        invalidatedCount++;
+      }
+    }
+    if (invalidatedCount > 0) {
+      console.log('[SSH Service] Invalidated', invalidatedCount, 'cached transcripts for', sessionId);
     }
   }
 
@@ -1382,7 +1431,8 @@ export class SSHService {
    */
   async checkPersistentSession(
     sessionId: string,
-    config: SSHConfig
+    config: SSHConfig,
+    retryOnChannelFailure = true
   ): Promise<PersistentSessionInfo | null> {
     try {
       const client = await this.getConnection(sessionId, config);
@@ -1431,7 +1481,16 @@ export class SSHService {
         claudeProcessPid,
       };
     } catch (error) {
-      console.error('[SSH Service] Failed to check persistent session:', error);
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      console.error('[SSH Service] Failed to check persistent session:', errorMsg);
+
+      // If channel failure and we haven't retried yet, force reconnect and try again
+      if (retryOnChannelFailure && errorMsg.includes('Channel open failure')) {
+        console.log('[SSH Service] Channel failure detected, forcing reconnect...');
+        this.disconnect(sessionId);
+        return this.checkPersistentSession(sessionId, config, false); // Retry once
+      }
+
       return null;
     }
   }
@@ -1739,6 +1798,10 @@ export class SSHService {
       onProgress?.('Creating remote project directory...');
       await this.execCommand(client, `mkdir -p ${remoteProjectDir}`);
 
+      // IMPORTANT: Get the absolute path for SFTP operations
+      // SFTP doesn't understand tilde (~) paths, so we need to expand it
+      const remoteProjectDirAbsolute = (await this.execCommand(client, `echo ${remoteProjectDir}`)).trim();
+
       // 2. Find and upload transcript files
       const path = await import('path');
       const os = await import('os');
@@ -1748,30 +1811,53 @@ export class SSHService {
       const escapedLocalPath = localProjectPath.replace(/\//g, '-').replace(/^-/, '');
       const localClaudePath = path.join(os.homedir(), '.claude', 'projects', `-${escapedLocalPath}`);
 
-      onProgress?.('Checking for session transcripts...');
+      onProgress?.('Checking for session transcript...');
 
+      // Check if local transcript directory exists
+      let files: string[];
       try {
-        const files = await fsPromises.readdir(localClaudePath);
-        const transcriptFiles = files.filter(f => f.endsWith('.jsonl'));
-
-        if (transcriptFiles.length === 0) {
-          onProgress?.('No transcript files found (new session will start fresh)');
-        } else {
-          onProgress?.(`Found ${transcriptFiles.length} transcript file(s), transferring...`);
-
-          // Upload each transcript file via SFTP
-          for (const filename of transcriptFiles) {
-            const localFilePath = path.join(localClaudePath, filename);
-            const remoteFilePath = `${remoteProjectDir}/${filename}`;
-
-            onProgress?.(`Uploading ${filename}...`);
-            await this.uploadFile(client, localFilePath, remoteFilePath);
-          }
-        }
+        files = await fsPromises.readdir(localClaudePath);
       } catch (err) {
         // If local claude directory doesn't exist, that's fine - fresh session
-        console.log('[SSH Service] No local Claude project directory found:', localClaudePath);
-        onProgress?.('No existing transcripts (starting fresh)');
+        const errCode = (err as NodeJS.ErrnoException).code;
+        if (errCode === 'ENOENT') {
+          console.log('[SSH Service] No local Claude project directory found:', localClaudePath);
+          onProgress?.('No existing transcripts (starting fresh)');
+        } else {
+          // Unexpected error reading directory - log it but continue
+          console.error('[SSH Service] Error reading transcript directory:', err);
+          onProgress?.('Warning: Could not read local transcript directory');
+        }
+        // Continue without transcripts
+        files = [];
+      }
+
+      // If we have an SDK session ID, only upload that specific transcript
+      // This ensures we teleport the exact conversation, not other sessions from the same worktree
+      const transcriptFiles = sdkSessionId
+        ? files.filter(f => f === `${sdkSessionId}.jsonl`)
+        : files.filter(f => f.endsWith('.jsonl'));
+
+      if (transcriptFiles.length === 0) {
+        const msg = sdkSessionId
+          ? `No transcript found for session ${sdkSessionId} (starting fresh)`
+          : 'No transcript files found (new session will start fresh)';
+        onProgress?.(msg);
+        console.log('[SSH Service] Teleport:', msg);
+      } else {
+        onProgress?.(`Found ${transcriptFiles.length} transcript file(s), transferring...`);
+
+        // Upload each transcript file via SFTP
+        // DON'T catch errors here - upload failures should propagate
+        for (const filename of transcriptFiles) {
+          const localFilePath = path.join(localClaudePath, filename);
+          // Use absolute path for SFTP (SFTP doesn't understand tilde paths)
+          const remoteFilePath = `${remoteProjectDirAbsolute}/${filename}`;
+
+          onProgress?.(`Uploading ${filename}...`);
+          await this.uploadFile(client, localFilePath, remoteFilePath);
+          console.log('[SSH Service] Successfully uploaded:', filename);
+        }
       }
 
       // 3. Sync settings if enabled
@@ -1789,7 +1875,11 @@ export class SSHService {
 
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : 'Unknown error';
-      console.error('[SSH Service] Teleport failed:', errorMsg);
+      console.error('[SSH Service] Teleport failed:', error);
+      console.error('[SSH Service] Error details:', errorMsg);
+      if (error instanceof Error && error.stack) {
+        console.error('[SSH Service] Stack trace:', error.stack);
+      }
       return { success: false, error: errorMsg };
     } finally {
       this.disconnect(teleportId);

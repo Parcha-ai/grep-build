@@ -77,8 +77,17 @@ export class ClaudeService {
   private pendingPermissions: Map<string, PendingPermission> = new Map();
   private pendingPlanApprovals: Map<string, PendingPlanApproval> = new Map();
   private sessionPlanFiles: Map<string, { content: string; filePath: string }> = new Map(); // Cache plan content per session
+  private lastPlanFeedback: string | undefined; // Stores feedback from last plan rejection
   private mainWindow: BrowserWindow | null = null;
   private browserMcpServers: Map<string, any> = new Map();
+
+  // Performance optimization: Cache parsed messages and transcript paths
+  private messageCache = new Map<string, {
+    messages: ChatMessage[];
+    loadedAt: number;
+    fileHash: string;
+  }>();
+  private transcriptPathCache = new Map<string, string>();
 
   constructor() {
     this.store = new Store({ name: 'claudette-settings' });
@@ -295,6 +304,11 @@ export class ClaudeService {
         description: 'Highly capable model'
       },
       {
+        id: 'claude-sonnet-4-6',
+        name: 'Sonnet 4.6',
+        description: 'Latest Sonnet - excellent balance of speed and capability'
+      },
+      {
         id: 'claude-sonnet-4-5-20250929',
         name: 'Sonnet 4.5',
         description: 'Balanced performance and speed'
@@ -319,6 +333,7 @@ export class ClaudeService {
     const supportedModels = [
       'claude-opus-4-6',
       'claude-opus-4-5',
+      'claude-sonnet-4-6',
       'claude-sonnet-4-5',
       'claude-3-7-sonnet',
       'claude-sonnet-4',
@@ -331,8 +346,8 @@ export class ClaudeService {
    * Get Computer Use beta header for the model
    */
   private getComputerUseBetaHeader(model: string): string {
-    // Opus 4.6 and 4.5 use newer beta version
-    if (model.includes('opus-4-6') || model.includes('opus-4-5')) {
+    // Opus 4.6/4.5 and Sonnet 4.6 use newer beta version
+    if (model.includes('opus-4-6') || model.includes('opus-4-5') || model.includes('sonnet-4-6')) {
       return 'computer-use-2025-11-24';
     }
     // Other models use older beta version
@@ -1761,6 +1776,10 @@ ${memoriesPrompt}
   handlePlanApprovalResponse(response: PlanApprovalResponse): void {
     const pending = this.pendingPlanApprovals.get(response.requestId);
     if (pending) {
+      // Store feedback if provided for use in rejection message
+      if (!response.approved && response.feedback) {
+        this.lastPlanFeedback = response.feedback;
+      }
       pending.resolve(response.approved);
       this.pendingPlanApprovals.delete(response.requestId);
     }
@@ -1869,6 +1888,12 @@ ${memoriesPrompt}
     // Create abort controller for cancellation
     const abortController = new AbortController();
     this.activeQueries.set(sessionId, abortController);
+
+    // Invalidate message cache - new message being sent (performance optimization)
+    this.invalidateMessageCache(sessionId);
+    if (session.sshConfig) {
+      sshService.invalidateTranscriptCache(sessionId);
+    }
 
     try {
       // Check if this session has been used before (has SDK session ID stored)
@@ -2395,34 +2420,107 @@ Begin by creating the task structure now.
               try {
                 console.log('[Claude Service] ExitPlanMode called, requesting user approval');
 
-                // Use the cached plan content for this session (set when plan file was written)
-                const cachedPlan = this.sessionPlanFiles.get(sessionId);
                 let planContent = '';
                 let planFilePath = '';
 
-                if (cachedPlan) {
-                  planContent = cachedPlan.content;
-                  planFilePath = cachedPlan.filePath;
-                  console.log('[Claude Service] Using cached plan from:', planFilePath);
-                } else {
-                  // Fallback: Find the plan file that was written most recently
-                  console.log('[Claude Service] No cached plan found, scanning directory (this should not happen)');
-                  const plansDir = path.join(os.homedir(), '.claude', 'plans');
+                // First priority: Check if plan content is provided in the tool input (common for remote sessions)
+                if (input.plan && typeof input.plan === 'string') {
+                  planContent = input.plan;
+                  planFilePath = ''; // No file path when plan is in input
+                  console.log('[Claude Service] Using plan from tool input, length:', planContent.length);
+                }
+                // Second priority: Use the cached plan content for this session (set when plan file was written locally)
+                else {
+                  const cachedPlan = this.sessionPlanFiles.get(sessionId);
 
-                  if (fs.existsSync(plansDir)) {
-                    const planFiles = fs.readdirSync(plansDir)
-                      .filter(f => f.endsWith('.md'))
-                      .map(f => ({
-                        name: f,
-                        path: path.join(plansDir, f),
-                        mtime: fs.statSync(path.join(plansDir, f)).mtime.getTime(),
-                      }))
-                      .sort((a, b) => b.mtime - a.mtime);
+                  if (cachedPlan) {
+                    planContent = cachedPlan.content;
+                    planFilePath = cachedPlan.filePath;
+                    console.log('[Claude Service] Using cached plan from:', planFilePath);
+                  } else {
+                  // Check if this is a remote SSH session
+                  const session = this.sessionStore.get(`session-${sessionId}`) as any;
 
-                    if (planFiles.length > 0) {
-                      planFilePath = planFiles[0].path;
-                      planContent = fs.readFileSync(planFilePath, 'utf-8');
+                  if (session?.sshConfig) {
+                    // Remote session: read plan file from remote server
+                    console.log('[Claude Service] No cached plan for remote session - fetching from remote server');
+                    try {
+                      // Find the most recent plan file on the remote server
+                      const remotePlansDir = '$HOME/.claude/plans';
+                      const findCommand = `ls -t ${remotePlansDir}/*.md 2>/dev/null | head -1`;
+
+                      const connectionInfo = sshService['connections'].get(sessionId);
+                      if (!connectionInfo?.client) {
+                        console.error('[Claude Service] No SSH connection available for session');
+                        return {
+                          behavior: 'deny' as const,
+                          message: 'Plan approval failed: SSH connection not available to fetch remote plan.',
+                        };
+                      }
+
+                      // Execute command to find most recent plan file
+                      const findResult = await new Promise<string>((resolve, reject) => {
+                        connectionInfo.client.exec(findCommand, (err: Error | undefined, stream: any) => {
+                          if (err) {
+                            reject(err);
+                            return;
+                          }
+
+                          let output = '';
+                          stream.on('data', (data: Buffer) => {
+                            output += data.toString();
+                          });
+                          stream.on('close', () => {
+                            resolve(output.trim());
+                          });
+                          stream.stderr.on('data', (data: Buffer) => {
+                            console.error('[Claude Service] Remote find stderr:', data.toString());
+                          });
+                        });
+                      });
+
+                      if (!findResult) {
+                        console.error('[Claude Service] No plan files found on remote server');
+                        return {
+                          behavior: 'deny' as const,
+                          message: 'Plan approval failed: No plan files found on remote server.',
+                        };
+                      }
+
+                      planFilePath = findResult;
+                      console.log('[Claude Service] Found remote plan file:', planFilePath);
+
+                      // Read the remote plan file
+                      planContent = await sshService.readRemoteFile(sessionId, session.sshConfig, planFilePath);
+                      console.log('[Claude Service] Successfully read remote plan, length:', planContent.length);
+                    } catch (error) {
+                      console.error('[Claude Service] Failed to read remote plan file:', error);
+                      return {
+                        behavior: 'deny' as const,
+                        message: `Plan approval failed: Could not read remote plan file: ${error instanceof Error ? error.message : String(error)}`,
+                      };
                     }
+                  } else {
+                    // Local session: Find the plan file that was written most recently
+                    console.log('[Claude Service] No cached plan found for local session, scanning directory (this should not happen)');
+                    const plansDir = path.join(os.homedir(), '.claude', 'plans');
+
+                    if (fs.existsSync(plansDir)) {
+                      const planFiles = fs.readdirSync(plansDir)
+                        .filter(f => f.endsWith('.md'))
+                        .map(f => ({
+                          name: f,
+                          path: path.join(plansDir, f),
+                          mtime: fs.statSync(path.join(plansDir, f)).mtime.getTime(),
+                        }))
+                        .sort((a, b) => b.mtime - a.mtime);
+
+                      if (planFiles.length > 0) {
+                        planFilePath = planFiles[0].path;
+                        planContent = fs.readFileSync(planFilePath, 'utf-8');
+                      }
+                    }
+                  }
                   }
                 }
 
@@ -2462,9 +2560,17 @@ Begin by creating the task structure now.
                   // Clean up cached plan content
                   this.sessionPlanFiles.delete(sessionId);
 
+                  // Use custom feedback if provided, otherwise use default message
+                  const rejectionMessage = this.lastPlanFeedback
+                    ? `Plan was not approved. User feedback: ${this.lastPlanFeedback}`
+                    : 'Plan was not approved by the user. Please revise the plan based on user feedback.';
+
+                  // Clear the feedback after using it
+                  this.lastPlanFeedback = undefined;
+
                   return {
                     behavior: 'deny' as const,
-                    message: 'Plan was not approved by the user. Please revise the plan based on user feedback.',
+                    message: rejectionMessage,
                   };
                 }
               } catch (error) {
@@ -3009,7 +3115,7 @@ Begin by creating the task structure now.
             if (successResult.usage?.input_tokens) {
               const inputTokens = successResult.usage.input_tokens;
               const currentModel = successResult.model || selectedModel || 'claude-opus-4-6';
-              const hasLargeContext = currentModel.includes('opus-4-6') || currentModel.includes('sonnet-4-5');
+              const hasLargeContext = currentModel.includes('opus-4-6') || currentModel.includes('sonnet-4-6') || currentModel.includes('sonnet-4-5');
               const contextWindowSize = hasLargeContext ? 1000000 : 200000;
 
               console.log(`[Claude SDK] Conversation tokens: ${inputTokens}/${contextWindowSize} (${Math.round((inputTokens / contextWindowSize) * 100)}%)`);
@@ -3521,9 +3627,113 @@ Begin by creating the task structure now.
   }
 
   /**
-   * Get messages from SDK transcript files for a session
+   * Performance optimization: Check if we have cached messages for a session
+   * Validates cache by comparing file hash (mtime + size)
    */
-  async getMessages(sessionId: string): Promise<ChatMessage[]> {
+  private async getCachedMessages(
+    sessionId: string,
+    transcriptPath: string
+  ): Promise<ChatMessage[] | null> {
+    const cached = this.messageCache.get(sessionId);
+    if (!cached) return null;
+
+    // Check if file changed (compare mtime + size for quick hash)
+    try {
+      const stats = await fs.promises.stat(transcriptPath);
+      const currentHash = `${stats.mtime.getTime()}-${stats.size}`;
+
+      if (cached.fileHash === currentHash) {
+        console.log('[Claude] Using cached messages for', sessionId, `(${cached.messages.length} messages)`);
+        return cached.messages;
+      } else {
+        console.log('[Claude] Cache invalidated - file changed:', sessionId);
+      }
+    } catch {
+      // File doesn't exist or changed, invalidate cache
+      console.log('[Claude] Cache invalidated - file not found:', sessionId);
+    }
+
+    return null;
+  }
+
+  /**
+   * Performance optimization: Cache parsed messages with file hash
+   */
+  private setCachedMessages(
+    sessionId: string,
+    transcriptPath: string,
+    messages: ChatMessage[]
+  ): void {
+    try {
+      const stats = fs.statSync(transcriptPath);
+      const fileHash = `${stats.mtime.getTime()}-${stats.size}`;
+
+      this.messageCache.set(sessionId, {
+        messages,
+        loadedAt: Date.now(),
+        fileHash,
+      });
+      console.log('[Claude] Cached messages for', sessionId, `(${messages.length} messages)`);
+    } catch (error) {
+      console.warn('[Claude] Failed to cache messages:', error);
+    }
+  }
+
+  /**
+   * Performance optimization: Find and cache transcript file path
+   */
+  private findTranscriptPath(sessionId: string, sdkSessionId: string): string | null {
+    // Check cache first
+    if (this.transcriptPathCache.has(sessionId)) {
+      const cached = this.transcriptPathCache.get(sessionId)!;
+      if (fs.existsSync(cached)) {
+        return cached;
+      }
+      // Path no longer valid, remove from cache
+      this.transcriptPathCache.delete(sessionId);
+      console.log('[Claude] Transcript path cache invalidated:', sessionId);
+    }
+
+    // Search for transcript
+    const claudeDir = path.join(os.homedir(), '.claude', 'projects');
+    const transcriptFilename = `${sdkSessionId}.jsonl`;
+
+    try {
+      if (!fs.existsSync(claudeDir)) {
+        return null;
+      }
+
+      const projectDirs = fs.readdirSync(claudeDir);
+      for (const projectDir of projectDirs) {
+        const transcriptPath = path.join(claudeDir, projectDir, transcriptFilename);
+        if (fs.existsSync(transcriptPath)) {
+          // Cache for next time
+          this.transcriptPathCache.set(sessionId, transcriptPath);
+          console.log('[Claude] Cached transcript path for', sessionId);
+          return transcriptPath;
+        }
+      }
+    } catch (error) {
+      console.error('[Claude] Error searching for transcript:', error);
+    }
+
+    return null;
+  }
+
+  /**
+   * Public API: Invalidate message cache for a session (call when new message sent)
+   */
+  invalidateMessageCache(sessionId: string): void {
+    if (this.messageCache.delete(sessionId)) {
+      console.log('[Claude] Invalidated message cache for', sessionId);
+    }
+  }
+
+  /**
+   * Get messages from SDK transcript files for a session
+   * @param limit - Optional limit on number of messages to return (most recent). Default 200 for performance.
+   */
+  async getMessages(sessionId: string, limit: number = 200): Promise<ChatMessage[]> {
     // Check if this is a teleported session (imported from claude.ai)
     // Teleported sessions don't have local transcripts - the SDK will resume from the remote session
     const session = this.sessionStore.get(`sessions.${sessionId}`) as Session | undefined;
@@ -3562,7 +3772,10 @@ Begin by creating the task structure now.
 
         if (remoteContent) {
           console.log('[Claude] Parsing remote transcript, length:', remoteContent.length);
-          return this.parseTranscriptContent(remoteContent);
+          const messages = this.parseTranscriptContent(remoteContent);
+          const limited = limit > 0 ? messages.slice(-limit) : messages;
+          console.log(`[Claude] Returning ${limited.length}/${messages.length} SSH messages`);
+          return limited;
         }
 
         // Only fall back to listing transcripts if we have a stored SDK ID
@@ -3586,7 +3799,10 @@ Begin by creating the task structure now.
               session.sshConfig.remoteWorkdir
             );
             if (content) {
-              return this.parseTranscriptContent(content);
+              const messages = this.parseTranscriptContent(content);
+              const limited = limit > 0 ? messages.slice(-limit) : messages;
+              console.log(`[Claude] Returning ${limited.length}/${messages.length} SSH messages`);
+              return limited;
             }
           } else {
             console.log('[Claude] No transcript matching stored SDK ID:', storedSdkSessionId);
@@ -3601,30 +3817,36 @@ Begin by creating the task structure now.
       }
     }
 
-    // Look for transcript files in ~/.claude/projects/ - search all project directories
-    const claudeDir = path.join(os.homedir(), '.claude', 'projects');
-    const transcriptFilename = `${sdkSessionId}.jsonl`;
+    // Look for transcript files in ~/.claude/projects/ - use cached path if available
+    const perfStart = performance.now();
+    const transcriptPath = this.findTranscriptPath(sessionId, sdkSessionId);
+
+    if (!transcriptPath) {
+      console.log('[Claude] Transcript not found:', sdkSessionId);
+      return [];
+    }
+
+    // Check cache first (performance optimization)
+    const cached = await this.getCachedMessages(sessionId, transcriptPath);
+    if (cached) {
+      const limited = limit > 0 ? cached.slice(-limit) : cached;
+      console.log(`[Perf] Message load (cached) took ${performance.now() - perfStart}ms - returning ${limited.length}/${cached.length} messages`);
+      return limited;
+    }
 
     try {
-      // Search all project directories for the transcript file
-      if (!fs.existsSync(claudeDir)) {
-        console.log('Claude projects directory not found:', claudeDir);
-        return [];
-      }
+      console.log('[Claude] Loading transcript:', path.basename(transcriptPath));
+      const projectDir = path.dirname(transcriptPath);
+      const messages = this.parseTranscriptsFromDir(projectDir, sdkSessionId);
 
-      const projectDirs = fs.readdirSync(claudeDir);
-      for (const projectDir of projectDirs) {
-        const transcriptPath = path.join(claudeDir, projectDir, transcriptFilename);
-        if (fs.existsSync(transcriptPath)) {
-          console.log('[Claude] Loading transcript:', transcriptFilename, 'from', projectDir);
-          return this.parseTranscriptsFromDir(path.join(claudeDir, projectDir), sdkSessionId);
-        }
-      }
+      // Cache for next time (performance optimization)
+      this.setCachedMessages(sessionId, transcriptPath, messages);
 
-      console.log('[Claude] Transcript not found:', transcriptFilename);
-      return [];
+      const limited = limit > 0 ? messages.slice(-limit) : messages;
+      console.log(`[Perf] Message load (uncached) took ${performance.now() - perfStart}ms - returning ${limited.length}/${messages.length} messages`);
+      return limited;
     } catch (error) {
-      console.error('Error reading transcripts:', error);
+      console.error('[Claude] Error reading transcripts:', error);
       return [];
     }
   }

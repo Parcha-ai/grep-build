@@ -17,6 +17,8 @@ export const IPC_CHANNELS = {
   SESSION_GET: 'session:get',
   SESSION_UPDATE: 'session:update',
   SESSION_REWIND_FORK: 'session:rewind-fork',
+  SESSION_CREATE_FORK: 'session:create-fork', // Create conversation fork
+  SESSION_GET_FORK_GROUP: 'session:get-fork-group', // Get all forks in a conversation group
   SESSION_STATUS_CHANGED: 'session:status-changed',
   SESSION_LIST_UPDATED: 'session:list-updated',
 
@@ -181,6 +183,7 @@ export const IPC_CHANNELS = {
   SSH_TELEPORT_SESSION: 'ssh:teleport-session',
   SSH_DOWNLOAD_SESSION: 'ssh:download-session',
   SSH_DOWNLOAD_PROGRESS: 'ssh:download-progress',
+  SSH_RECONNECT: 'ssh:reconnect',
 
   // Voice mode channels (ElevenLabs Conversational AI)
   VOICE_CONNECT: 'voice:connect',

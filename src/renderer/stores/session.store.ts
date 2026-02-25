@@ -77,6 +77,11 @@ interface SessionState {
   // Agent teams tracking — maps agentId to assigned colour index per session
   agentColorMap: Record<string, Record<string, number>>; // sessionId -> { agentId -> colorIndex }
 
+  // Conversation fork tracking
+  activeForkGroup: string | null; // Root session ID when viewing a fork group
+  visibleForkIds: Record<string, string[]>; // rootId → array of visible fork IDs
+  activeForkIndex: Record<string, number>; // rootId → selected tab index
+
   setActiveSession: (sessionId: string | null) => void;
   addSession: (session: Session) => void;
   loadSessions: () => Promise<void>;
@@ -121,7 +126,7 @@ interface SessionState {
   // Plan approval handling
   setPendingPlanApproval: (sessionId: string, request: PlanApprovalRequest | null) => void;
   approvePlan: (sessionId: string) => Promise<void>;
-  rejectPlan: (sessionId: string) => Promise<void>;
+  rejectPlan: (sessionId: string, feedback?: string) => Promise<void>;
   // Queue management
   removeFromQueue: (sessionId: string, messageId: string) => void;
   editQueuedMessage: (sessionId: string, messageId: string, newMessage: string) => void;
@@ -147,6 +152,10 @@ interface SessionState {
   setupAutoResumeOnClose: () => () => void;
   // Rewind and fork
   rewindAndFork: (messageId: string) => Promise<void>;
+  // Conversation fork management
+  createForkFromCurrent: (userMessage: string) => Promise<void>;
+  getForkSiblings: (sessionId: string) => Session[];
+  cycleForkTabs: (direction: 'next' | 'prev') => void;
 }
 
 export const useSessionStore = create<SessionState>((set, get) => ({
@@ -175,9 +184,16 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   backgroundTasks: {},
   agentColorMap: {},
 
+  // Fork tracking initialization
+  activeForkGroup: null,
+  visibleForkIds: {},
+  activeForkIndex: {},
+
   setActiveSession: async (sessionId) => {
     const { loadMessages, startSession } = get();
+    const perfStart = performance.now();
 
+    // 1. Synchronous state update (instant UI response)
     set((state) => {
       // Update the session's updatedAt timestamp when it becomes active
       const updatedSessions = sessionId
@@ -202,33 +218,25 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       };
     });
 
+    console.log(`[Perf] Session switch (UI update) took ${performance.now() - perfStart}ms`);
+
     // Persist active session and update timestamp in backend (only in Electron)
     if (hasElectronAPI && sessionId) {
+      // 2. Fire-and-forget IPC operations (non-blocking, parallel)
       window.electronAPI.dev.setActiveSession(sessionId);
       window.electronAPI.sessions.update(sessionId, { updatedAt: new Date() });
 
-      // Refresh session metadata (branch, status, etc.) from backend
-      // This ensures we always show current info when switching sessions
-      const refreshedSession = await window.electronAPI.sessions.get(sessionId);
-      if (refreshedSession) {
-        set((state) => ({
-          sessions: state.sessions.map(s =>
-            s.id === sessionId ? { ...s, ...refreshedSession } : s
-          ),
-        }));
-      }
-
-      // Auto-start the session if it's stopped
       const session = get().sessions.find(s => s.id === sessionId);
+
+      // 3. Start session if stopped (non-blocking)
       if (session && session.status === 'stopped') {
-        await startSession(sessionId);
+        startSession(sessionId); // Don't await
       }
 
-      // Load messages for this session from SDK transcripts
-      await loadMessages(sessionId);
+      // 4. Load messages in background (non-blocking)
+      loadMessages(sessionId); // Don't await
 
-      // For SSH sessions, don't clear isStreaming state if already streaming
-      // The stream events will properly manage the streaming state
+      // 5. For SSH sessions, check persistence in background (non-blocking)
       if (session?.sshConfig) {
         const currentlyStreaming = get().isStreaming[sessionId];
         if (!currentlyStreaming) {
@@ -237,17 +245,18 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           console.log(`[SessionStore] SSH session IS streaming, preserving state`);
         }
 
-        try {
-          const persistentInfo = await window.electronAPI.ssh.checkPersistentSession(sessionId, session.sshConfig);
-          if (persistentInfo?.isRunning) {
-            console.log(`[SessionStore] SSH session ${sessionId} has active remote Claude in tmux`);
-          }
-        } catch (error) {
-          console.error('[SessionStore] Failed to check persistent session:', error);
-        }
+        window.electronAPI.ssh.checkPersistentSession(sessionId, session.sshConfig)
+          .then(persistentInfo => {
+            if (persistentInfo?.isRunning) {
+              console.log(`[SessionStore] SSH session ${sessionId} has active remote Claude in tmux`);
+            }
+          })
+          .catch(error => {
+            console.error('[SessionStore] Failed to check persistent session:', error);
+          });
       }
 
-      // Check if this session has worktree instructions that haven't been sent yet
+      // 6. Check if this session has worktree instructions that haven't been sent yet
       const currentSession = get().sessions.find(s => s.id === sessionId);
       if (currentSession?.worktreeInstructions && !currentSession.worktreeInstructionsSent) {
         console.log('[SessionStore] Session has worktree instructions, sending as first message');
@@ -890,6 +899,8 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   loadMessages: async (sessionId) => {
     if (!hasElectronAPI) return;
 
+    const perfStart = performance.now();
+
     // Signal loading start (only if we don't already have messages)
     const existingCount = (get().messages[sessionId] || []).length;
     if (existingCount === 0) {
@@ -900,6 +911,8 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
     try {
       const transcriptMessages = await window.electronAPI.claude.getMessages(sessionId);
+      console.log(`[Perf] Message load took ${performance.now() - perfStart}ms (${transcriptMessages?.length || 0} messages)`);
+
       if (transcriptMessages && transcriptMessages.length > 0) {
         set((state) => {
           const existingMessages = state.messages[sessionId] || [];
@@ -1044,6 +1057,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       // Clear stream content after adding to messages
       set((state) => ({
         currentStreamContent: { ...state.currentStreamContent, [sessionId]: '' },
+        currentThinkingContent: { ...state.currentThinkingContent, [sessionId]: '' },
         streamEvents: { ...state.streamEvents, [sessionId]: [] },
       }));
 
@@ -1099,6 +1113,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       set((state) => ({
         isStreaming: { ...state.isStreaming, [sessionId]: false },
         currentStreamContent: { ...state.currentStreamContent, [sessionId]: '' },
+        currentThinkingContent: { ...state.currentThinkingContent, [sessionId]: '' },
         streamEvents: { ...state.streamEvents, [sessionId]: [] },
       }));
 
@@ -1303,9 +1318,10 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     console.log('[Session Store] Approving plan:', request.requestId);
     await window.electronAPI.claude.respondToPlanApproval(response);
     setPendingPlanApproval(sessionId, null);
+    // Note: Plan content is intentionally kept in UI store so user can still view it
   },
 
-  rejectPlan: async (sessionId) => {
+  rejectPlan: async (sessionId, feedback?: string) => {
     if (!hasElectronAPI) return;
     const { pendingPlanApproval, setPendingPlanApproval } = get();
     const request = pendingPlanApproval[sessionId];
@@ -1318,11 +1334,13 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     const response: PlanApprovalResponse = {
       requestId: request.requestId,
       approved: false,
+      feedback,
     };
 
-    console.log('[Session Store] Rejecting plan:', request.requestId);
+    console.log('[Session Store] Rejecting plan:', request.requestId, feedback ? 'with feedback' : 'without feedback');
     await window.electronAPI.claude.respondToPlanApproval(response);
     setPendingPlanApproval(sessionId, null);
+    // Note: Plan content is intentionally kept in UI store so user can still view it after rejection
   },
 
   // Queue management methods
@@ -1747,5 +1765,127 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       console.error('[SessionStore] Failed to rewind and fork session:', error);
       throw error;
     }
+  },
+
+  /**
+   * Create a conversation fork from the current session
+   * Fork is created at the end of the current conversation
+   * The user's message is sent only to the fork, not the parent
+   */
+  createForkFromCurrent: async (userMessage: string) => {
+    if (!hasElectronAPI) return;
+
+    const { activeSessionId, sessions, setActiveSession, sendMessage } = get();
+    if (!activeSessionId) {
+      console.error('[SessionStore] No active session to fork from');
+      return;
+    }
+
+    try {
+      console.log('[SessionStore] Creating conversation fork from:', activeSessionId);
+
+      // Create fork via backend IPC (at 'end' of conversation)
+      const forkedSession = await window.electronAPI.sessions.createFork(
+        activeSessionId,
+        'end',
+        userMessage
+      );
+
+      console.log('[SessionStore] Created conversation fork:', forkedSession.id);
+
+      // Clear parent session's streaming state (it may have been streaming when we forked)
+      // This ensures the parent can reload its transcript when we switch back to it
+      set(state => ({
+        isStreaming: { ...state.isStreaming, [activeSessionId]: false },
+        currentStreamContent: { ...state.currentStreamContent, [activeSessionId]: '' },
+        currentThinkingContent: { ...state.currentThinkingContent, [activeSessionId]: '' },
+      }));
+
+      // Add to session list
+      set(state => ({
+        sessions: [...state.sessions, forkedSession]
+      }));
+
+      // Update fork group tracking
+      // Find root session (walk up parentSessionId chain)
+      const currentSession = sessions.find(s => s.id === activeSessionId);
+      let rootId = activeSessionId;
+      let session = currentSession;
+      while (session?.parentSessionId) {
+        rootId = session.parentSessionId;
+        session = sessions.find(s => s.id === rootId);
+      }
+
+      set(state => ({
+        visibleForkIds: {
+          ...state.visibleForkIds,
+          [rootId]: [...(state.visibleForkIds[rootId] || [rootId]), forkedSession.id]
+        },
+        activeForkGroup: rootId
+      }));
+
+      // Switch to new fork
+      await setActiveSession(forkedSession.id);
+
+      // Send user message to new fork
+      await sendMessage(forkedSession.id, userMessage);
+
+      console.log('[SessionStore] Fork created and message sent:', forkedSession.name);
+    } catch (error) {
+      console.error('[SessionStore] Failed to create conversation fork:', error);
+      throw error;
+    }
+  },
+
+  /**
+   * Get all sibling forks (parent + children) for a given session
+   * Returns sessions sorted by creation order
+   */
+  getForkSiblings: (sessionId: string) => {
+    const { sessions } = get();
+    const currentSession = sessions.find(s => s.id === sessionId);
+    if (!currentSession) return [];
+
+    // Find root (walk up parentSessionId chain)
+    let rootId = sessionId;
+    let session: Session | undefined = currentSession;
+    while (session?.parentSessionId) {
+      rootId = session.parentSessionId;
+      session = sessions.find(s => s.id === rootId);
+      if (!session) break; // Guard against missing parent
+    }
+
+    // Collect root + all descendants
+    const root = sessions.find(s => s.id === rootId);
+    if (!root) return [];
+
+    const forkGroup = [root, ...sessions.filter(s => s.parentSessionId === rootId)];
+
+    // Sort by creation order
+    return forkGroup.sort((a, b) => {
+      const aTime = a.forkCreatedAt || a.createdAt;
+      const bTime = b.forkCreatedAt || b.createdAt;
+      const aDate = typeof aTime === 'string' ? new Date(aTime) : aTime;
+      const bDate = typeof bTime === 'string' ? new Date(bTime) : bTime;
+      return aDate.getTime() - bDate.getTime();
+    });
+  },
+
+  /**
+   * Cycle through fork tabs
+   * @param direction 'next' or 'prev'
+   */
+  cycleForkTabs: (direction: 'next' | 'prev') => {
+    const { activeSessionId, getForkSiblings, setActiveSession } = get();
+    if (!activeSessionId) return;
+
+    const siblings = getForkSiblings(activeSessionId);
+    if (siblings.length <= 1) return;
+
+    const currentIndex = siblings.findIndex(s => s.id === activeSessionId);
+    const delta = direction === 'next' ? 1 : -1;
+    const nextIndex = (currentIndex + delta + siblings.length) % siblings.length;
+
+    setActiveSession(siblings[nextIndex].id);
   },
 }));

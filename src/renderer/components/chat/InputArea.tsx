@@ -381,15 +381,16 @@ export default function InputArea({ sessionId, disabled, systemInfo, isStreaming
 
     const projectPath = currentSession.worktreePath;
 
-    // Load all extensions
+    // Load all extensions (pass sessionId for SSH remote scanning)
     Promise.all([
-      window.electronAPI.extensions.scanCommands(projectPath),
-      window.electronAPI.extensions.scanSkills(projectPath),
-      window.electronAPI.extensions.scanAgents(projectPath),
+      window.electronAPI.extensions.scanCommands({ sessionId, projectPath }),
+      window.electronAPI.extensions.scanSkills({ sessionId, projectPath }),
+      window.electronAPI.extensions.scanAgents({ sessionId, projectPath }),
     ]).then(([cmds, skls, agts]) => {
       setCommands(cmds);
       setSkills(skls);
       setAgents(agts);
+      console.log('[InputArea] Loaded extensions for session:', sessionId, '- Commands:', cmds.length, 'Skills:', skls.length, 'Agents:', agts.length);
     }).catch(err => {
       console.error('[InputArea] Error loading extensions:', err);
     });
@@ -696,12 +697,35 @@ export default function InputArea({ sessionId, disabled, systemInfo, isStreaming
       return;
     }
 
-    // CMD+Enter: DISABLED - was causing accidental interrupts
-    // User was unconsciously pressing Cmd+Enter which interrupted queries
-    // if (e.key === 'Enter' && e.metaKey) {
-    //   e.preventDefault();
-    //   // ... interrupt logic disabled
-    // }
+    // Option+Enter: Create conversation fork and send message to fork
+    if (e.key === 'Enter' && e.altKey) {
+      e.preventDefault();
+
+      const trimmedMessage = message.trim();
+      if (!trimmedMessage) return; // Don't fork on empty input
+
+      // Create fork BEFORE sending message
+      useSessionStore.getState().createForkFromCurrent(trimmedMessage);
+
+      // Clear input (message already sent to fork)
+      setMessage('');
+      setAttachments([]);
+      return;
+    }
+
+    // Cmd+[: Previous fork tab
+    if (e.key === '[' && e.metaKey) {
+      e.preventDefault();
+      useSessionStore.getState().cycleForkTabs('prev');
+      return;
+    }
+
+    // Cmd+]: Next fork tab
+    if (e.key === ']' && e.metaKey) {
+      e.preventDefault();
+      useSessionStore.getState().cycleForkTabs('next');
+      return;
+    }
 
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();

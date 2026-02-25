@@ -1,16 +1,45 @@
 import React from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { X, FileText, Trash2, Check, XCircle } from 'lucide-react';
+import { X, FileText, Trash2, Check, XCircle, RefreshCw, ClipboardList } from 'lucide-react';
 import { useUIStore } from '../../stores/ui.store';
 import { useSessionStore } from '../../stores/session.store';
 
 export default function PlanPanel() {
-  const { togglePlanPanel, sessionPlanContent, clearPlanContent } = useUIStore();
-  const { activeSessionId, pendingPlanApproval, approvePlan, rejectPlan } = useSessionStore();
+  const { togglePlanPanel, sessionPlanContent, clearPlanContent, setPlanContent } = useUIStore();
+  const { activeSessionId, pendingPlanApproval, approvePlan, rejectPlan, messages } = useSessionStore();
+  const [feedback, setFeedback] = React.useState('');
+  const [showFeedback, setShowFeedback] = React.useState(false);
 
   const planContent = activeSessionId ? sessionPlanContent[activeSessionId] : null;
   const pendingApproval = activeSessionId ? pendingPlanApproval[activeSessionId] : null;
+  const sessionMessages = activeSessionId ? messages[activeSessionId] : [];
+
+  // Debug logging
+  React.useEffect(() => {
+    console.log('[PlanPanel] Active session:', activeSessionId);
+    console.log('[PlanPanel] Plan content exists:', !!planContent);
+    console.log('[PlanPanel] Plan content length:', planContent?.length);
+    console.log('[PlanPanel] Pending approval:', !!pendingApproval);
+    console.log('[PlanPanel] All session plan content keys:', Object.keys(sessionPlanContent));
+  }, [activeSessionId, planContent, pendingApproval, sessionPlanContent]);
+
+  // Reset feedback when plan approval changes
+  React.useEffect(() => {
+    if (!pendingApproval) {
+      setFeedback('');
+      setShowFeedback(false);
+    }
+  }, [pendingApproval]);
+
+  // Auto-load plan from messages if no plan content exists
+  React.useEffect(() => {
+    if (!activeSessionId || !sessionMessages || sessionMessages.length === 0) return;
+    if (planContent) return; // Already have plan content
+
+    console.log('[PlanPanel] No plan content, auto-loading from messages...');
+    handleLoadFromMessages();
+  }, [activeSessionId, sessionMessages]); // Run when session or messages change
 
   const handleClear = () => {
     if (activeSessionId) {
@@ -21,13 +50,108 @@ export default function PlanPanel() {
   const handleApprove = async () => {
     if (activeSessionId) {
       await approvePlan(activeSessionId);
+      setFeedback('');
+      setShowFeedback(false);
     }
   };
 
   const handleReject = async () => {
     if (activeSessionId) {
-      await rejectPlan(activeSessionId);
+      const feedbackToSend = feedback.trim() || undefined;
+      await rejectPlan(activeSessionId, feedbackToSend);
+      setFeedback('');
+      setShowFeedback(false);
     }
+  };
+
+  const handleRejectWithFeedback = () => {
+    setShowFeedback(true);
+  };
+
+  const handleLoadFromMessages = () => {
+    console.log('[PlanPanel] Load button clicked');
+    console.log('[PlanPanel] Active session:', activeSessionId);
+    console.log('[PlanPanel] Messages available:', sessionMessages?.length);
+
+    if (!activeSessionId) {
+      console.error('[PlanPanel] No active session ID');
+      return;
+    }
+
+    if (!sessionMessages || sessionMessages.length === 0) {
+      console.error('[PlanPanel] No messages in session');
+      return;
+    }
+
+    console.log('[PlanPanel] Scanning messages...');
+
+    // FIRST: Check tool calls for Write operations to plan files
+    // This is the most reliable source as it contains the actual plan file content
+    console.log('[PlanPanel] Priority 1: Checking Write tool calls for plan files...');
+    for (let i = sessionMessages.length - 1; i >= 0; i--) {
+      const msg = sessionMessages[i];
+      console.log(`[PlanPanel] Message ${i} has ${msg.toolCalls?.length || 0} tool calls`);
+      if (msg.toolCalls && Array.isArray(msg.toolCalls)) {
+        for (let j = 0; j < msg.toolCalls.length; j++) {
+          const toolCall = msg.toolCalls[j];
+          console.log(`[PlanPanel] Tool call ${j}: name="${toolCall.name}", has input=${!!toolCall.input}, has result=${!!toolCall.result}`);
+
+          if (toolCall.name === 'Write') {
+            console.log(`[PlanPanel] Write tool input:`, JSON.stringify(toolCall.input).substring(0, 200));
+
+            if (toolCall.input?.file_path) {
+              const filePath = toolCall.input.file_path as string;
+              console.log(`[PlanPanel] Write tool file path: ${filePath}`);
+
+              if (filePath.includes('.claude/plans') && filePath.endsWith('.md')) {
+                const content = toolCall.input.content as string;
+                console.log(`[PlanPanel] Found plan file Write, content length: ${content?.length || 0}, first 100 chars:`, content?.substring(0, 100));
+
+                if (content && content.length > 500) {
+                  console.log('[PlanPanel] ✅ Loading plan from Write tool call:', filePath);
+                  setPlanContent(activeSessionId, content);
+                  return;
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+
+    // SECOND: Check direct messages for plan content (fallback)
+    // Only match substantial markdown documents, not short summaries
+    // This should RARELY match - most plans are in Write tool calls
+    console.log('[PlanPanel] Priority 2: Checking direct messages...');
+    for (let i = sessionMessages.length - 1; i >= 0; i--) {
+      const msg = sessionMessages[i];
+      console.log(`[PlanPanel] Message ${i}: role=${msg.role}, content length=${msg.content?.length || 0}`);
+
+      if (msg.role === 'assistant' && msg.content) {
+        const content = msg.content.trim();
+
+        // VERY strict requirements - must be a full plan document
+        const isVerySubstantial = content.length > 5000; // 5K+ chars only
+        const hasHeaders = content.includes('# ') || content.includes('## ') || content.includes('### ');
+        const hasMultipleSections = (content.match(/\n#{1,3} /g) || []).length >= 5; // At least 5 sections
+        const looksLikePlan = content.includes('## ') && (
+          content.includes('Implementation') ||
+          content.includes('Architecture') ||
+          content.includes('Approach') ||
+          content.includes('Solution')
+        );
+
+        console.log(`[PlanPanel] Message ${i} checks: length=${content.length}, hasHeaders=${hasHeaders}, hasMultipleSections=${hasMultipleSections}, looksLikePlan=${looksLikePlan}`);
+
+        if (isVerySubstantial && hasHeaders && hasMultipleSections && looksLikePlan) {
+          console.log('[PlanPanel] ✅ Loading plan from message:', msg.id, 'length:', content.length);
+          setPlanContent(activeSessionId, content);
+          return;
+        }
+      }
+    }
+
+    console.warn('[PlanPanel] ❌ No plan found in messages or tool calls');
   };
 
   return (
@@ -35,7 +159,7 @@ export default function PlanPanel() {
       {/* Header */}
       <div className="h-10 flex items-center justify-between px-3 border-b border-claude-border bg-claude-surface">
         <div className="flex items-center gap-2">
-          <FileText size={14} className="text-claude-accent" />
+          <ClipboardList size={14} className="text-claude-accent" />
           <span className="text-sm font-medium">Plan</span>
           {pendingApproval && (
             <span className="px-2 py-0.5 text-xs font-medium bg-amber-500/20 text-amber-400 border border-amber-500/30">
@@ -44,6 +168,15 @@ export default function PlanPanel() {
           )}
         </div>
         <div className="flex items-center gap-1">
+          {planContent && !pendingApproval && sessionMessages && sessionMessages.length > 0 && (
+            <button
+              onClick={handleLoadFromMessages}
+              className="p-1 rounded hover:bg-claude-bg text-claude-text-secondary hover:text-claude-text"
+              title="Reload plan from messages"
+            >
+              <RefreshCw size={14} />
+            </button>
+          )}
           {planContent && !pendingApproval && (
             <button
               onClick={handleClear}
@@ -68,23 +201,52 @@ export default function PlanPanel() {
           <p className="text-sm text-claude-text-secondary mb-3">
             Claude has created a plan and is waiting for your approval to proceed.
           </p>
-          <div className="flex gap-2">
-            <button
-              onClick={handleApprove}
-              className="flex-1 flex items-center justify-center gap-2 px-4 py-2 bg-green-600 hover:bg-green-500 text-white font-medium text-sm transition-colors"
-            >
-              <Check size={16} />
-              Approve Plan
-            </button>
-            <button
-              onClick={handleReject}
-              className="flex-1 flex items-center justify-center gap-2 px-4 py-2 bg-claude-surface hover:bg-claude-bg border border-claude-border text-claude-text font-medium text-sm transition-colors"
-            >
-              <XCircle size={16} />
-              Reject
-            </button>
-          </div>
-          {pendingApproval.allowedPrompts && pendingApproval.allowedPrompts.length > 0 && (
+
+          {!showFeedback ? (
+            <div className="flex gap-2">
+              <button
+                onClick={handleApprove}
+                className="flex-1 flex items-center justify-center gap-2 px-4 py-2 bg-green-600 hover:bg-green-500 text-white font-medium text-sm transition-colors"
+              >
+                <Check size={16} />
+                Approve Plan
+              </button>
+              <button
+                onClick={handleRejectWithFeedback}
+                className="flex-1 flex items-center justify-center gap-2 px-4 py-2 bg-claude-surface hover:bg-claude-bg border border-claude-border text-claude-text font-medium text-sm transition-colors"
+              >
+                <XCircle size={16} />
+                Provide Feedback
+              </button>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              <textarea
+                value={feedback}
+                onChange={(e) => setFeedback(e.target.value)}
+                placeholder="Provide feedback on why you're rejecting this plan and what needs to change..."
+                className="w-full h-24 px-3 py-2 text-sm bg-claude-bg border border-claude-border text-claude-text placeholder-claude-text-secondary resize-none focus:outline-none focus:border-claude-accent font-mono"
+                autoFocus
+              />
+              <div className="flex gap-2">
+                <button
+                  onClick={handleReject}
+                  className="flex-1 flex items-center justify-center gap-2 px-4 py-2 bg-red-600 hover:bg-red-500 text-white font-medium text-sm transition-colors"
+                >
+                  <XCircle size={16} />
+                  Reject Plan
+                </button>
+                <button
+                  onClick={() => setShowFeedback(false)}
+                  className="px-4 py-2 bg-claude-surface hover:bg-claude-bg border border-claude-border text-claude-text font-medium text-sm transition-colors"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
+
+          {pendingApproval.allowedPrompts && pendingApproval.allowedPrompts.length > 0 && !showFeedback && (
             <div className="mt-3 pt-3 border-t border-claude-border">
               <p className="text-xs text-claude-text-secondary mb-2">Requested permissions:</p>
               <ul className="text-xs text-claude-text-secondary space-y-1">
@@ -102,6 +264,21 @@ export default function PlanPanel() {
 
       {/* Content */}
       <div className="flex-1 overflow-auto p-4">
+        {!planContent && sessionMessages && sessionMessages.length > 0 && (
+          <div className="h-full flex flex-col items-center justify-center text-claude-text-secondary p-4">
+            <FileText size={32} className="mb-3 opacity-50" />
+            <p className="text-sm font-mono mb-4 text-center">No plan loaded</p>
+            <button
+              onClick={handleLoadFromMessages}
+              className="px-4 py-2 bg-claude-accent hover:bg-claude-accent/80 text-white font-medium text-sm transition-colors"
+            >
+              Load Plan from Messages
+            </button>
+            <p className="text-xs font-mono mt-2 opacity-70 text-center max-w-xs">
+              If you created a plan in this session, click to load it
+            </p>
+          </div>
+        )}
         {planContent ? (
           <div className="prose prose-invert prose-sm max-w-none font-mono">
             <ReactMarkdown
@@ -225,7 +402,7 @@ export default function PlanPanel() {
               {planContent}
             </ReactMarkdown>
           </div>
-        ) : (
+        ) : (!sessionMessages || sessionMessages.length === 0) && (
           <div className="h-full flex flex-col items-center justify-center text-claude-text-secondary">
             <FileText size={32} className="mb-3 opacity-50" />
             <p className="text-sm font-mono">No plan created yet</p>

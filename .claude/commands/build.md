@@ -18,19 +18,21 @@ Builds immediately without QA check. Use when you're confident the build is read
 
 **Workflow:**
 1. Bump version in `package.json`
-2. Run `npm run make` immediately
-3. Create git tag
-4. Merge to master
+2. **MERGE TO MASTER FIRST** - Push branch and merge to master (see Merge to Master section)
+3. Run `npm run make` on master
+4. Create git tag
 5. Open built application
 
 ## Build Steps (after QA approval or in force mode)
 
 1. **BUMP THE VERSION** in `package.json` (increment patch version, e.g., 0.0.22 → 0.0.23)
-2. Run `npm run make` to create the distributable application
-3. **CREATE A RELEASE TAG** with `git tag v{version}` (e.g., `git tag v0.0.23`)
-4. **MERGE TO MASTER** - Push branch and merge to master (see Merge to Master section)
-5. Open the built application from `out/Grep Build-darwin-arm64/Grep Build.app`
-6. Report the build status and location of the artifact
+2. **MERGE TO MASTER FIRST** - Push branch and merge to master (see Merge to Master section)
+3. **CHECKOUT MASTER** - Switch to master branch after merge
+4. Run `npm run make` to create the distributable application
+5. **CREATE A RELEASE TAG** with `git tag v{version}` (e.g., `git tag v0.0.23`)
+6. **PUSH THE TAG** with `git push origin v{version}`
+7. Open the built application from `out/Grep Build-darwin-arm64/Grep Build.app`
+8. Report the build status and location of the artifact
 
 ## Pre-flight Check (Standard Mode)
 
@@ -51,7 +53,7 @@ npm run make
 
 ## Merge to Master
 
-After a successful build, merge the current branch to master:
+**CRITICAL: Merge BEFORE building!** This ensures the build is created from master.
 
 1. Push the current branch: `git push origin {branch-name}`
 2. Check if master is checked out in another worktree: `git worktree list`
@@ -66,10 +68,15 @@ After a successful build, merge the current branch to master:
    git merge {branch-name}
    git push origin master
    ```
+5. **After merge, ensure you're on master branch before building:**
+   ```bash
+   git checkout master
+   git pull origin master
+   ```
 
 ## Post-build
 
-After successful build and merge:
+After successful build:
 - Create a git tag: `git tag v{version}` (e.g., `git tag v0.0.23`)
 - Push the tag: `git push origin v{version}`
 - Open the application: `open "out/Grep Build-darwin-arm64/Grep Build.app"`

@@ -49,6 +49,11 @@ export default function SessionList() {
 
     // First pass: separate SSH and local sessions, create project groups
     sessions.forEach(session => {
+      // Skip conversation forks - they're shown in horizontal tabs when viewing the parent
+      if (session.parentSessionId) {
+        return;
+      }
+
       // Handle SSH sessions - group by host
       if (session.sshConfig) {
         const host = session.sshConfig.host;
@@ -201,7 +206,7 @@ export default function SessionList() {
   // Starred sessions — ordered by when they were starred (stable order)
   const starredSessions = useMemo(() => {
     return sessions
-      .filter(s => s.isStarred)
+      .filter(s => s.isStarred && !s.parentSessionId) // Exclude conversation forks
       .sort((a, b) => {
         // Sort by starredAt ascending (order they were starred in)
         const aTime = a.starredAt ? new Date(a.starredAt).getTime() : 0;
@@ -217,7 +222,8 @@ export default function SessionList() {
 
     return sessions
       .filter(s =>
-        !s.isStarred && ( // Exclude starred sessions — they have their own section
+        !s.isStarred && // Exclude starred sessions — they have their own section
+        !s.parentSessionId && ( // Exclude conversation forks
           s.status === 'running' || // Show all running sessions
           visitedSessionIds.has(s.id) || // Show visited sessions
           new Date(s.updatedAt).getTime() > sevenDaysAgo // Show recently used sessions

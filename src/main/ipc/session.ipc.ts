@@ -1,5 +1,6 @@
 import { IpcMain } from 'electron';
 import { IPC_CHANNELS } from '../../shared/constants/channels';
+import { Session } from '../../shared/types';
 import { SessionService } from '../services/session.service';
 import { getMainWindow } from '../index';
 import { browserService } from '../services/browser.service';
@@ -60,5 +61,41 @@ export function registerSessionHandlers(ipcMain: IpcMain): void {
 
   ipcMain.handle(IPC_CHANNELS.SESSION_REWIND_FORK, async (_, sessionId: string, rewindToMessageId: string) => {
     return sessionService.rewindAndForkSession(sessionId, rewindToMessageId);
+  });
+
+  // Conversation fork handlers
+  ipcMain.handle(IPC_CHANNELS.SESSION_CREATE_FORK, async (
+    _,
+    parentSessionId: string,
+    forkPoint: string,
+    initialMessage?: string
+  ) => {
+    return sessionService.createForkFromInput(parentSessionId, forkPoint, initialMessage);
+  });
+
+  ipcMain.handle(IPC_CHANNELS.SESSION_GET_FORK_GROUP, async (_, sessionId: string) => {
+    const allSessions = await sessionService.listSessions();
+    const currentSession = allSessions.find(s => s.id === sessionId);
+    if (!currentSession) return [];
+
+    // Find root session (walk up parentSessionId chain)
+    let rootId = sessionId;
+    let session: Session | undefined = currentSession;
+    while (session?.parentSessionId) {
+      rootId = session.parentSessionId;
+      session = allSessions.find(s => s.id === rootId);
+      if (!session) break; // Guard against missing parent
+    }
+
+    // Collect all sessions in fork group (root + all descendants)
+    const root = allSessions.find(s => s.id === rootId);
+    if (!root) return [];
+
+    const forkGroup = [root, ...allSessions.filter(s => s.parentSessionId === rootId)];
+
+    // Sort by creation order
+    return forkGroup.sort((a, b) =>
+      (a.forkCreatedAt || a.createdAt).getTime() - (b.forkCreatedAt || b.createdAt).getTime()
+    );
   });
 }
