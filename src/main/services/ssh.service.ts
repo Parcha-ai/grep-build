@@ -1,4 +1,4 @@
-import { Client, ClientChannel } from 'ssh2';
+import { Client, ClientChannel, ConnectConfig } from 'ssh2';
 import { Readable, Writable, PassThrough } from 'stream';
 import { EventEmitter } from 'events';
 import * as fs from 'fs';
@@ -246,6 +246,265 @@ export class SSHService {
       return content;
     } catch (error) {
       throw new Error(`Failed to read remote file ${filePath}: ${(error as Error).message}`);
+    }
+  }
+
+  /**
+   * Write content to a remote file via SSH
+   * Creates parent directories if they don't exist
+   * Creates temporary connection if one doesn't exist
+   */
+  async writeRemoteFile(sessionId: string, config: SSHConfig, filePath: string, content: string): Promise<void> {
+    try {
+      const client = await this.getConnection(sessionId, config);
+
+      // Escape single quotes in path
+      const escapedPath = filePath.replace(/'/g, "'\\''");
+
+      // Create parent directory first (mkdir -p)
+      const dir = filePath.substring(0, filePath.lastIndexOf('/'));
+      if (dir) {
+        const escapedDir = dir.replace(/'/g, "'\\''");
+        await this.execCommand(client, `mkdir -p '${escapedDir}'`);
+      }
+
+      // Write content using cat with heredoc (handles multiline content properly)
+      const command = `cat > '${escapedPath}' << 'GREP_EOF'\n${content}\nGREP_EOF`;
+      await this.execCommand(client, command);
+
+      console.log('[SSH Service] Wrote remote file:', filePath);
+    } catch (error) {
+      throw new Error(`Failed to write remote file ${filePath}: ${(error as Error).message}`);
+    }
+  }
+
+  /**
+   * List contents of a remote directory
+   * Returns an array of file/directory info with name, type, and permissions
+   */
+  async listRemoteDirectory(
+    config: SSHConfig,
+    remotePath: string
+  ): Promise<Array<{ name: string; type: 'file' | 'directory'; permissions: string }>> {
+    // Create a temporary connection for browsing
+    const client = new Client();
+
+    return new Promise((resolve, reject) => {
+      client.on('ready', async () => {
+        try {
+          // Expand tilde to absolute path
+          const expandedPath = remotePath.startsWith('~')
+            ? (await this.execCommand(client, `echo ${remotePath}`)).trim()
+            : remotePath;
+
+          // Use find with printf for reliable parsing
+          // Format: type|permissions|name (one per line)
+          const escapedPath = expandedPath.replace(/'/g, "'\\''");
+          const command = `find '${escapedPath}' -maxdepth 1 -mindepth 1 -printf '%y|%M|%f\\n' 2>/dev/null || echo "ERROR: Directory not found"`;
+          const output = await this.execCommand(client, command);
+
+          if (output.startsWith('ERROR:') || output.trim() === '') {
+            // Try fallback with ls -1 and test -d for each entry
+            const lsCommand = `cd '${escapedPath}' && ls -1A 2>/dev/null || echo "ERROR: Directory not found"`;
+            const lsOutput = await this.execCommand(client, lsCommand);
+
+            if (lsOutput.startsWith('ERROR:')) {
+              client.end();
+              reject(new Error('Directory not found or inaccessible'));
+              return;
+            }
+
+            const names = lsOutput.trim().split('\n').filter(n => n.trim());
+            const entries: Array<{ name: string; type: 'file' | 'directory'; permissions: string }> = [];
+
+            // For each name, check if it's a directory
+            for (const name of names) {
+              const testCmd = `test -d '${escapedPath}/${name.replace(/'/g, "'\\''")}' && echo "d" || echo "f"`;
+              const typeResult = await this.execCommand(client, testCmd);
+              const type = typeResult.trim() === 'd' ? 'directory' : 'file';
+
+              entries.push({
+                name,
+                type,
+                permissions: type === 'directory' ? 'drwxr-xr-x' : '-rw-r--r--', // Dummy permissions
+              });
+            }
+
+            client.end();
+            resolve(entries);
+            return;
+          }
+
+          // Parse find output
+          const lines = output.trim().split('\n').filter(line => line.trim());
+          const entries: Array<{ name: string; type: 'file' | 'directory'; permissions: string }> = [];
+
+          for (const line of lines) {
+            // Format: type|permissions|name
+            const parts = line.split('|');
+            if (parts.length === 3) {
+              const [typeChar, permissions, name] = parts;
+
+              // Skip symbolic links (l), sockets (s), etc - only include files (f) and directories (d)
+              if (typeChar === 'f' || typeChar === 'd') {
+                entries.push({
+                  name: name.trim(),
+                  type: typeChar === 'd' ? 'directory' : 'file',
+                  permissions: permissions.trim(),
+                });
+              }
+            }
+          }
+
+          client.end();
+          resolve(entries);
+        } catch (error) {
+          client.end();
+          reject(error);
+        }
+      });
+
+      client.on('error', (err) => {
+        reject(err);
+      });
+
+      // Connect with provided SSH config
+      const connectConfig: ConnectConfig = {
+        host: config.host,
+        port: config.port || 22,
+        username: config.username,
+      };
+
+      if (config.privateKeyPath) {
+        const fs = require('fs');
+        connectConfig.privateKey = fs.readFileSync(config.privateKeyPath);
+        if (config.passphrase) {
+          connectConfig.passphrase = config.passphrase;
+        }
+      }
+
+      client.connect(connectConfig);
+    });
+  }
+
+  /**
+   * Recursively list all files in a remote directory (for QuickSearch)
+   * Returns FileEntry[] format matching local fs.ipc.ts listFilesRecursive
+   * Creates a temporary connection if one doesn't exist
+   */
+  async listRemoteFilesRecursive(
+    sessionId: string,
+    config: SSHConfig,
+    remotePath: string,
+    basePath: string,
+    maxDepth = 30,
+    currentDepth = 0
+  ): Promise<Array<{
+    name: string;
+    path: string;
+    relativePath: string;
+    type: 'file' | 'folder';
+    extension?: string;
+  }>> {
+    if (currentDepth >= maxDepth) return [];
+
+    // Check if we have an existing connection, otherwise create temporary one
+    const existingConnection = this.connections.get(sessionId);
+    const client = existingConnection?.client || new Client();
+    const needsCleanup = !existingConnection;
+
+    try {
+      // If no existing connection, establish temporary one
+      if (!existingConnection) {
+        console.log('[SSH] Creating temporary connection for file listing');
+        await new Promise<void>((resolve, reject) => {
+          client.on('ready', () => resolve());
+          client.on('error', (err) => reject(err));
+
+          const connectConfig: ConnectConfig = {
+            host: config.host,
+            port: config.port || 22,
+            username: config.username,
+          };
+
+          if (config.privateKeyPath) {
+            connectConfig.privateKey = fs.readFileSync(config.privateKeyPath);
+            if (config.passphrase) {
+              connectConfig.passphrase = config.passphrase;
+            }
+          }
+
+          client.connect(connectConfig);
+        });
+      }
+
+      const entries: Array<{
+        name: string;
+        path: string;
+        relativePath: string;
+        type: 'file' | 'folder';
+        extension?: string;
+      }> = [];
+
+      // Directories to skip (same as local listing)
+      const IGNORED_DIRS = new Set([
+        'node_modules', '.git', '.next', '__pycache__', '.pytest_cache',
+        'dist', 'build', '.venv', 'venv', '.idea', '.vscode', 'coverage',
+        '.cache', '.turbo',
+      ]);
+
+      // Use find command with printf to get type info in one pass (much faster!)
+      const escapedPath = remotePath.replace(/'/g, "'\\''");
+
+      // Build exclusion patterns for find command
+      const excludePatterns = Array.from(IGNORED_DIRS)
+        .map(dir => `-path '*/${dir}' -o -path '*/${dir}/*'`)
+        .join(' -o ');
+
+      // Find with printf format: type|fullpath (f=file, d=directory)
+      // This avoids 5000 separate SSH commands to check each file type!
+      const command = `find '${escapedPath}' \\( ${excludePatterns} \\) -prune -o -printf '%y|%p\\n' 2>/dev/null | head -n 5000`;
+
+      const output = await this.execCommand(client, command);
+      const lines = output.trim().split('\n').filter(l => l.trim());
+
+      for (const line of lines) {
+        const [typeChar, fullPath] = line.split('|');
+        if (!fullPath || fullPath === remotePath) continue;
+
+        const name = fullPath.split('/').pop() || '';
+
+        // Skip hidden files except .env
+        if (name.startsWith('.') && !name.startsWith('.env')) continue;
+
+        // typeChar: 'f' = file, 'd' = directory
+        const type = typeChar === 'd' ? 'folder' : 'file';
+
+        // Skip if it's a directory in ignored list
+        if (type === 'folder' && IGNORED_DIRS.has(name)) continue;
+
+        const relativePath = fullPath.substring(basePath.length + 1); // +1 to remove leading slash
+
+        entries.push({
+          name,
+          path: fullPath,
+          relativePath,
+          type,
+          extension: type === 'file' ? name.split('.').pop()?.toLowerCase() : undefined,
+        });
+      }
+
+      console.log(`[SSH] Listed ${entries.length} remote files from ${remotePath}`);
+
+      return entries;
+    } catch (error) {
+      console.error(`[SSH] Error listing remote directory ${remotePath}:`, error);
+      return [];
+    } finally {
+      // Clean up temporary connection
+      if (needsCleanup) {
+        client.end();
+      }
     }
   }
 
@@ -1422,9 +1681,152 @@ export class SSHService {
     return { name, description: description.trim(), systemPrompt: systemPrompt.trim(), scope };
   }
 
+  /**
+   * Install a skill on a remote machine via SSH
+   * Runs npx add-skill on the remote server
+   */
+  async installRemoteSkill(
+    sessionId: string,
+    config: SSHConfig,
+    remoteWorkdir: string,
+    source: string,
+    options?: { global?: boolean; skills?: string[] }
+  ): Promise<{ success: boolean; output: string; error?: string }> {
+    try {
+      const client = await this.getConnection(sessionId, config);
+
+      // Build the npx add-skill command
+      const args = ['add-skill', source];
+
+      // Add --yes flag for non-interactive mode
+      args.push('-y');
+
+      // Add global flag if specified
+      if (options?.global) {
+        args.push('-g');
+      }
+
+      // Add specific skills if provided
+      if (options?.skills && options.skills.length > 0) {
+        for (const skill of options.skills) {
+          args.push('--skill', skill);
+        }
+      }
+
+      // Target claude-code agent
+      args.push('-a', 'claude-code');
+
+      // Escape arguments for shell
+      const escapedArgs = args.map(arg => {
+        // If arg contains spaces or special chars, quote it
+        if (/[\s'"`$\\]/.test(arg)) {
+          return `'${arg.replace(/'/g, "'\\''")}'`;
+        }
+        return arg;
+      });
+
+      const command = `cd "${remoteWorkdir}" && npx ${escapedArgs.join(' ')}`;
+      console.log('[SSH Service] Running remote install:', command);
+
+      const output = await this.execCommand(client, command);
+      console.log('[SSH Service] Install output:', output);
+
+      return {
+        success: true,
+        output: output || 'Skill installed successfully on remote server',
+      };
+    } catch (error) {
+      console.error('[SSH Service] Failed to install remote skill:', error);
+      return {
+        success: false,
+        output: '',
+        error: (error as Error).message,
+      };
+    }
+  }
+
   // ============================================================================
   // PERSISTENT SESSION MANAGEMENT (tmux-based)
   // ============================================================================
+
+  /**
+   * Check if a persistent Zellij session exists on the remote for this session
+   */
+  async checkZellijSession(
+    sessionId: string,
+    config: SSHConfig,
+    retryOnChannelFailure = true
+  ): Promise<PersistentSessionInfo | null> {
+    try {
+      const client = await this.getConnection(sessionId, config);
+      const zellijSessionName = `grep-${sessionId.substring(0, 8)}`;
+
+      // Check if zellij is installed
+      const zellijCheck = await this.execCommand(
+        client,
+        `command -v zellij >/dev/null 2>&1 && echo "INSTALLED" || echo "NOT_INSTALLED"`
+      );
+
+      if (zellijCheck.trim() === 'NOT_INSTALLED') {
+        console.log('[SSH Service] Zellij not installed on remote');
+        return null;
+      }
+
+      // Check if zellij session exists
+      const checkResult = await this.execCommand(
+        client,
+        `zellij list-sessions 2>/dev/null | grep -q "^${zellijSessionName}$" && echo "EXISTS" || echo "NOT_FOUND"`
+      );
+
+      if (checkResult.trim() === 'NOT_FOUND') {
+        console.log(`[SSH Service] No Zellij session found: ${zellijSessionName}`);
+        return null;
+      }
+
+      // Session exists - check if Claude process is still running inside it
+      // Get the Zellij session PID and look for claude child processes
+      const pidResult = await this.execCommand(
+        client,
+        `pgrep -f "zellij.*${zellijSessionName}" | head -1`
+      );
+
+      const zellijPid = parseInt(pidResult.trim(), 10);
+      let claudeProcessPid: number | undefined;
+      let isRunning = false;
+
+      if (zellijPid) {
+        // Check if a claude process is running as a child of the zellij session
+        const claudePidResult = await this.execCommand(
+          client,
+          `pgrep -P ${zellijPid} -f "claude" 2>/dev/null || echo ""`
+        );
+        const claudePid = parseInt(claudePidResult.trim(), 10);
+        if (claudePid) {
+          claudeProcessPid = claudePid;
+          isRunning = true;
+        }
+      }
+
+      console.log(`[SSH Service] Found Zellij session: ${zellijSessionName}, running: ${isRunning}, pid: ${claudeProcessPid}`);
+
+      return {
+        tmuxSessionName: zellijSessionName, // Reuse field name for compatibility
+        isRunning,
+        claudeProcessPid,
+      };
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      console.error('[SSH Service] Failed to check Zellij session:', errorMsg);
+
+      if (retryOnChannelFailure && errorMsg.includes('Channel open failure')) {
+        console.log('[SSH Service] Channel failure detected, forcing reconnect...');
+        this.disconnect(sessionId);
+        return this.checkZellijSession(sessionId, config, false);
+      }
+
+      return null;
+    }
+  }
 
   /**
    * Check if a persistent tmux session exists on the remote for this session
@@ -1496,6 +1898,85 @@ export class SSHService {
   }
 
   /**
+   * Detect and clean up old tmux sessions before migrating to Zellij
+   * This ensures a clean migration from tmux to Zellij persistence
+   */
+  async migrateFromTmuxToZellij(
+    sessionId: string,
+    config: SSHConfig
+  ): Promise<{ hadTmuxSession: boolean; cleaned: boolean }> {
+    try {
+      const client = await this.getConnection(sessionId, config);
+      const sessionName = `grep-${sessionId.substring(0, 8)}`;
+
+      // Check if old tmux session exists
+      const checkResult = await this.execCommand(
+        client,
+        `tmux has-session -t "${sessionName}" 2>/dev/null && echo "EXISTS" || echo "NOT_FOUND"`
+      );
+
+      if (checkResult.trim() === 'NOT_FOUND') {
+        console.log(`[SSH Service] [Migration] No old tmux session found for ${sessionName}`);
+        return { hadTmuxSession: false, cleaned: false };
+      }
+
+      console.log(`[SSH Service] [Migration] Found old tmux session: ${sessionName}, migrating to Zellij...`);
+
+      // Kill the old tmux session
+      await this.execCommand(
+        client,
+        `tmux kill-session -t "${sessionName}" 2>/dev/null || true`
+      );
+
+      // Clean up any old FIFO pipes from tmux
+      await this.execCommand(
+        client,
+        `rm -f /tmp/grep-${sessionId.substring(0, 8)}-in /tmp/grep-${sessionId.substring(0, 8)}-out 2>/dev/null || true`
+      );
+
+      console.log(`[SSH Service] [Migration] Successfully cleaned up old tmux session: ${sessionName}`);
+      return { hadTmuxSession: true, cleaned: true };
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      console.error('[SSH Service] [Migration] Failed to migrate from tmux:', errorMsg);
+      // Don't fail the whole operation if cleanup fails - just log it
+      return { hadTmuxSession: true, cleaned: false };
+    }
+  }
+
+  /**
+   * Kill a persistent Zellij session on the remote
+   */
+  async killZellijSession(
+    sessionId: string,
+    config: SSHConfig
+  ): Promise<{ success: boolean; error?: string }> {
+    try {
+      const client = await this.getConnection(sessionId, config);
+      const zellijSessionName = `grep-${sessionId.substring(0, 8)}`;
+
+      // Kill the zellij session
+      await this.execCommand(
+        client,
+        `zellij kill-session "${zellijSessionName}" 2>/dev/null || true`
+      );
+
+      // Clean up FIFO pipes
+      await this.execCommand(
+        client,
+        `rm -f /tmp/grep-${sessionId.substring(0, 8)}-in /tmp/grep-${sessionId.substring(0, 8)}-out 2>/dev/null || true`
+      );
+
+      console.log(`[SSH Service] Killed Zellij session: ${zellijSessionName}`);
+      return { success: true };
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      console.error('[SSH Service] Failed to kill Zellij session:', errorMsg);
+      return { success: false, error: errorMsg };
+    }
+  }
+
+  /**
    * Kill a persistent tmux session on the remote
    */
   async killPersistentSession(
@@ -1525,6 +2006,197 @@ export class SSHService {
       console.error('[SSH Service] Failed to kill persistent session:', errorMsg);
       return { success: false, error: errorMsg };
     }
+  }
+
+  /**
+   * Create a persistent remote process using Zellij and FIFO pipes
+   * This allows the Claude process to survive app restarts
+   * Zellij may handle I/O better than tmux for this use case
+   */
+  createZellijRemoteProcess(
+    sessionId: string,
+    config: SSHConfig,
+    sdkOptions: SDKSpawnOptions
+  ): SpawnedProcess {
+    const passThrough = {
+      stdin: new PassThrough(),
+      stdout: new PassThrough(),
+    };
+
+    let killed = false;
+    let exitCode: number | null = null;
+    const emitter = new EventEmitter();
+    const zellijSessionName = `grep-${sessionId.substring(0, 8)}`;
+    const fifoIn = `/tmp/grep-${sessionId.substring(0, 8)}-in`;
+    const fifoOut = `/tmp/grep-${sessionId.substring(0, 8)}-out`;
+
+    // Build environment exports
+    const includeVars = [
+      'ANTHROPIC_API_KEY',
+      'CLAUDE_CODE_USE_FOUNDRY',
+      'ANTHROPIC_FOUNDRY_BASE_URL',
+      'ANTHROPIC_FOUNDRY_API_KEY',
+      'ANTHROPIC_DEFAULT_SONNET_MODEL',
+      'ANTHROPIC_DEFAULT_HAIKU_MODEL',
+      'ANTHROPIC_DEFAULT_OPUS_MODEL',
+      'CLAUDE_CODE_ENTRYPOINT',
+      'TERM',
+      'LANG',
+    ];
+    const envExports = Object.entries(sdkOptions.env)
+      .filter(([key, value]) => value !== undefined && includeVars.includes(key))
+      .map(([key, value]) => `export ${key}="${value?.replace(/"/g, '\\"')}"`)
+      .join('; ');
+
+    console.log('[SSH Service] [Zellij] Environment vars to export:', Object.keys(sdkOptions.env).filter(k => includeVars.includes(k)));
+    console.log('[SSH Service] [Zellij] Has ANTHROPIC_API_KEY:', !!sdkOptions.env.ANTHROPIC_API_KEY);
+
+    // Filter and escape args
+    const filteredArgs = sdkOptions.args.filter(arg => {
+      if (arg.includes('claude-agent-sdk') || arg.includes('cli.js') || arg.includes('node_modules')) {
+        return false;
+      }
+      return true;
+    });
+
+    const escapedArgs = filteredArgs.map(arg => {
+      if (arg.includes(' ') || arg.includes('"') || arg.includes("'") || arg.includes('{')) {
+        return `'${arg.replace(/'/g, "'\\''")}'`;
+      }
+      return arg;
+    }).join(' ');
+
+    const claudePaths = `/home/${config.username}/.local/bin:/home/${config.username}/bin:/usr/local/bin`;
+
+    // Handle abort signal
+    const abortHandler = () => {
+      console.log('[SSH Service] [Zellij] Abort signal received for persistent process');
+      killed = true;
+      // Don't kill the zellij session on abort - that's the point of persistence
+      passThrough.stdout.end();
+    };
+    sdkOptions.signal.addEventListener('abort', abortHandler);
+
+    // Start async connection and zellij setup
+    (async () => {
+      try {
+        console.log('[SSH Service] [Zellij] Getting connection for persistent process...');
+        const client = await this.getConnection(sessionId, config);
+        console.log('[SSH Service] [Zellij] Got connection, checking for existing session...');
+
+        // Check if zellij session already exists with a running Claude process
+        const existingSession = await this.checkZellijSession(sessionId, config);
+        console.log('[SSH Service] [Zellij] Existing session check result:', existingSession);
+
+        if (existingSession?.isRunning) {
+          console.log(`[SSH Service] [Zellij] Reattaching to existing session: ${zellijSessionName}`);
+          // Session exists and Claude is running - reattach to the FIFOs
+          await this.attachToExistingSession(client, fifoIn, fifoOut, passThrough, emitter, sdkOptions);
+        } else {
+          // Need to create a new zellij session
+          if (existingSession) {
+            console.log(`[SSH Service] [Zellij] Existing session found but Claude not running, recreating...`);
+            await this.killZellijSession(sessionId, config);
+          }
+
+          // Migrate from old tmux sessions if they exist
+          const migration = await this.migrateFromTmuxToZellij(sessionId, config);
+          if (migration.hadTmuxSession) {
+            console.log(`[SSH Service] [Zellij] Migrated from old tmux session (cleaned: ${migration.cleaned})`);
+          }
+
+          console.log(`[SSH Service] [Zellij] Creating new persistent session: ${zellijSessionName}`);
+
+          // Create FIFOs
+          await this.execCommand(client, `rm -f ${fifoIn} ${fifoOut}; mkfifo ${fifoIn} ${fifoOut}`);
+
+          // Create a launcher script on remote
+          const launcherScript = `/tmp/grep-zellij-launcher-${sessionId.substring(0, 8)}.sh`;
+          const scriptContent = `#!/bin/bash
+export PATH="${claudePaths}:\$PATH"
+${envExports}
+cd "${config.remoteWorkdir}"
+exec claude ${escapedArgs} <"${fifoIn}" >"${fifoOut}" 2>&1
+`;
+
+          // Write launcher script
+          await this.execCommand(client, `cat > ${launcherScript} << 'LAUNCHER_EOF'\n${scriptContent}\nLAUNCHER_EOF\nchmod +x ${launcherScript}`);
+
+          // Step 1: Create a background Zellij session
+          console.log(`[SSH Service] [Zellij] Creating background session...`);
+          await this.execCommand(client, `zellij attach --create-background "${zellijSessionName}"`);
+
+          // Step 2: Attach to FIFOs FIRST (this is critical - the launcher script will block on opening FIFOs)
+          console.log('[SSH Service] [Zellij] Attaching to FIFOs before starting launcher...');
+          await this.attachToExistingSession(client, fifoIn, fifoOut, passThrough, emitter, sdkOptions);
+
+          // Step 3: NOW write the launcher script command to the session pane
+          // The FIFOs are ready, so the script won't block
+          console.log(`[SSH Service] [Zellij] Writing launcher command to session pane...`);
+          await this.execCommand(client, `zellij --session "${zellijSessionName}" action write-chars '${launcherScript}'`);
+          await this.execCommand(client, `zellij --session "${zellijSessionName}" action write 10`); // Send Enter (ASCII 10)
+
+          const startCmd = `echo "started"`;
+
+          console.log(`[SSH Service] [Zellij] Starting session with launcher script`);
+          const pidOutput = await this.execCommand(client, startCmd);
+          const zellijPid = pidOutput.trim();
+          console.log(`[SSH Service] [Zellij] Started with PID: ${zellijPid}`);
+
+          // Give it time to start
+          await new Promise(resolve => setTimeout(resolve, 2000));
+
+          // Debug: Check the log file for errors
+          const logContent = await this.execCommand(client, `cat /tmp/grep-zellij-${sessionId.substring(0, 8)}.log 2>&1 || echo "No log file"`);
+          console.log(`[SSH Service] [Zellij] Log content:\n${logContent}`);
+
+          // Debug: Check if Zellij session is listed
+          const sessionList = await this.execCommand(client, `zellij list-sessions 2>&1 || echo "Failed to list"`);
+          console.log(`[SSH Service] [Zellij] Session list:\n${sessionList}`);
+
+          // Debug: Check if process is still running
+          const psCheck = await this.execCommand(client, `ps aux | grep -i 'zellij.*${zellijSessionName}' | grep -v grep || echo "No process"`);
+          console.log(`[SSH Service] [Zellij] Process check:\n${psCheck}`);
+
+          // Verify it started
+          const checkAgain = await this.checkZellijSession(sessionId, config);
+          if (!checkAgain?.isRunning) {
+            throw new Error(`Zellij session failed to start Claude process. Check logs at /tmp/grep-zellij-${sessionId.substring(0, 8)}.log on remote`);
+          }
+
+          console.log('[SSH Service] [Zellij] Session started successfully, FIFOs already attached');
+        }
+      } catch (error) {
+        console.error('[SSH Service] [Zellij] Error:', error);
+        emitter.emit('error', error instanceof Error ? error : new Error(String(error)));
+        passThrough.stdout.end();
+        sdkOptions.signal.removeEventListener('abort', abortHandler);
+      }
+    })();
+
+    return {
+      stdin: passThrough.stdin,
+      stdout: passThrough.stdout,
+      get killed() { return killed; },
+      get exitCode() { return exitCode; },
+      kill(signal: NodeJS.Signals): boolean {
+        if (killed) return false;
+        killed = true;
+        // Note: We intentionally don't kill the zellij session here
+        // The user can explicitly kill it via killZellijSession
+        passThrough.stdout.end();
+        return true;
+      },
+      on(event: 'exit' | 'error', listener: any) {
+        emitter.on(event, listener);
+      },
+      once(event: 'exit' | 'error', listener: any) {
+        emitter.once(event, listener);
+      },
+      off(event: 'exit' | 'error', listener: any) {
+        emitter.off(event, listener);
+      },
+    };
   }
 
   /**

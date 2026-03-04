@@ -626,6 +626,7 @@ export default function ChatContainer({ session }: ChatContainerProps) {
             content={thinkingContent}
             isStreaming={isSessionStreaming && !!thinkingContent}
             isCompacting={currentCompactionStatus?.isCompacting}
+            compactionStatus={currentCompactionStatus}
           />
         </div>
       )}

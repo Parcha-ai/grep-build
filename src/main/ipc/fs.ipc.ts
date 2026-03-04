@@ -136,14 +136,44 @@ export function registerFsHandlers(ipcMain: IpcMain): void {
   ipcMain.handle(IPC_CHANNELS.FS_LIST_FILES, async (_event, sessionId: string, query?: string) => {
     console.log('[FS] listFiles called for session:', sessionId, 'query:', query);
     const session = await sessionService.getSession(sessionId);
-    console.log('[FS] Session found:', session?.id, 'worktreePath:', session?.worktreePath);
+    console.log('[FS] Session found:', session?.id, 'worktreePath:', session?.worktreePath, 'isSSH:', !!session?.sshConfig);
     if (!session?.worktreePath) {
       console.log('[FS] No worktreePath - returning empty array');
       return [];
     }
 
+    // Check if this is an SSH session
+    if (session.sshConfig) {
+      console.log('[FS] SSH session detected - using remote file listing');
+      try {
+        const files = await sshService.listRemoteFilesRecursive(
+          sessionId,
+          session.sshConfig,
+          session.worktreePath,
+          session.worktreePath
+        );
+        console.log('[FS] Found', files.length, 'remote files');
+
+        // Filter by query if provided
+        if (query && query.trim()) {
+          const lowerQuery = query.toLowerCase();
+          return files.filter(
+            (f) =>
+              f.name.toLowerCase().includes(lowerQuery) ||
+              f.relativePath.toLowerCase().includes(lowerQuery)
+          ).slice(0, 50);
+        }
+
+        return files;
+      } catch (error) {
+        console.error('[FS] Failed to list remote files:', error);
+        return [];
+      }
+    }
+
+    // Local file listing
     const files = await listFilesRecursive(session.worktreePath, session.worktreePath);
-    console.log('[FS] Found', files.length, 'files');
+    console.log('[FS] Found', files.length, 'local files');
 
     // Filter by query if provided
     if (query && query.trim()) {
@@ -185,15 +215,30 @@ export function registerFsHandlers(ipcMain: IpcMain): void {
     }
   });
 
-  // Write file content (creates parent directories if needed)
-  ipcMain.handle(IPC_CHANNELS.FS_WRITE_FILE, async (_event, filePath: string, content: string) => {
+  // Write file content (creates parent directories if needed) - supports SSH sessions via sessionId
+  ipcMain.handle(IPC_CHANNELS.FS_WRITE_FILE, async (_event, filePath: string, content: string, sessionId?: string) => {
+    console.log('[FS] FS_WRITE_FILE called, filePath:', filePath, 'sessionId:', sessionId);
     try {
-      // Ensure parent directory exists
+      // If sessionId provided, check if it's an SSH session
+      if (sessionId) {
+        const session = await sessionService.getSession(sessionId);
+        console.log('[FS] Session found:', !!session, 'has sshConfig:', !!session?.sshConfig);
+        if (session?.sshConfig) {
+          console.log('[FS] Writing file to remote SSH session:', filePath);
+          await sshService.writeRemoteFile(sessionId, session.sshConfig, filePath, content);
+          console.log('[FS] Remote write successful');
+          return { success: true };
+        }
+      }
+
+      // Local file write
+      console.log('[FS] Writing local file:', filePath);
       const dir = path.dirname(filePath);
       await fs.mkdir(dir, { recursive: true });
       await fs.writeFile(filePath, content, 'utf-8');
       return { success: true };
     } catch (error) {
+      console.error('[FS] Write file error:', error);
       return { success: false, error: (error as Error).message };
     }
   });

@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { X, Image, FileCode, Target, File, Folder, AtSign, Brain, Square, Code } from 'lucide-react';
-import { useSessionStore, type PermissionMode, type ThinkingMode, type ModelInfo } from '../../stores/session.store';
+import { useSessionStore, type PermissionMode, type ThinkingMode, type EffortLevel, type ModelInfo, migrateThinkingMode } from '../../stores/session.store';
 import { useUIStore } from '../../stores/ui.store';
 import { useAudioStore } from '../../stores/audio.store';
 import MentionAutocomplete, { type Mention } from './MentionAutocomplete';
@@ -8,6 +8,7 @@ import CommandAutocomplete from './CommandAutocomplete';
 import { MicrophoneButton, type VoiceModeHandle } from './MicrophoneButton';
 import { MessageQueuePanel } from './MessageQueuePanel';
 import { VoiceModeErrorBoundary } from './VoiceModeErrorBoundary';
+import SecureInput from './SecureInput';
 
 // Permission mode config for UI - using terminal-style prompts
 const PERMISSION_MODE_CONFIG: Record<PermissionMode, { prompt: string; label: string; color: string; description: string }> = {
@@ -43,22 +44,45 @@ const PERMISSION_MODE_CONFIG: Record<PermissionMode, { prompt: string; label: st
   },
 };
 
-// Thinking mode config for UI
-const THINKING_MODE_CONFIG: Record<ThinkingMode, { label: string; color: string; description: string }> = {
+// Effort level config for UI (replaces thinking mode)
+const EFFORT_LEVEL_CONFIG: Record<ThinkingMode, { label: string; color: string; description: string; opusOnly?: boolean }> = {
+  // Legacy values (for backward compatibility during migration)
   off: {
-    label: 'NO THINK',
-    color: 'text-gray-500',
-    description: 'No extended thinking',
+    label: 'LOW',
+    color: 'text-gray-400',
+    description: 'Fast & efficient - minimal thinking',
   },
   thinking: {
-    label: 'THINK',
-    color: 'text-purple-400',
-    description: 'Extended thinking (10k tokens)',
+    label: 'MED',
+    color: 'text-blue-400',
+    description: 'Balanced - moderate thinking (10k tokens)',
   },
   ultrathink: {
-    label: 'ULTRA',
+    label: 'HIGH',
+    color: 'text-purple-400',
+    description: 'Full capability - deep thinking (default)',
+  },
+  // New effort levels
+  low: {
+    label: 'LOW',
+    color: 'text-gray-400',
+    description: 'Fast & efficient - minimal thinking',
+  },
+  medium: {
+    label: 'MED',
+    color: 'text-blue-400',
+    description: 'Balanced - moderate thinking (10k tokens)',
+  },
+  high: {
+    label: 'HIGH',
+    color: 'text-purple-400',
+    description: 'Full capability - deep thinking (default)',
+  },
+  max: {
+    label: 'MAX',
     color: 'text-pink-400',
-    description: 'Ultra thinking (100k tokens)',
+    description: 'Maximum capability (Opus 4.6 only)',
+    opusOnly: true,
   },
 };
 
@@ -107,6 +131,11 @@ export default function InputArea({ sessionId, disabled, systemInfo, isStreaming
   const containerRef = useRef<HTMLDivElement>(null);
   const voiceModeRef = useRef<VoiceModeHandle>(null);
 
+  // Helper to safely get selection position
+  const getSelectionStart = (): number | undefined => {
+    return textareaRef.current?.selectionStart ?? undefined;
+  };
+
   // Per-session data selectors — only re-render when THIS session's data changes
   const isStreamingState = useSessionStore(useCallback((s) => s.isStreaming[sessionId] || false, [sessionId]));
   const currentMode = useSessionStore(useCallback((s) => s.permissionMode[sessionId] || 'acceptEdits', [sessionId]));
@@ -120,6 +149,7 @@ export default function InputArea({ sessionId, disabled, systemInfo, isStreaming
   const interruptAndSend = useSessionStore((s) => s.interruptAndSend);
   const cyclePermissionMode = useSessionStore((s) => s.cyclePermissionMode);
   const cycleThinkingMode = useSessionStore((s) => s.cycleThinkingMode);
+  const setThinkingMode = useSessionStore((s) => s.setThinkingMode);
   const setSelectedModel = useSessionStore((s) => s.setSelectedModel);
   const loadAvailableModels = useSessionStore((s) => s.loadAvailableModels);
 
@@ -163,7 +193,9 @@ export default function InputArea({ sessionId, disabled, systemInfo, isStreaming
   const triggerWord = audioSettings?.voiceTriggerWord || 'please';
 
   const modeConfig = PERMISSION_MODE_CONFIG[currentMode];
-  const thinkingConfig = THINKING_MODE_CONFIG[currentThinkingMode];
+  // Apply migration for legacy thinking mode values
+  const migratedThinkingMode = migrateThinkingMode(currentThinkingMode);
+  const effortConfig = EFFORT_LEVEL_CONFIG[migratedThinkingMode] || EFFORT_LEVEL_CONFIG['high'];
 
   const isSending = isStreamingState || (isStreamingProp ?? false);
   const hasQueuedMessages = queuedMessages.length > 0;
@@ -171,6 +203,10 @@ export default function InputArea({ sessionId, disabled, systemInfo, isStreaming
   // Model selector state
   const [showModelDropdown, setShowModelDropdown] = useState(false);
   const modelDropdownRef = useRef<HTMLDivElement>(null);
+
+  // Effort level selector state
+  const [showEffortDropdown, setShowEffortDropdown] = useState(false);
+  const effortDropdownRef = useRef<HTMLDivElement>(null);
 
   // Get current model display name
   const currentModelInfo = useMemo(() => {
@@ -223,6 +259,32 @@ export default function InputArea({ sessionId, disabled, systemInfo, isStreaming
     }
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [showModelDropdown]);
+
+  // Close effort dropdown on outside click
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (effortDropdownRef.current && !effortDropdownRef.current.contains(event.target as Node)) {
+        setShowEffortDropdown(false);
+      }
+    };
+    if (showEffortDropdown) {
+      document.addEventListener('mousedown', handleClickOutside);
+    }
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [showEffortDropdown]);
+
+  // Listen for text edit events to blur/disable input while editing in browser
+  useEffect(() => {
+    const handleTextEditActive = (event: CustomEvent<{ active: boolean }>) => {
+      if (event.detail.active) {
+        // Blur the textarea when text editing starts
+        textareaRef.current?.blur();
+      }
+    };
+
+    window.addEventListener('grep-text-edit-active', handleTextEditActive as EventListener);
+    return () => window.removeEventListener('grep-text-edit-active', handleTextEditActive as EventListener);
+  }, []);
 
   // Listen for insert-chat events from browser preview - adds element context as attachments (chips)
   useEffect(() => {
@@ -487,7 +549,7 @@ export default function InputArea({ sessionId, disabled, systemInfo, isStreaming
     (mention: Mention) => {
       // Replace @query with mention
       const beforeMention = message.slice(0, mentionStartIndex);
-      const afterMention = message.slice(textareaRef.current?.selectionStart || mentionStartIndex);
+      const afterMention = message.slice(getSelectionStart() || mentionStartIndex);
 
       // Remove the @query text and add a placeholder marker
       setMessage(beforeMention + afterMention);
@@ -541,12 +603,12 @@ export default function InputArea({ sessionId, disabled, systemInfo, isStreaming
       } else if (itemType === 'skill') {
         // Skills are invoked via Skill tool - just insert /skill-name as is
         const before = message.slice(0, commandStartIndex);
-        const after = message.slice(textareaRef.current?.selectionStart || commandStartIndex);
+        const after = message.slice(getSelectionStart() || commandStartIndex);
         setMessage(before + `/${item.name}` + after);
       } else if (itemType === 'agent') {
         // Replace @agent-name with just the agent mention
         const before = message.slice(0, commandStartIndex);
-        const after = message.slice(textareaRef.current?.selectionStart || commandStartIndex);
+        const after = message.slice(getSelectionStart() || commandStartIndex);
         setMessage(before + `@agent-${item.name}` + after);
       }
 
@@ -698,7 +760,7 @@ export default function InputArea({ sessionId, disabled, systemInfo, isStreaming
     }
 
     // Option+Enter: Create conversation fork and send message to fork
-    if (e.key === 'Enter' && e.altKey) {
+    if (e.key === 'Enter' && e.altKey && !e.shiftKey) {
       e.preventDefault();
 
       const trimmedMessage = message.trim();
@@ -727,7 +789,8 @@ export default function InputArea({ sessionId, disabled, systemInfo, isStreaming
       return;
     }
 
-    if (e.key === 'Enter' && !e.shiftKey) {
+    // Regular Enter (without Alt): Send message
+    if (e.key === 'Enter' && !e.shiftKey && !e.altKey) {
       e.preventDefault();
       handleSubmit();
     }
@@ -890,34 +953,33 @@ export default function InputArea({ sessionId, disabled, systemInfo, isStreaming
 
   const handleAtButtonClick = () => {
     // Insert @ at cursor position
-    if (textareaRef.current) {
-      const start = textareaRef.current.selectionStart;
-      const end = textareaRef.current.selectionEnd;
-      const newValue = message.slice(0, start) + '@' + message.slice(end);
-      setMessage(newValue);
+    const elem = textareaRef.current;
+    if (!elem) return;
 
-      // Trigger the mention autocomplete
-      setTimeout(() => {
-        if (textareaRef.current) {
-          textareaRef.current.selectionStart = start + 1;
-          textareaRef.current.selectionEnd = start + 1;
-          textareaRef.current.focus();
+    const start = elem.selectionStart ?? 0;
+    const end = elem.selectionEnd ?? 0;
+    const newValue = message.slice(0, start) + '@' + message.slice(end);
+    setMessage(newValue);
 
-          // Manually trigger the change detection
-          setShowMentions(true);
-          setMentionQuery('');
-          setMentionStartIndex(start);
-          setMentionPosition({ top: -310, left: 0 });
-        }
-      }, 0);
-    }
+    // Trigger the mention autocomplete
+    setTimeout(() => {
+      elem.selectionStart = start + 1;
+      elem.selectionEnd = start + 1;
+      elem.focus();
+
+      setShowMentions(true);
+      setMentionQuery('');
+      setMentionStartIndex(start);
+      setMentionPosition({ top: -310, left: 0 });
+    }, 0);
   };
 
   // Auto-resize textarea
   useEffect(() => {
-    if (textareaRef.current) {
-      textareaRef.current.style.height = 'auto';
-      textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 200)}px`;
+    const elem = textareaRef.current;
+    if (elem) {
+      elem.style.height = 'auto';
+      elem.style.height = `${Math.min(elem.scrollHeight, 200)}px`;
     }
   }, [message]);
 
@@ -1154,9 +1216,9 @@ export default function InputArea({ sessionId, disabled, systemInfo, isStreaming
           {modeConfig.prompt}
         </button>
 
-        {/* Textarea - always available for text input */}
+        {/* Secure Input - automatically masks API keys/tokens */}
         <div className="flex-1 relative min-w-0">
-          <textarea
+          <SecureInput
             ref={textareaRef}
             value={message}
             onChange={handleInputChange}
@@ -1301,15 +1363,49 @@ export default function InputArea({ sessionId, disabled, systemInfo, isStreaming
       {/* Minimal hints + system info */}
       <div className="flex items-center gap-4 mt-1 text-xs text-claude-text-secondary font-mono" style={{ letterSpacing: '0.05em' }}>
         <span className={modeConfig.color}>{modeConfig.label}</span>
-        <button
-          onClick={() => cycleThinkingMode(sessionId)}
-          disabled={disabled || isSending}
-          className={`flex items-center gap-1 hover:opacity-80 transition-opacity disabled:opacity-40 ${thinkingConfig.color}`}
-          title={`${thinkingConfig.description} (click to change)`}
-        >
-          <Brain size={10} />
-          <span>{thinkingConfig.label}</span>
-        </button>
+        {/* Effort level selector */}
+        <div className="relative" ref={effortDropdownRef}>
+          <button
+            onClick={() => setShowEffortDropdown(!showEffortDropdown)}
+            disabled={disabled || isSending}
+            className={`flex items-center gap-1 hover:opacity-80 transition-opacity disabled:opacity-40 ${effortConfig.color}`}
+            title={`${effortConfig.description} (click to change)`}
+          >
+            <Brain size={10} />
+            <span>{effortConfig.label}</span>
+          </button>
+          {showEffortDropdown && (
+            <div className="absolute bottom-full left-0 mb-1 bg-claude-surface border border-claude-border shadow-lg z-50 min-w-48">
+              {(['low', 'medium', 'high', 'max'] as EffortLevel[]).map((level) => {
+                const config = EFFORT_LEVEL_CONFIG[level];
+                const isOpus = currentModel.includes('opus');
+                const isDisabled = config.opusOnly && !isOpus;
+
+                return (
+                  <button
+                    key={level}
+                    onClick={() => {
+                      if (!isDisabled) {
+                        setThinkingMode(sessionId, level);
+                        setShowEffortDropdown(false);
+                      }
+                    }}
+                    disabled={isDisabled}
+                    className={`w-full text-left px-3 py-2 hover:bg-claude-bg transition-colors ${
+                      level === migratedThinkingMode ? 'bg-claude-bg text-claude-accent' : 'text-claude-text'
+                    } ${isDisabled ? 'opacity-40 cursor-not-allowed' : ''}`}
+                  >
+                    <div className="font-mono text-xs">{config.label}</div>
+                    <div className="text-[10px] text-claude-text-secondary">
+                      {config.description}
+                      {isDisabled && ' (Opus only)'}
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </div>
         {/* Model selector - always visible */}
         <div className="relative" ref={modelDropdownRef}>
           <button

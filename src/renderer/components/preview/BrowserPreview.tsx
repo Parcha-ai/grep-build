@@ -155,6 +155,7 @@ export default function BrowserPreview({ session, isVisible = true }: BrowserPre
     sessionInspectorActive,
     setSessionInspectorActive,
     setSessionSelectedElement,
+    sessionEditingText,
   } = useUIStore();
 
   // Get this session's inspector state
@@ -657,6 +658,19 @@ export default function BrowserPreview({ session, isVisible = true }: BrowserPre
     return () => window.removeEventListener('grep-browser-refresh', handleRefresh as EventListener);
   }, [session.id]);
 
+  // Handle auto-reload after text replacement Edit tool completion
+  useEffect(() => {
+    const handleTextEditReload = (e: CustomEvent<{ sessionId: string }>) => {
+      if (e.detail.sessionId === session.id) {
+        console.log('[BrowserPreview] Reloading browser after text replacement edit');
+        webviewRef.current?.reload();
+      }
+    };
+
+    window.addEventListener('grep-browser-reload', handleTextEditReload as EventListener);
+    return () => window.removeEventListener('grep-browser-reload', handleTextEditReload as EventListener);
+  }, [session.id]);
+
   const injectInspector = useCallback(async () => {
     const webview = webviewRef.current;
     if (!webview) return;
@@ -665,10 +679,55 @@ export default function BrowserPreview({ session, isVisible = true }: BrowserPre
     // Listen for console messages (our communication channel)
     const handleConsoleMessage = async (event: Electron.ConsoleMessageEvent) => {
       console.log('[BrowserPreview] Console message received:', event.message.slice(0, 100));
+
+      // Handle text edit start/end to blur/focus chat input
+      if (event.message.startsWith('GREP_TEXT_EDIT_START:')) {
+        window.dispatchEvent(new CustomEvent('grep-text-edit-active', { detail: { active: true } }));
+        return;
+      }
+      if (event.message.startsWith('GREP_TEXT_EDIT_END:')) {
+        window.dispatchEvent(new CustomEvent('grep-text-edit-active', { detail: { active: false } }));
+        return;
+      }
+
       if (event.message.startsWith('GREP_INSPECTOR:')) {
         try {
           const data = JSON.parse(event.message.replace('GREP_INSPECTOR:', ''));
           console.log('[BrowserPreview] Inspector data parsed:', data);
+
+          // Handle inline text replacement
+          if (data.type === 'text_replacement') {
+            const { originalText, replacementText, context } = data;
+
+            // Construct prompt for Claude
+            const prompt = `I need you to replace text in the UI for the page at ${url}.
+
+**Original Text**: "${originalText}"
+**Replacement Text**: "${replacementText}"
+
+**Context**:
+- Parent element: <${context.parentTag}>
+- CSS selector: ${context.parentSelector}
+${context.reactComponent ? `- React component: ${context.reactComponent}` : ''}
+- Surrounding text: ...${context.before} [TARGET] ${context.after}...
+
+Please:
+1. Find the source file that renders this UI element
+2. Locate the exact occurrence of "${originalText}" in the code
+3. Replace it with "${replacementText}"
+4. If there are multiple occurrences, use the context above to determine which one
+
+Use the Edit tool to make the change. The page will reload automatically once you're done.`;
+
+            // Send directly to Claude (no modal)
+            const sendMessage = useSessionStore.getState().sendMessage;
+            const setSessionEditingText = useUIStore.getState().setSessionEditingText;
+
+            setSessionEditingText(session.id, true);
+            sendMessage(session.id, prompt, []);
+
+            return;
+          }
 
           // Capture screenshot of element bounds
           let screenshotBase64 = '';
@@ -766,7 +825,30 @@ ${data.textContent ? `**Text Content:** "${data.textContent.slice(0, 100)}${data
           const existingTooltip = document.getElementById('grep-inspector-tooltip');
           if (existingTooltip) existingTooltip.remove();
 
-          // Create overlay with purple theme
+          // Remove any existing text highlights
+          const existingHighlights = document.querySelectorAll('.grep-text-highlight');
+          existingHighlights.forEach(h => {
+            const parent = h.parentNode;
+            if (parent) {
+              while (h.firstChild) parent.insertBefore(h.firstChild, h);
+              parent.removeChild(h);
+            }
+          });
+
+          // Add shimmer animation CSS
+          if (!document.getElementById('grep-shimmer-style')) {
+            const style = document.createElement('style');
+            style.id = 'grep-shimmer-style';
+            style.textContent = \`
+              @keyframes grep-shimmer {
+                0% { background-position: -200% 0; }
+                100% { background-position: 200% 0; }
+              }
+            \`;
+            document.head.appendChild(style);
+          }
+
+          // Create overlay with purple theme (for elements)
           const overlay = document.createElement('div');
           overlay.id = 'grep-inspector';
           overlay.style.cssText = 'position:fixed !important;pointer-events:none !important;background:rgba(93,95,239,0.15) !important;border:2px solid #5D5FEF !important;z-index:2147483647 !important;transition:all 0.05s ease !important;display:block !important;visibility:visible !important;box-sizing:border-box !important;';
@@ -779,6 +861,51 @@ ${data.textContent ? `**Text Content:** "${data.textContent.slice(0, 100)}${data
           document.body.appendChild(tooltip);
 
           document.body.style.cursor = 'crosshair';
+
+          // Track hovered text node
+          let hoveredTextNode = null;
+
+          // Get text node at a specific point
+          function getTextNodeAtPoint(x, y) {
+            const element = document.elementFromPoint(x, y);
+            if (!element) return null;
+
+            // Check if this element contains direct text nodes
+            for (const node of element.childNodes) {
+              if (node.nodeType === Node.TEXT_NODE && node.textContent && node.textContent.trim()) {
+                // Get the range for this text node
+                const range = document.createRange();
+                range.selectNodeContents(node);
+                const rects = range.getClientRects();
+
+                // Check if mouse is over this text node's bounds
+                for (const rect of rects) {
+                  if (x >= rect.left && x <= rect.right &&
+                      y >= rect.top && y <= rect.bottom) {
+                    return {
+                      node: node,
+                      text: node.textContent.trim(),
+                      element: element,
+                      rect: rect
+                    };
+                  }
+                }
+              }
+            }
+
+            return null;
+          }
+
+          function clearTextHighlight() {
+            const highlights = document.querySelectorAll('.grep-text-highlight');
+            highlights.forEach(h => {
+              const parent = h.parentNode;
+              if (parent) {
+                while (h.firstChild) parent.insertBefore(h.firstChild, h);
+                parent.removeChild(h);
+              }
+            });
+          }
 
           // Try to get React component name using DevTools hook or fiber
           function getReactComponentName(el) {
@@ -888,81 +1015,264 @@ ${data.textContent ? `**Text Content:** "${data.textContent.slice(0, 100)}${data
           function handleMove(e) {
             if (!e.target || e.target === document.body || e.target === document.documentElement) return;
 
-            const el = e.target;
-            const rect = el.getBoundingClientRect();
+            // First, check if we're over a text node
+            const textNode = getTextNodeAtPoint(e.clientX, e.clientY);
 
-            // Position overlay
-            overlay.style.display = 'block';
-            overlay.style.top = rect.top + 'px';
-            overlay.style.left = rect.left + 'px';
-            overlay.style.width = rect.width + 'px';
-            overlay.style.height = rect.height + 'px';
+            if (textNode) {
+              // Hovering over text node - show yellow highlight
+              if (!hoveredTextNode || hoveredTextNode.node !== textNode.node) {
+                clearTextHighlight();
+                hoveredTextNode = textNode;
 
-            // Get display name and position tooltip ABOVE the element
-            const displayName = getDisplayName(el);
-            tooltip.textContent = displayName;
-            tooltip.style.display = 'block';
+                // Create yellow highlight for text
+                const range = document.createRange();
+                range.selectNodeContents(textNode.node);
+                const highlight = document.createElement('span');
+                highlight.className = 'grep-text-highlight';
+                highlight.style.cssText = 'background: rgba(255, 255, 0, 0.4) !important; cursor: text !important; pointer-events: none !important;';
 
-            // Position tooltip above element, or below if not enough space
-            const tooltipHeight = 24;
-            const spaceAbove = rect.top;
+                try {
+                  range.surroundContents(highlight);
+                } catch (e) {
+                  // If surroundContents fails (complex DOM), just highlight the element
+                  console.warn('[GREP] Could not highlight text node:', e);
+                  hoveredTextNode = null;
+                }
+              }
 
-            if (spaceAbove >= tooltipHeight + 4) {
-              // Position above
-              tooltip.style.top = (rect.top - tooltipHeight - 4) + 'px';
+              // Hide element overlay when over text
+              overlay.style.display = 'none';
+
+              // Show tooltip with "Text" indicator
+              tooltip.textContent = '📝 Text';
+              tooltip.style.background = '#F59E0B !important'; // Yellow/orange for text
+              tooltip.style.display = 'block';
+
+              // Position tooltip
+              const rect = textNode.rect;
+              const tooltipHeight = 24;
+              const spaceAbove = rect.top;
+
+              if (spaceAbove >= tooltipHeight + 4) {
+                tooltip.style.top = (rect.top - tooltipHeight - 4) + 'px';
+              } else {
+                tooltip.style.top = (rect.bottom + 4) + 'px';
+              }
+
+              const tooltipWidth = tooltip.offsetWidth || 100;
+              let leftPos = rect.left;
+              if (leftPos + tooltipWidth > window.innerWidth - 10) {
+                leftPos = window.innerWidth - tooltipWidth - 10;
+              }
+              if (leftPos < 10) leftPos = 10;
+              tooltip.style.left = leftPos + 'px';
+
             } else {
-              // Position below
-              tooltip.style.top = (rect.bottom + 4) + 'px';
-            }
+              // Hovering over element (not text) - show purple overlay
+              clearTextHighlight();
+              hoveredTextNode = null;
 
-            // Align left edge with element, but keep on screen
-            const tooltipWidth = tooltip.offsetWidth || 100;
-            let leftPos = rect.left;
-            if (leftPos + tooltipWidth > window.innerWidth - 10) {
-              leftPos = window.innerWidth - tooltipWidth - 10;
+              const el = e.target;
+              const rect = el.getBoundingClientRect();
+
+              // Position overlay
+              overlay.style.display = 'block';
+              overlay.style.top = rect.top + 'px';
+              overlay.style.left = rect.left + 'px';
+              overlay.style.width = rect.width + 'px';
+              overlay.style.height = rect.height + 'px';
+
+              // Get display name and position tooltip ABOVE the element
+              const displayName = getDisplayName(el);
+              tooltip.textContent = displayName;
+              tooltip.style.background = '#5D5FEF !important'; // Purple for elements
+              tooltip.style.display = 'block';
+
+              // Position tooltip above element, or below if not enough space
+              const tooltipHeight = 24;
+              const spaceAbove = rect.top;
+
+              if (spaceAbove >= tooltipHeight + 4) {
+                // Position above
+                tooltip.style.top = (rect.top - tooltipHeight - 4) + 'px';
+              } else {
+                // Position below
+                tooltip.style.top = (rect.bottom + 4) + 'px';
+              }
+
+              // Align left edge with element, but keep on screen
+              const tooltipWidth = tooltip.offsetWidth || 100;
+              let leftPos = rect.left;
+              if (leftPos + tooltipWidth > window.innerWidth - 10) {
+                leftPos = window.innerWidth - tooltipWidth - 10;
+              }
+              if (leftPos < 10) leftPos = 10;
+              tooltip.style.left = leftPos + 'px';
             }
-            if (leftPos < 10) leftPos = 10;
-            tooltip.style.left = leftPos + 'px';
           }
 
           function handleClick(e) {
             e.preventDefault();
             e.stopPropagation();
 
-            const el = e.target;
-            const selector = getSelector(el);
-            const reactComponent = getReactComponentName(el);
+            // Check if we clicked on a text node
+            if (hoveredTextNode) {
+              console.log('[GREP] Text node clicked:', hoveredTextNode.text);
 
-            console.log('[GREP] Element clicked:', selector);
+              const element = hoveredTextNode.element;
+              const originalText = hoveredTextNode.text;
 
-            // Get bounding rect for screenshot capture
-            const rect = el.getBoundingClientRect();
-            const context = {
-              tagName: el.tagName.toLowerCase(),
-              id: el.id || '',
-              className: (typeof el.className === 'string' ? el.className : ''),
-              selector: selector,
-              reactComponent: reactComponent || '',
-              innerHTML: (el.innerHTML || '').slice(0, 500),
-              outerHTML: (el.outerHTML || '').slice(0, 1000),
-              textContent: (el.textContent || '').slice(0, 500),
-              attributes: Array.from(el.attributes || []).map(a => ({ name: a.name, value: a.value })),
-              // Include bounding rect for screenshot capture
-              boundingRect: {
-                x: Math.max(0, Math.floor(rect.x)),
-                y: Math.max(0, Math.floor(rect.y)),
-                width: Math.ceil(rect.width),
-                height: Math.ceil(rect.height),
-              },
-            };
+              // Get context for Claude
+              const siblings = Array.from(element.parentNode ? element.parentNode.childNodes : []);
+              const index = siblings.indexOf(element);
+              const prevText = (index > 0 && siblings[index - 1]?.textContent) ? siblings[index - 1].textContent.trim() : '';
+              const nextText = (index < siblings.length - 1 && siblings[index + 1]?.textContent) ? siblings[index + 1].textContent.trim() : '';
+              const reactComponent = getReactComponentName(element);
+              const rect = hoveredTextNode.rect;
 
-            // Send via console.log which will be caught by console-message event
-            console.log('GREP_INSPECTOR:' + JSON.stringify(context));
+              // Create inline editable overlay
+              const editor = document.createElement('div');
+              editor.id = 'grep-inline-editor';
+              editor.contentEditable = 'true';
+              editor.textContent = originalText;
+              editor.style.cssText = \`
+                position: fixed !important;
+                top: \${rect.top}px !important;
+                left: \${rect.left}px !important;
+                min-width: \${rect.width}px !important;
+                min-height: \${rect.height}px !important;
+                background: rgba(255, 255, 255, 0.98) !important;
+                color: #000 !important;
+                padding: 2px 6px !important;
+                border: 2px solid #5D5FEF !important;
+                border-radius: 4px !important;
+                font: inherit !important;
+                line-height: inherit !important;
+                z-index: 2147483647 !important;
+                outline: none !important;
+                box-shadow: 0 4px 12px rgba(93, 95, 239, 0.3) !important;
+                white-space: pre-wrap !important;
+                word-wrap: break-word !important;
+              \`;
+
+              document.body.appendChild(editor);
+
+              // Notify renderer to blur chat input
+              console.log('GREP_TEXT_EDIT_START:');
+
+              editor.focus();
+
+              // Select all text
+              const range = document.createRange();
+              range.selectNodeContents(editor);
+              const selection = window.getSelection();
+              selection.removeAllRanges();
+              selection.addRange(range);
+
+              const cleanup = () => {
+                // Notify renderer to re-enable chat input
+                console.log('GREP_TEXT_EDIT_END:');
+
+                editor.remove();
+                document.body.style.cursor = '';
+                overlay.remove();
+                tooltip.remove();
+                clearTextHighlight();
+                document.removeEventListener('mouseover', handleMove);
+                document.removeEventListener('click', handleClick, true);
+              };
+
+              // Enter to confirm, Escape to cancel
+              editor.addEventListener('keydown', (evt) => {
+                console.log('[GREP] Editor keydown:', evt.key);
+
+                if (evt.key === 'Enter' && !evt.shiftKey) {
+                  evt.preventDefault();
+                  evt.stopPropagation();
+                  evt.stopImmediatePropagation();
+
+                  console.log('[GREP] Enter pressed, submitting edit');
+                  const replacement = editor.textContent.trim();
+
+                  if (replacement && replacement !== originalText) {
+                    // Add shimmer to original element
+                    element.style.animation = 'grep-shimmer 1.5s infinite';
+                    element.style.backgroundImage = 'linear-gradient(90deg, transparent, rgba(93,95,239,0.3), transparent)';
+                    element.style.backgroundSize = '200% 100%';
+
+                    const data = {
+                      type: 'text_replacement',
+                      originalText: originalText,
+                      replacementText: replacement,
+                      context: {
+                        before: prevText,
+                        after: nextText,
+                        parentTag: element.tagName.toLowerCase(),
+                        parentSelector: getSelector(element),
+                        reactComponent: reactComponent || undefined
+                      }
+                    };
+                    console.log('GREP_INSPECTOR:' + JSON.stringify(data));
+                  }
+                  cleanup();
+                } else if (evt.key === 'Escape') {
+                  console.log('[GREP] Escape pressed, canceling edit');
+                  evt.preventDefault();
+                  evt.stopPropagation();
+                  evt.stopImmediatePropagation();
+                  cleanup();
+                }
+              });
+
+              // Click outside to cancel
+              setTimeout(() => {
+                const outsideClick = (evt) => {
+                  if (!editor.contains(evt.target)) {
+                    cleanup();
+                    document.removeEventListener('click', outsideClick, true);
+                  }
+                };
+                document.addEventListener('click', outsideClick, true);
+              }, 100);
+
+            } else {
+              // Element click (existing behavior)
+              const el = e.target;
+              const selector = getSelector(el);
+              const reactComponent = getReactComponentName(el);
+
+              console.log('[GREP] Element clicked:', selector);
+
+              // Get bounding rect for screenshot capture
+              const rect = el.getBoundingClientRect();
+              const context = {
+                tagName: el.tagName.toLowerCase(),
+                id: el.id || '',
+                className: (typeof el.className === 'string' ? el.className : ''),
+                selector: selector,
+                reactComponent: reactComponent || '',
+                innerHTML: (el.innerHTML || '').slice(0, 500),
+                outerHTML: (el.outerHTML || '').slice(0, 1000),
+                textContent: (el.textContent || '').slice(0, 500),
+                attributes: Array.from(el.attributes || []).map(a => ({ name: a.name, value: a.value })),
+                // Include bounding rect for screenshot capture
+                boundingRect: {
+                  x: Math.max(0, Math.floor(rect.x)),
+                  y: Math.max(0, Math.floor(rect.y)),
+                  width: Math.ceil(rect.width),
+                  height: Math.ceil(rect.height),
+                },
+              };
+
+              // Send via console.log which will be caught by console-message event
+              console.log('GREP_INSPECTOR:' + JSON.stringify(context));
+            }
 
             // Cleanup
             document.body.style.cursor = '';
             overlay.remove();
             tooltip.remove();
+            clearTextHighlight();
             document.removeEventListener('mouseover', handleMove);
             document.removeEventListener('click', handleClick, true);
 
@@ -1266,6 +1576,23 @@ ${data.textContent ? `**Text Content:** "${data.textContent.slice(0, 100)}${data
           </div>
         ))}
 
+        {/* Text editing loading overlay */}
+        {sessionEditingText[session.id] && (
+          <div className="absolute inset-0 bg-black/30 flex items-center justify-center z-40 pointer-events-none">
+            <div className="bg-claude-sidebar rounded-lg p-6 shadow-xl border border-claude-border">
+              <div className="flex items-center gap-3">
+                <div className="text-2xl animate-spin">⟳</div>
+                <div className="text-claude-text">
+                  <div className="font-medium">Editing file...</div>
+                  <div className="text-sm text-claude-text-secondary">
+                    Claude is updating the source code
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
       </div>
 
       {/* Automation mode footer indicator */}
@@ -1280,6 +1607,7 @@ ${data.textContent ? `**Text Content:** "${data.textContent.slice(0, 100)}${data
           </div>
         </div>
       )}
+
     </div>
   );
 }

@@ -130,78 +130,104 @@ export function registerExtensionHandlers(ipcMain: IpcMain): void {
     }
   });
 
-  // Install a skill using npx add-skill
+  // Install a skill using npx add-skill (supports SSH sessions via sessionId)
   ipcMain.handle(
     IPC_CHANNELS.EXTENSION_INSTALL_SKILL,
-    async (_event, source: string, options?: { global?: boolean; skills?: string[]; projectPath?: string }): Promise<SkillInstallResult> => {
-      return new Promise((resolve) => {
-        const args = ['add-skill', source];
-
-        // Add --yes flag for non-interactive mode
-        args.push('-y');
-
-        // Add global flag if specified
-        if (options?.global) {
-          args.push('-g');
-        }
-
-        // Add specific skills if provided
-        if (options?.skills && options.skills.length > 0) {
-          for (const skill of options.skills) {
-            args.push('--skill', skill);
+    async (_event, source: string, options?: { global?: boolean; skills?: string[]; projectPath?: string; sessionId?: string }): Promise<SkillInstallResult> => {
+      try {
+        // Check if this is an SSH session
+        if (options?.sessionId) {
+          const session = getSession(options.sessionId);
+          if (session?.sshConfig) {
+            console.log('[Extension IPC] Installing skill on remote SSH session:', options.sessionId);
+            const result = await sshService.installRemoteSkill(
+              options.sessionId,
+              session.sshConfig,
+              session.sshConfig.remoteWorkdir,
+              source,
+              { global: options.global, skills: options.skills }
+            );
+            return result;
           }
         }
 
-        // Target claude-code agent
-        args.push('-a', 'claude-code');
+        // Local installation
+        return new Promise((resolve) => {
+          const args = ['add-skill', source];
 
-        console.log('[Extension IPC] Running: npx', args.join(' '));
+          // Add --yes flag for non-interactive mode
+          args.push('-y');
 
-        const cwd = options?.projectPath || process.cwd();
-        let output = '';
-        let errorOutput = '';
+          // Add global flag if specified
+          if (options?.global) {
+            args.push('-g');
+          }
 
-        const child = spawn('npx', args, {
-          cwd,
-          shell: true,
-          env: { ...process.env, FORCE_COLOR: '0' }, // Disable colors for cleaner output
-        });
+          // Add specific skills if provided
+          if (options?.skills && options.skills.length > 0) {
+            for (const skill of options.skills) {
+              args.push('--skill', skill);
+            }
+          }
 
-        child.stdout?.on('data', (data: Buffer) => {
-          const text = data.toString();
-          output += text;
-          console.log('[Extension IPC] stdout:', text);
-        });
+          // Target claude-code agent
+          args.push('-a', 'claude-code');
 
-        child.stderr?.on('data', (data: Buffer) => {
-          const text = data.toString();
-          errorOutput += text;
-          console.log('[Extension IPC] stderr:', text);
-        });
+          console.log('[Extension IPC] Running: npx', args.join(' '));
 
-        child.on('close', (code) => {
-          if (code === 0) {
-            resolve({
-              success: true,
-              output: output || 'Skill installed successfully',
-            });
-          } else {
+          const cwd = options?.projectPath || process.cwd();
+          let output = '';
+          let errorOutput = '';
+
+          const child = spawn('npx', args, {
+            cwd,
+            shell: process.platform === 'darwin' ? '/bin/zsh' : true,
+            env: { ...process.env, FORCE_COLOR: '0' }, // Disable colors for cleaner output
+          });
+
+          child.stdout?.on('data', (data: Buffer) => {
+            const text = data.toString();
+            output += text;
+            console.log('[Extension IPC] stdout:', text);
+          });
+
+          child.stderr?.on('data', (data: Buffer) => {
+            const text = data.toString();
+            errorOutput += text;
+            console.log('[Extension IPC] stderr:', text);
+          });
+
+          child.on('close', (code) => {
+            if (code === 0) {
+              resolve({
+                success: true,
+                output: output || 'Skill installed successfully',
+              });
+            } else {
+              resolve({
+                success: false,
+                output,
+                error: errorOutput || `Process exited with code ${code}`,
+              });
+            }
+          });
+
+          child.on('error', (err) => {
             resolve({
               success: false,
-              output,
-              error: errorOutput || `Process exited with code ${code}`,
+              output: '',
+              error: err.message,
             });
-          }
-        });
-
-        child.on('error', (err) => {
-          resolve({
-            success: false,
-            output: '',
-            error: err.message,
           });
         });
-      });
+      } catch (error) {
+        console.error('[Extension IPC] Error installing skill:', error);
+        return {
+          success: false,
+          output: '',
+          error: (error as Error).message,
+        };
+      }
     }
   );
 
@@ -218,7 +244,7 @@ export function registerExtensionHandlers(ipcMain: IpcMain): void {
         let errorOutput = '';
 
         const child = spawn('npx', args, {
-          shell: true,
+          shell: process.platform === 'darwin' ? '/bin/zsh' : true,
           env: { ...process.env, FORCE_COLOR: '0' },
         });
 

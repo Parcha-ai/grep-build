@@ -184,6 +184,13 @@ export const IPC_CHANNELS = {
   SSH_DOWNLOAD_SESSION: 'ssh:download-session',
   SSH_DOWNLOAD_PROGRESS: 'ssh:download-progress',
   SSH_RECONNECT: 'ssh:reconnect',
+  SSH_BROWSE_REMOTE_FILES: 'ssh:browse-remote-files',
+
+  // Secure Keys channels (API key/token interception)
+  SECURE_KEYS_INTERCEPT: 'secure-keys:intercept',
+  SECURE_KEYS_GET: 'secure-keys:get',
+  SECURE_KEYS_LIST: 'secure-keys:list',
+  SECURE_KEYS_CLEAR_SESSION: 'secure-keys:clear-session',
 
   // Voice mode channels (ElevenLabs Conversational AI)
   VOICE_CONNECT: 'voice:connect',

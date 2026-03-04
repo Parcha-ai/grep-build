@@ -832,4 +832,29 @@ export function registerSSHHandlers(ipcMain: IpcMain): void {
       }
     }
   );
+
+  /**
+   * Browse remote filesystem (list directory contents)
+   */
+  ipcMain.handle(
+    IPC_CHANNELS.SSH_BROWSE_REMOTE_FILES,
+    async (_event, config: SSHConfig, remotePath: string) => {
+      console.log('[SSH IPC] Browsing remote directory:', remotePath);
+
+      try {
+        const entries = await sshService.listRemoteDirectory(config, remotePath);
+        return {
+          success: true,
+          entries,
+        };
+      } catch (error) {
+        console.error('[SSH IPC] Browse remote files failed:', error);
+        return {
+          success: false,
+          error: error instanceof Error ? error.message : 'Unknown error',
+          entries: [],
+        };
+      }
+    }
+  );
 }

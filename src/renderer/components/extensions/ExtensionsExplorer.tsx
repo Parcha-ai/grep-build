@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Terminal, Sparkles, Bot, ChevronDown, ChevronRight, Copy, User, FolderGit, Edit3, Plus, X, Loader2, Check, AlertCircle, FileText, Github, Server, Store, Wrench } from 'lucide-react';
-import type { Command, Skill, AgentDefinition, MCPServerInfo } from '../../../shared/types';
+import { Terminal, Sparkles, Bot, ChevronDown, ChevronRight, Copy, User, FolderGit, Edit3, Plus, X, Loader2, Check, AlertCircle, FileText, Github, Server, Store, Wrench, Power, PowerOff, Trash2, Package } from 'lucide-react';
+import type { Command, Skill, AgentDefinition, MCPServerInfo, InstalledPlugin } from '../../../shared/types';
 import UnifiedMarketplace from './UnifiedMarketplace';
 
 // Default template for new skills
@@ -30,7 +30,7 @@ interface ExtensionsExplorerProps {
   projectPath?: string;
 }
 
-type ExtensionType = 'commands' | 'skills' | 'agents' | 'mcpServers';
+type ExtensionType = 'commands' | 'skills' | 'agents' | 'mcpServers' | 'plugins';
 type TabType = 'installed' | 'marketplace';
 
 export default function ExtensionsExplorer({ sessionId, projectPath }: ExtensionsExplorerProps) {
@@ -42,10 +42,15 @@ export default function ExtensionsExplorer({ sessionId, projectPath }: Extension
   const [skills, setSkills] = useState<Skill[]>([]);
   const [agents, setAgents] = useState<AgentDefinition[]>([]);
   const [mcpServers, setMcpServers] = useState<MCPServerInfo[]>([]);
+  const [plugins, setPlugins] = useState<InstalledPlugin[]>([]);
   const [loading, setLoading] = useState(true);
   const [expandedType, setExpandedType] = useState<ExtensionType | null>('commands');
-  const [selectedItem, setSelectedItem] = useState<Command | Skill | AgentDefinition | MCPServerInfo | null>(null);
+  const [selectedItem, setSelectedItem] = useState<Command | Skill | AgentDefinition | MCPServerInfo | InstalledPlugin | null>(null);
   const [viewingContent, setViewingContent] = useState(false);
+
+  // Plugin action state
+  const [togglingPlugin, setTogglingPlugin] = useState<string | null>(null);
+  const [uninstallingPlugin, setUninstallingPlugin] = useState<string | null>(null);
 
   // Skill action menu state (shown when + is clicked)
   const [showSkillMenu, setShowSkillMenu] = useState(false);
@@ -53,11 +58,14 @@ export default function ExtensionsExplorer({ sessionId, projectPath }: Extension
 
   // Skill installation state
   const [showInstallDialog, setShowInstallDialog] = useState(false);
+  const [installMode, setInstallMode] = useState<'github' | 'file'>('github');
   const [installSource, setInstallSource] = useState('');
+  const [installFile, setInstallFile] = useState<File | null>(null);
   const [installGlobal, setInstallGlobal] = useState(false);
   const [installing, setInstalling] = useState(false);
   const [installResult, setInstallResult] = useState<{ success: boolean; message: string } | null>(null);
   const installInputRef = useRef<HTMLInputElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Create skill state
   const [showCreateDialog, setShowCreateDialog] = useState(false);
@@ -77,16 +85,18 @@ export default function ExtensionsExplorer({ sessionId, projectPath }: Extension
     setLoading(true);
     const scanOptions = { sessionId, projectPath };
     try {
-      const [cmds, skls, agts, servers] = await Promise.all([
+      const [cmds, skls, agts, servers, installedPlugins] = await Promise.all([
         window.electronAPI.extensions.scanCommands(scanOptions),
         window.electronAPI.extensions.scanSkills(scanOptions),
         window.electronAPI.extensions.scanAgents(scanOptions),
         window.electronAPI.mcp.getServers(sessionId, projectPath),
+        window.electronAPI.plugins.getInstalled(),
       ]);
       setCommands(cmds);
       setSkills(skls);
       setAgents(agts);
       setMcpServers(servers);
+      setPlugins(installedPlugins);
     } catch (err) {
       console.error('[Extensions Explorer] Error loading:', err);
     } finally {
@@ -104,13 +114,61 @@ export default function ExtensionsExplorer({ sessionId, projectPath }: Extension
     }
   };
 
+  // Handle plugin toggle (enable/disable)
+  const handlePluginToggle = async (plugin: InstalledPlugin) => {
+    const key = `${plugin.id}@${plugin.marketplace}`;
+    setTogglingPlugin(key);
+    try {
+      const result = plugin.enabled
+        ? await window.electronAPI.plugins.disable(plugin.id, plugin.marketplace)
+        : await window.electronAPI.plugins.enable(plugin.id, plugin.marketplace);
+
+      if (result.success) {
+        await loadExtensions(); // Refresh all data
+      } else {
+        console.error('[Extensions Explorer] Plugin toggle failed:', result.error);
+      }
+    } catch (err) {
+      console.error('[Extensions Explorer] Plugin toggle error:', err);
+    } finally {
+      setTogglingPlugin(null);
+    }
+  };
+
+  // Handle plugin uninstall
+  const handlePluginUninstall = async (plugin: InstalledPlugin) => {
+    if (!confirm(`Uninstall "${plugin.name}"? This will remove all its commands, skills, and agents.`)) {
+      return;
+    }
+
+    const key = `${plugin.id}@${plugin.marketplace}`;
+    setUninstallingPlugin(key);
+    try {
+      const result = await window.electronAPI.plugins.uninstall(plugin.id, plugin.marketplace);
+
+      if (result.success) {
+        await loadExtensions(); // Refresh all data
+        setSelectedItem(null); // Clear selection if this was selected
+        setViewingContent(false);
+      } else {
+        console.error('[Extensions Explorer] Plugin uninstall failed:', result.error);
+        alert(`Failed to uninstall: ${result.error}`);
+      }
+    } catch (err) {
+      console.error('[Extensions Explorer] Plugin uninstall error:', err);
+      alert(`Error uninstalling: ${err instanceof Error ? err.message : 'Unknown error'}`);
+    } finally {
+      setUninstallingPlugin(null);
+    }
+  };
+
   const toggleType = (type: ExtensionType) => {
     setExpandedType(expandedType === type ? null : type);
     setSelectedItem(null);
     setViewingContent(false);
   };
 
-  const handleItemClick = (item: Command | Skill | AgentDefinition | MCPServerInfo) => {
+  const handleItemClick = (item: Command | Skill | AgentDefinition | MCPServerInfo | InstalledPlugin) => {
     setSelectedItem(item);
     setViewingContent(true);
   };
@@ -159,29 +217,87 @@ export default function ExtensionsExplorer({ sessionId, projectPath }: Extension
 
   // Handle skill installation
   const handleInstallSkill = async () => {
-    if (!installSource.trim()) return;
+    if (installMode === 'github' && !installSource.trim()) return;
+    if (installMode === 'file' && !installFile) return;
 
     setInstalling(true);
     setInstallResult(null);
 
     try {
-      const result = await window.electronAPI.extensions.installSkill(installSource.trim(), {
-        global: installGlobal,
-        projectPath: projectPath,
-      });
+      if (installMode === 'github') {
+        // Install from GitHub URL
+        const result = await window.electronAPI.extensions.installSkill(installSource.trim(), {
+          global: installGlobal,
+          projectPath: projectPath,
+          sessionId: sessionId,
+        });
 
-      if (result.success) {
-        setInstallResult({ success: true, message: result.output || 'Skill installed successfully!' });
-        // Refresh skills list after successful installation
-        await refreshSkills();
-        // Reset form after a delay
-        setTimeout(() => {
-          setShowInstallDialog(false);
-          setInstallSource('');
-          setInstallResult(null);
-        }, 2000);
+        if (result.success) {
+          setInstallResult({ success: true, message: result.output || 'Skill installed successfully!' });
+          // Refresh skills list after successful installation
+          await refreshSkills();
+          // Reset form after a delay
+          setTimeout(() => {
+            setShowInstallDialog(false);
+            setInstallSource('');
+            setInstallResult(null);
+          }, 2000);
+        } else {
+          setInstallResult({ success: false, message: result.error || 'Installation failed' });
+        }
       } else {
-        setInstallResult({ success: false, message: result.error || 'Installation failed' });
+        // Upload from local file
+        if (!installFile) return;
+
+        // Extract skill name from filename (remove .md, .skill, or SKILL.md)
+        let skillName = installFile.name;
+
+        // If filename is SKILL.md or SKILL.skill, use parent directory name or prompt user
+        if (skillName.toLowerCase() === 'skill.md' || skillName.toLowerCase() === 'skill.skill') {
+          setInstallResult({ success: false, message: 'Please rename your file to the desired skill name (e.g., my-skill.md)' });
+          setInstalling(false);
+          return;
+        }
+
+        // Remove common extensions
+        skillName = skillName.replace(/\.(md|skill)$/i, '');
+
+        // Validate skill name (alphanumeric, hyphens, underscores only)
+        const validName = /^[a-zA-Z0-9_-]+$/.test(skillName);
+        if (!validName) {
+          setInstallResult({ success: false, message: 'Skill filename can only contain letters, numbers, hyphens, and underscores' });
+          setInstalling(false);
+          return;
+        }
+
+        // Read file content
+        const content = await installFile.text();
+
+        // Determine the base path
+        const basePath = installGlobal
+          ? `${await window.electronAPI.app.getPath('home')}/.claude/skills`
+          : `${projectPath}/.claude/skills`;
+
+        const skillDir = `${basePath}/${skillName}`;
+        // Claude Code only recognizes files named exactly "SKILL.md" (uppercase)
+        const skillFile = `${skillDir}/SKILL.md`;
+
+        // Write file (supports SSH via FS_WRITE_FILE handler with sessionId)
+        const result = await window.electronAPI.fs.writeFile(skillFile, content, sessionId);
+
+        if (result.success) {
+          setInstallResult({ success: true, message: `Skill "${skillName}" uploaded successfully!` });
+          // Refresh skills list
+          await refreshSkills();
+          // Reset and close after delay
+          setTimeout(() => {
+            setShowInstallDialog(false);
+            setInstallFile(null);
+            setInstallResult(null);
+          }, 2000);
+        } else {
+          setInstallResult({ success: false, message: result.error || 'Failed to upload skill' });
+        }
       }
     } catch (err) {
       setInstallResult({ success: false, message: err instanceof Error ? err.message : 'Unknown error' });
@@ -195,6 +311,8 @@ export default function ExtensionsExplorer({ sessionId, projectPath }: Extension
     if (!installing) {
       setShowInstallDialog(false);
       setInstallSource('');
+      setInstallFile(null);
+      setInstallMode('github');
       setInstallResult(null);
     }
   };
@@ -222,9 +340,8 @@ export default function ExtensionsExplorer({ sessionId, projectPath }: Extension
       const skillDir = `${basePath}/${newSkillName.trim()}`;
       const skillFile = `${skillDir}/SKILL.md`;
 
-      // Create directory and write file
-      // First, ensure the skills directory exists
-      const result = await window.electronAPI.fs.writeFile(skillFile, newSkillContent);
+      // Create directory and write file (supports SSH via sessionId)
+      const result = await window.electronAPI.fs.writeFile(skillFile, newSkillContent, sessionId);
 
       if (result.success) {
         setCreateResult({ success: true, message: `Skill "${newSkillName}" created successfully!` });
@@ -421,15 +538,152 @@ export default function ExtensionsExplorer({ sessionId, projectPath }: Extension
     ));
   };
 
+  const renderPluginList = () => {
+    if (plugins.length === 0) {
+      return (
+        <div className="px-3 py-2 text-xs text-claude-text-secondary">
+          No plugins installed. Browse the Marketplace tab to install plugins.
+        </div>
+      );
+    }
+
+    return plugins.map(plugin => {
+      const key = `${plugin.id}@${plugin.marketplace}`;
+      const isToggling = togglingPlugin === key;
+      const isUninstalling = uninstallingPlugin === key;
+
+      return (
+        <button
+          key={key}
+          onClick={() => handleItemClick(plugin)}
+          className={`w-full px-3 py-2 text-left hover:bg-claude-surface transition-colors ${
+            selectedItem === plugin ? 'bg-claude-surface' : ''
+          }`}
+        >
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-mono text-purple-400">{plugin.name}</span>
+            <span
+              className={`w-1.5 h-1.5 rounded-full ${
+                plugin.enabled ? 'bg-green-500' : 'bg-gray-500'
+              }`}
+              title={plugin.enabled ? 'Enabled' : 'Disabled'}
+            />
+            <span className="text-[10px] text-claude-text-secondary bg-claude-surface px-1">
+              {plugin.scope}
+            </span>
+          </div>
+          <p className="text-xs text-claude-text-secondary mt-1 truncate">
+            {plugin.marketplace}
+          </p>
+        </button>
+      );
+    });
+  };
+
   const renderItemDetails = () => {
     if (!selectedItem || !viewingContent) return null;
 
     // Check what type of item we have
-    const isMcpServer = 'tools' in selectedItem && 'status' in selectedItem;
-    const isAgent = 'systemPrompt' in selectedItem;
+    const isPlugin = 'marketplace' in selectedItem && 'enabled' in selectedItem;
+    const isMcpServer = !isPlugin && 'tools' in selectedItem && 'status' in selectedItem;
+    const isAgent = !isPlugin && !isMcpServer && 'systemPrompt' in selectedItem;
     // Commands have .md path, Skills have directory path (content in both now)
-    const isCommand = !isMcpServer && !isAgent && 'content' in selectedItem && (selectedItem as Command).path.endsWith('.md');
-    const isSkill = !isMcpServer && !isAgent && !isCommand;
+    const isCommand = !isPlugin && !isMcpServer && !isAgent && 'content' in selectedItem && (selectedItem as Command).path.endsWith('.md');
+    const isSkill = !isPlugin && !isMcpServer && !isAgent && !isCommand;
+
+    // Plugin details
+    if (isPlugin) {
+      const plugin = selectedItem as InstalledPlugin;
+      const key = `${plugin.id}@${plugin.marketplace}`;
+      const isToggling = togglingPlugin === key;
+      const isUninstalling = uninstallingPlugin === key;
+
+      return (
+        <div className="flex-1 overflow-y-auto border-l border-claude-border">
+          <div className="p-4">
+            {/* Header */}
+            <div className="flex items-start justify-between mb-4">
+              <div className="flex items-center gap-2">
+                <Package size={16} className="text-purple-400" />
+                <div>
+                  <h3 className="text-sm font-mono text-claude-text">{plugin.name}</h3>
+                  <div className="flex items-center gap-2 mt-1">
+                    <span
+                      className={`text-xs px-1.5 py-0.5 ${
+                        plugin.enabled
+                          ? 'bg-green-500/20 text-green-400'
+                          : 'bg-gray-500/20 text-gray-400'
+                      }`}
+                    >
+                      {plugin.enabled ? 'enabled' : 'disabled'}
+                    </span>
+                    <span className="text-xs text-claude-text-secondary">{plugin.scope}</span>
+                    <span className="text-xs text-claude-text-secondary">v{plugin.version}</span>
+                  </div>
+                </div>
+              </div>
+              <div className="flex items-center gap-1">
+                {/* Enable/Disable Toggle */}
+                <button
+                  onClick={() => handlePluginToggle(plugin)}
+                  disabled={isToggling || isUninstalling}
+                  className={`flex items-center gap-1.5 px-2 py-1.5 text-xs font-mono transition-colors disabled:opacity-50 ${
+                    plugin.enabled
+                      ? 'bg-gray-500/20 text-gray-400 hover:bg-gray-500/30'
+                      : 'bg-green-500/20 text-green-400 hover:bg-green-500/30'
+                  }`}
+                  title={plugin.enabled ? 'Disable plugin' : 'Enable plugin'}
+                >
+                  {isToggling ? (
+                    <Loader2 size={12} className="animate-spin" />
+                  ) : plugin.enabled ? (
+                    <PowerOff size={12} />
+                  ) : (
+                    <Power size={12} />
+                  )}
+                  {plugin.enabled ? 'Disable' : 'Enable'}
+                </button>
+
+                {/* Uninstall Button */}
+                <button
+                  onClick={() => handlePluginUninstall(plugin)}
+                  disabled={isToggling || isUninstalling}
+                  className="flex items-center gap-1.5 px-2 py-1.5 text-xs font-mono bg-red-500/20 text-red-400 hover:bg-red-500/30 transition-colors disabled:opacity-50"
+                  title="Uninstall plugin"
+                >
+                  {isUninstalling ? (
+                    <Loader2 size={12} className="animate-spin" />
+                  ) : (
+                    <Trash2 size={12} />
+                  )}
+                  Uninstall
+                </button>
+              </div>
+            </div>
+
+            {/* Plugin ID */}
+            <div className="mb-4">
+              <h4 className="text-xs font-mono text-claude-text-secondary uppercase mb-2">Plugin ID</h4>
+              <p className="text-sm font-mono text-claude-text">{plugin.id}</p>
+            </div>
+
+            {/* Marketplace */}
+            <div className="mb-4">
+              <h4 className="text-xs font-mono text-claude-text-secondary uppercase mb-2">Marketplace</h4>
+              <p className="text-sm text-claude-text">{plugin.marketplace}</p>
+            </div>
+
+            {/* Info */}
+            <div className="p-3 bg-purple-500/10 border border-purple-500/30">
+              <p className="text-xs text-purple-400">
+                This plugin provides commands, skills, and agents that appear in their respective sections.
+                {plugin.enabled ? ' Currently enabled and available for use.' : ' Currently disabled - enable to use its features.'}
+              </p>
+            </div>
+          </div>
+        </div>
+      );
+    }
 
     // MCP Server details
     if (isMcpServer) {
@@ -673,6 +927,29 @@ export default function ExtensionsExplorer({ sessionId, projectPath }: Extension
               {expandedType === 'mcpServers' && <div>{renderMcpServerList()}</div>}
             </div>
 
+            {/* Plugins Section */}
+            <div className="border-b border-claude-border">
+              <div className="flex items-center relative">
+                <button
+                  onClick={() => toggleType('plugins')}
+                  className="flex-1 px-3 py-2 flex items-center gap-2 hover:bg-claude-surface transition-colors"
+                >
+                  {expandedType === 'plugins' ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                  <Package size={14} className="text-purple-400" />
+                  <span className="text-sm font-mono text-claude-text">Plugins</span>
+                  <span className="text-xs text-claude-text-secondary">({plugins.length})</span>
+                </button>
+                <button
+                  onClick={() => setActiveTab('marketplace')}
+                  className="px-2 py-2 hover:bg-claude-surface text-claude-text-secondary hover:text-purple-400 transition-colors"
+                  title="Browse plugin marketplace"
+                >
+                  <Plus size={14} />
+                </button>
+              </div>
+              {expandedType === 'plugins' && <div>{renderPluginList()}</div>}
+            </div>
+
             {/* Commands Section */}
             <div className="border-b border-claude-border">
               <div className="flex items-center relative">
@@ -809,8 +1086,14 @@ export default function ExtensionsExplorer({ sessionId, projectPath }: Extension
             {/* Header */}
             <div className="flex items-center justify-between px-4 py-3 border-b border-claude-border">
               <div className="flex items-center gap-2">
-                <Github size={16} className="text-claude-text-secondary" />
-                <span className="text-sm font-mono text-claude-text">Install from GitHub</span>
+                {installMode === 'github' ? (
+                  <Github size={16} className="text-claude-text-secondary" />
+                ) : (
+                  <FileText size={16} className="text-claude-text-secondary" />
+                )}
+                <span className="text-sm font-mono text-claude-text">
+                  {installMode === 'github' ? 'Install from GitHub' : 'Upload Skill File'}
+                </span>
               </div>
               <button
                 onClick={handleCloseInstallDialog}
@@ -823,30 +1106,108 @@ export default function ExtensionsExplorer({ sessionId, projectPath }: Extension
 
             {/* Content */}
             <div className="p-4 space-y-4">
-              <div>
-                <label className="block text-xs font-mono text-claude-text-secondary uppercase mb-2">
-                  GitHub Source
-                </label>
-                <input
-                  ref={installInputRef}
-                  type="text"
-                  value={installSource}
-                  onChange={(e) => setInstallSource(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' && !installing) {
-                      handleInstallSkill();
-                    } else if (e.key === 'Escape') {
-                      handleCloseInstallDialog();
-                    }
-                  }}
-                  placeholder="e.g., remotion-dev/skills"
-                  className="w-full px-3 py-2 bg-claude-surface border border-claude-border text-sm font-mono text-claude-text placeholder:text-claude-text-secondary focus:outline-none focus:border-purple-500"
+              {/* Mode Toggle */}
+              <div className="flex gap-2">
+                <button
+                  onClick={() => setInstallMode('github')}
                   disabled={installing}
-                />
-                <p className="text-xs text-claude-text-secondary mt-1">
-                  Enter a GitHub repo (user/repo) or full URL
-                </p>
+                  className={`flex-1 px-3 py-2 text-xs font-mono border transition-colors ${
+                    installMode === 'github'
+                      ? 'bg-purple-500/20 border-purple-500 text-purple-400'
+                      : 'bg-claude-surface border-claude-border text-claude-text-secondary hover:text-claude-text'
+                  } disabled:opacity-50`}
+                >
+                  <Github size={14} className="inline mr-1.5" />
+                  GitHub
+                </button>
+                <button
+                  onClick={() => setInstallMode('file')}
+                  disabled={installing}
+                  className={`flex-1 px-3 py-2 text-xs font-mono border transition-colors ${
+                    installMode === 'file'
+                      ? 'bg-purple-500/20 border-purple-500 text-purple-400'
+                      : 'bg-claude-surface border-claude-border text-claude-text-secondary hover:text-claude-text'
+                  } disabled:opacity-50`}
+                >
+                  <FileText size={14} className="inline mr-1.5" />
+                  Local File
+                </button>
               </div>
+
+              {/* GitHub Mode */}
+              {installMode === 'github' && (
+                <div>
+                  <label className="block text-xs font-mono text-claude-text-secondary uppercase mb-2">
+                    GitHub Source
+                  </label>
+                  <input
+                    ref={installInputRef}
+                    type="text"
+                    value={installSource}
+                    onChange={(e) => setInstallSource(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && !installing) {
+                        handleInstallSkill();
+                      } else if (e.key === 'Escape') {
+                        handleCloseInstallDialog();
+                      }
+                    }}
+                    placeholder="e.g., remotion-dev/skills"
+                    className="w-full px-3 py-2 bg-claude-surface border border-claude-border text-sm font-mono text-claude-text placeholder:text-claude-text-secondary focus:outline-none focus:border-purple-500"
+                    disabled={installing}
+                  />
+                  <p className="text-xs text-claude-text-secondary mt-1">
+                    Enter a GitHub repo (user/repo) or full URL
+                  </p>
+                </div>
+              )}
+
+              {/* File Upload Mode */}
+              {installMode === 'file' && (
+                <div>
+                  <label className="block text-xs font-mono text-claude-text-secondary uppercase mb-2">
+                    Skill File (.md or .skill)
+                  </label>
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept=".md,.skill"
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      if (file) {
+                        setInstallFile(file);
+                      }
+                    }}
+                    disabled={installing}
+                    className="hidden"
+                  />
+                  <div className="space-y-2">
+                    <button
+                      onClick={() => fileInputRef.current?.click()}
+                      disabled={installing}
+                      className="w-full px-3 py-2 bg-claude-surface border border-claude-border text-sm font-mono text-claude-text hover:border-purple-500 transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
+                    >
+                      <FileText size={14} />
+                      {installFile ? installFile.name : 'Choose file...'}
+                    </button>
+                    {installFile && (
+                      <div className="flex items-center justify-between px-3 py-2 bg-purple-500/10 border border-purple-500/30">
+                        <span className="text-xs text-purple-400 font-mono">{installFile.name}</span>
+                        <button
+                          onClick={() => setInstallFile(null)}
+                          disabled={installing}
+                          className="text-purple-400 hover:text-purple-300 transition-colors"
+                        >
+                          <X size={12} />
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                  <p className="text-xs text-claude-text-secondary mt-1">
+                    Select a skill file. The filename becomes the skill name (e.g., my-skill.md → my-skill)
+                  </p>
+                </div>
+              )}
 
               <div className="flex items-center gap-2">
                 <input
@@ -888,18 +1249,18 @@ export default function ExtensionsExplorer({ sessionId, projectPath }: Extension
               </button>
               <button
                 onClick={handleInstallSkill}
-                disabled={installing || !installSource.trim()}
+                disabled={installing || (installMode === 'github' ? !installSource.trim() : !installFile)}
                 className="px-3 py-1.5 text-xs font-mono bg-purple-500 text-white hover:bg-purple-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
               >
                 {installing ? (
                   <>
                     <Loader2 size={12} className="animate-spin" />
-                    Installing...
+                    {installMode === 'github' ? 'Installing...' : 'Uploading...'}
                   </>
                 ) : (
                   <>
                     <Plus size={12} />
-                    Install
+                    {installMode === 'github' ? 'Install' : 'Upload'}
                   </>
                 )}
               </button>

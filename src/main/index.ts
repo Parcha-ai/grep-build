@@ -48,6 +48,7 @@ import { registerExtensionHandlers } from './ipc/extension.ipc';
 import { registerBrowserHandlers } from './ipc/browser.ipc';
 import { registerSSHHandlers } from './ipc/ssh.ipc';
 import { registerMemoryHandlers } from './ipc/memory.ipc';
+import { registerSecureKeysIPC } from './ipc/secure-keys.ipc';
 import { registerQmdHandlers } from './ipc/qmd.ipc';
 import { registerMcpHandlers } from './ipc/mcp.ipc';
 import { registerPluginHandlers } from './ipc/plugin.ipc';
@@ -611,6 +612,7 @@ function registerIPCHandlers(): void {
   registerBrowserHandlers(ipcMain);
   registerSSHHandlers(ipcMain);
   registerMemoryHandlers(ipcMain);
+  registerSecureKeysIPC();
   registerQmdHandlers(ipcMain, () => mainWindow);
   registerMcpHandlers(ipcMain);
   registerPluginHandlers(ipcMain);

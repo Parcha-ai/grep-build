@@ -215,8 +215,8 @@ export default function PlanPanel() {
                 onClick={handleRejectWithFeedback}
                 className="flex-1 flex items-center justify-center gap-2 px-4 py-2 bg-claude-surface hover:bg-claude-bg border border-claude-border text-claude-text font-medium text-sm transition-colors"
               >
-                <XCircle size={16} />
-                Provide Feedback
+                <RefreshCw size={16} />
+                Request Updates
               </button>
             </div>
           ) : (
@@ -224,17 +224,17 @@ export default function PlanPanel() {
               <textarea
                 value={feedback}
                 onChange={(e) => setFeedback(e.target.value)}
-                placeholder="Provide feedback on why you're rejecting this plan and what needs to change..."
+                placeholder="Describe what changes you'd like to see in the plan..."
                 className="w-full h-24 px-3 py-2 text-sm bg-claude-bg border border-claude-border text-claude-text placeholder-claude-text-secondary resize-none focus:outline-none focus:border-claude-accent font-mono"
                 autoFocus
               />
               <div className="flex gap-2">
                 <button
                   onClick={handleReject}
-                  className="flex-1 flex items-center justify-center gap-2 px-4 py-2 bg-red-600 hover:bg-red-500 text-white font-medium text-sm transition-colors"
+                  className="flex-1 flex items-center justify-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white font-medium text-sm transition-colors"
                 >
-                  <XCircle size={16} />
-                  Reject Plan
+                  <RefreshCw size={16} />
+                  Update Plan
                 </button>
                 <button
                   onClick={() => setShowFeedback(false)}

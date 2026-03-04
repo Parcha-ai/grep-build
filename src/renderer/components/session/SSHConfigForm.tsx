@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { Loader2, CheckCircle, XCircle, Server, Key, Folder, AlertTriangle, Terminal, Settings, Wifi, Wrench, Upload } from 'lucide-react';
+import { Loader2, CheckCircle, XCircle, Server, Key, Folder, AlertTriangle, Terminal, Settings, Wifi, Wrench, Upload, FolderSearch } from 'lucide-react';
 import type { SSHConfig, SavedSSHConfig, Session } from '../../../shared/types';
+import RemoteFileBrowser from './RemoteFileBrowser';
 
 interface SSHConfigFormProps {
   onBack: () => void;
@@ -41,6 +42,9 @@ export default function SSHConfigForm({ onBack, onConnect, teleportSource, onTel
   } | null>(null);
   const [isCreating, setIsCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
+
+  // Remote file browser
+  const [showFileBrowser, setShowFileBrowser] = useState(false);
 
   // Load saved config on mount
   useEffect(() => {
@@ -374,16 +378,32 @@ export default function SSHConfigForm({ onBack, onConnect, teleportSource, onTel
               <label className="block text-[10px] font-bold mb-1 text-claude-text-secondary" style={{ letterSpacing: '0.1em' }}>
                 SETUP SCRIPT <span className="font-normal opacity-60">(optional)</span>
               </label>
-              <div className="relative">
-                <Terminal size={14} className="absolute left-3 top-2.5 text-claude-text-secondary" />
-                <textarea
-                  value={worktreeScript}
-                  onChange={(e) => setWorktreeScript(e.target.value)}
-                  placeholder="./setup-worktree.sh my-branch"
-                  rows={2}
-                  className="w-full pl-9 pr-3 py-1.5 text-sm font-mono focus:outline-none focus:border-claude-accent bg-claude-bg border border-claude-border text-claude-text resize-none"
+              <div className="flex gap-2">
+                <div className="relative flex-1">
+                  <Terminal size={14} className="absolute left-3 top-2.5 text-claude-text-secondary" />
+                  <textarea
+                    value={worktreeScript}
+                    onChange={(e) => setWorktreeScript(e.target.value)}
+                    placeholder="./setup-worktree.sh my-branch"
+                    rows={2}
+                    className="w-full pl-9 pr-3 py-1.5 text-sm font-mono focus:outline-none focus:border-claude-accent bg-claude-bg border border-claude-border text-claude-text resize-none"
+                    style={{ borderRadius: 0 }}
+                  />
+                </div>
+                <button
+                  onClick={() => {
+                    // Only show browser if connection is tested successfully
+                    if (testResult?.success) {
+                      setShowFileBrowser(true);
+                    }
+                  }}
+                  disabled={!testResult?.success}
+                  className="px-3 py-1.5 bg-claude-surface border border-claude-border hover:bg-claude-surface-hover disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                  title={testResult?.success ? "Browse remote files" : "Test connection first"}
                   style={{ borderRadius: 0 }}
-                />
+                >
+                  <FolderSearch size={14} className="text-claude-text-secondary" />
+                </button>
               </div>
               <p className="text-[9px] text-claude-text-secondary mt-1">Runs before Claude starts (e.g., clone repo, create worktree)</p>
             </div>
@@ -473,6 +493,27 @@ export default function SSHConfigForm({ onBack, onConnect, teleportSource, onTel
           </button>
         </div>
       </div>
+
+      {/* Remote File Browser Dialog */}
+      {showFileBrowser && (
+        <RemoteFileBrowser
+          sshConfig={{
+            host,
+            port: parseInt(port) || 22,
+            username,
+            privateKeyPath,
+            passphrase,
+            remoteWorkdir: remoteWorkdir || '~', // Required field, default to home
+          }}
+          initialPath={remoteWorkdir || '~'}
+          onSelect={(path) => {
+            setWorktreeScript(path);
+            setShowFileBrowser(false);
+          }}
+          onClose={() => setShowFileBrowser(false)}
+          fileFilter={(name) => name.endsWith('.sh')} // Only show .sh files
+        />
+      )}
     </div>
   );
 }

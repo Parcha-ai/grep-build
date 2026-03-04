@@ -461,8 +461,8 @@ const electronAPI = {
     }>> => ipcRenderer.invoke(IPC_CHANNELS.FS_LIST_FILES, sessionId, query),
     readFile: (filePath: string, sessionId?: string): Promise<{ success: boolean; content?: string; error?: string }> =>
       ipcRenderer.invoke(IPC_CHANNELS.FS_READ_FILE, filePath, sessionId),
-    writeFile: (filePath: string, content: string): Promise<{ success: boolean; error?: string }> =>
-      ipcRenderer.invoke(IPC_CHANNELS.FS_WRITE_FILE, filePath, content),
+    writeFile: (filePath: string, content: string, sessionId?: string): Promise<{ success: boolean; error?: string }> =>
+      ipcRenderer.invoke(IPC_CHANNELS.FS_WRITE_FILE, filePath, content, sessionId),
     searchFiles: (
       sessionId: string,
       searchTerm: string,
@@ -737,6 +737,11 @@ const electronAPI = {
       success: boolean;
       error?: string;
     }> => ipcRenderer.invoke(IPC_CHANNELS.SSH_RECONNECT, sessionId),
+    browseRemoteFiles: (config: SSHConfig, remotePath: string): Promise<{
+      success: boolean;
+      entries: Array<{ name: string; type: 'file' | 'directory'; permissions: string }>;
+      error?: string;
+    }> => ipcRenderer.invoke(IPC_CHANNELS.SSH_BROWSE_REMOTE_FILES, config, remotePath),
   },
 
   // Memory (agent memory system)
@@ -783,6 +788,27 @@ const electronAPI = {
 
     sync: (projectPath: string): Promise<void> =>
       ipcRenderer.invoke(IPC_CHANNELS.MEMORY_SYNC, projectPath),
+  },
+
+  // Secure Keys (API key/token interception and secure storage)
+  secureKeys: {
+    interceptAndReplace: (sessionId: string, text: string): Promise<{
+      modifiedText: string;
+      keysDetected: Array<{ id: string; type: string; description: string }>;
+    }> => ipcRenderer.invoke(IPC_CHANNELS.SECURE_KEYS_INTERCEPT, sessionId, text),
+
+    getKey: (keyId: string): Promise<{
+      success: boolean;
+      value: string | null;
+    }> => ipcRenderer.invoke(IPC_CHANNELS.SECURE_KEYS_GET, keyId),
+
+    listKeys: (sessionId: string): Promise<{
+      keys: Array<{ id: string; type: string; description: string }>;
+    }> => ipcRenderer.invoke(IPC_CHANNELS.SECURE_KEYS_LIST, sessionId),
+
+    clearSession: (sessionId: string): Promise<{
+      success: boolean;
+    }> => ipcRenderer.invoke(IPC_CHANNELS.SECURE_KEYS_CLEAR_SESSION, sessionId),
   },
 
   // QMD (semantic codebase search)

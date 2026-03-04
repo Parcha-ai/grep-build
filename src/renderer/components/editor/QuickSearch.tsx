@@ -104,9 +104,15 @@ export default function QuickSearch() {
     };
 
     const thinkingModeLabels: Record<ThinkingMode, string> = {
-      'off': 'Off',
-      'thinking': 'Thinking',
-      'ultrathink': 'Ultrathink',
+      // Legacy values (for backward compatibility)
+      'off': 'Low',
+      'thinking': 'Medium',
+      'ultrathink': 'High',
+      // New effort levels
+      'low': 'Low',
+      'medium': 'Medium',
+      'high': 'High',
+      'max': 'Max',
     };
 
     return [
@@ -204,42 +210,51 @@ export default function QuickSearch() {
         action: () => activeSessionId && setPermissionMode(activeSessionId, 'plan'),
       },
 
-      // Thinking mode commands
+      // Effort level commands (formerly thinking mode)
       {
-        id: 'cycle-thinking-mode',
-        label: 'Cycle Thinking Mode',
-        description: `Current: ${thinkingModeLabels[currentThinkingMode]}`,
+        id: 'cycle-effort-level',
+        label: 'Cycle Effort Level',
+        description: `Current: ${thinkingModeLabels[currentThinkingMode] || 'High'}`,
         icon: <Brain size={16} />,
         category: 'agent',
         shortcut: '⌘⇧T',
         action: () => activeSessionId && cycleThinkingMode(activeSessionId),
       },
       {
-        id: 'set-thinking-off',
-        label: 'Set Thinking: Off',
-        description: 'Disable extended thinking',
+        id: 'set-effort-low',
+        label: 'Set Effort: Low',
+        description: 'Fast & efficient - minimal thinking',
         icon: <Brain size={16} className="text-gray-400" />,
         category: 'agent',
-        shortcut: '⌘⇧0',
-        action: () => activeSessionId && setThinkingMode(activeSessionId, 'off'),
+        shortcut: '⌘⇧1',
+        action: () => activeSessionId && setThinkingMode(activeSessionId, 'low'),
       },
       {
-        id: 'set-thinking-normal',
-        label: 'Set Thinking: Normal',
-        description: 'Enable thinking (10k tokens)',
+        id: 'set-effort-medium',
+        label: 'Set Effort: Medium',
+        description: 'Balanced - moderate thinking (10k tokens)',
         icon: <Brain size={16} className="text-blue-400" />,
         category: 'agent',
-        shortcut: '⌘⇧1',
-        action: () => activeSessionId && setThinkingMode(activeSessionId, 'thinking'),
+        shortcut: '⌘⇧2',
+        action: () => activeSessionId && setThinkingMode(activeSessionId, 'medium'),
       },
       {
-        id: 'set-thinking-ultrathink',
-        label: 'Set Thinking: Ultrathink',
-        description: 'Enable ultrathink mode (100k tokens)',
-        icon: <Zap size={16} className="text-purple-400" />,
+        id: 'set-effort-high',
+        label: 'Set Effort: High',
+        description: 'Full capability - deep thinking (default)',
+        icon: <Brain size={16} className="text-purple-400" />,
         category: 'agent',
-        shortcut: '⌘⇧2',
-        action: () => activeSessionId && setThinkingMode(activeSessionId, 'ultrathink'),
+        shortcut: '⌘⇧3',
+        action: () => activeSessionId && setThinkingMode(activeSessionId, 'high'),
+      },
+      {
+        id: 'set-effort-max',
+        label: 'Set Effort: Max',
+        description: 'Maximum capability (Opus 4.6 only)',
+        icon: <Zap size={16} className="text-pink-400" />,
+        category: 'agent',
+        shortcut: '⌘⇧4',
+        action: () => activeSessionId && setThinkingMode(activeSessionId, 'max'),
       },
 
       // Git commands (placeholders for now)
@@ -322,16 +337,20 @@ export default function QuickSearch() {
       console.log('[QuickSearch] Loading files for session:', activeSessionId);
       window.electronAPI.fs.listFiles(activeSessionId)
         .then((files) => {
-          console.log('[QuickSearch] Loaded', files.length, 'files');
+          console.log('[QuickSearch] Loaded', files.length, 'files from session', activeSessionId);
+          console.log('[QuickSearch] Sample files:', files.slice(0, 5).map(f => f.relativePath));
           setAllFiles(files);
           setIsLoading(false);
         })
         .catch((error) => {
-          console.error('[QuickSearch] Failed to load files:', error);
+          console.error('[QuickSearch] Failed to load files for session', activeSessionId, ':', error);
+          console.error('[QuickSearch] Error details:', error.message, error.stack);
+          setAllFiles([]); // Ensure we clear stale data
           setIsLoading(false);
         });
     } else if (isQuickSearchOpen && !activeSessionId) {
-      console.log('[QuickSearch] No active session - file search will be empty');
+      console.warn('[QuickSearch] ⚠️  No active session - file search will be empty. Please create or select a session.');
+      setAllFiles([]);
     }
   }, [isQuickSearchOpen, activeSessionId]);
 

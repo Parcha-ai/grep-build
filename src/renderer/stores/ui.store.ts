@@ -51,6 +51,8 @@ interface UIState {
   sessionSelectedElement: Record<string, unknown | null>;
   // Per-session plan content (markdown)
   sessionPlanContent: Record<string, string>;
+  // Per-session text editing state (used for loading animation during text replacement)
+  sessionEditingText: Record<string, boolean>;
 
   toggleSidebar: () => void;
   setSidebarWidth: (width: number) => void;
@@ -83,6 +85,7 @@ interface UIState {
   setSessionInspectorActive: (sessionId: string, active: boolean) => void;
   setSessionSelectedElement: (sessionId: string, element: unknown | null) => void;
   cleanupSessionBrowser: (sessionId: string) => void;
+  setSessionEditingText: (sessionId: string, isEditing: boolean) => void;
 }
 
 export const useUIStore = create<UIState>((set, get) => ({
@@ -107,6 +110,7 @@ export const useUIStore = create<UIState>((set, get) => ({
   sessionBrowsersEnabled: {},
   sessionInspectorActive: {},
   sessionSelectedElement: {},
+  sessionEditingText: {},
   sessionPlanContent: (() => {
     try {
       const stored = localStorage.getItem('grep-plan-content');
@@ -279,13 +283,20 @@ export const useUIStore = create<UIState>((set, get) => ({
     const newEnabled = { ...state.sessionBrowsersEnabled };
     const newInspectorActive = { ...state.sessionInspectorActive };
     const newSelectedElement = { ...state.sessionSelectedElement };
+    const newEditingText = { ...state.sessionEditingText };
     delete newEnabled[sessionId];
     delete newInspectorActive[sessionId];
     delete newSelectedElement[sessionId];
+    delete newEditingText[sessionId];
     return {
       sessionBrowsersEnabled: newEnabled,
       sessionInspectorActive: newInspectorActive,
       sessionSelectedElement: newSelectedElement,
+      sessionEditingText: newEditingText,
     };
   }),
+
+  setSessionEditingText: (sessionId: string, isEditing: boolean) => set((state) => ({
+    sessionEditingText: { ...state.sessionEditingText, [sessionId]: isEditing },
+  })),
 }));

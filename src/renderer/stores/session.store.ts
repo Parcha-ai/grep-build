@@ -13,8 +13,24 @@ interface SystemInfo {
 // Permission modes from Claude Agent SDK
 export type PermissionMode = 'default' | 'acceptEdits' | 'bypassPermissions' | 'plan' | 'dontAsk';
 
-// Thinking modes: off (0), thinking (10k tokens), ultrathink (100k tokens)
-export type ThinkingMode = 'off' | 'thinking' | 'ultrathink';
+// Effort levels: maps to Claude API's effort parameter
+// low = fast/efficient, medium = balanced, high = full capability (default), max = maximum (Opus only)
+export type EffortLevel = 'low' | 'medium' | 'high' | 'max';
+
+// Legacy: Keep ThinkingMode as alias for backward compatibility during migration
+export type ThinkingMode = EffortLevel | 'off' | 'thinking' | 'ultrathink';
+
+// Migration helper: convert old thinking modes to new effort levels
+export const migrateThinkingMode = (mode: string | undefined): EffortLevel => {
+  switch (mode) {
+    case 'off': return 'low';
+    case 'thinking': return 'medium';
+    case 'ultrathink': return 'high';
+    // New values pass through:
+    case 'low': case 'medium': case 'high': case 'max': return mode as EffortLevel;
+    default: return 'high'; // Default to high (full capability)
+  }
+};
 
 // Background task for backgrounded Bash commands
 export interface BackgroundTask {
@@ -74,6 +90,8 @@ interface SessionState {
     timestamp: number;
   }>>;
   backgroundTasks: Record<string, BackgroundTask[]>;
+  // Secure keys tracking - API keys/tokens detected and secured
+  securedKeys: Record<string, Array<{ id: string; type: string; description: string }>>;
   // Agent teams tracking — maps agentId to assigned colour index per session
   agentColorMap: Record<string, Record<string, number>>; // sessionId -> { agentId -> colorIndex }
 
@@ -182,6 +200,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   compactionStatus: {},
   messageQueue: {},
   backgroundTasks: {},
+  securedKeys: {},
   agentColorMap: {},
 
   // Fork tracking initialization
@@ -368,6 +387,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     // Collect message IDs before purging (for audio TTS cleanup)
     const messageIds = (get().messages[sessionId] || []).map(m => m.id);
 
+    // Clear secure keys for this session from memory
+    await window.electronAPI.secureKeys.clearSession(sessionId);
+
     await window.electronAPI.sessions.delete(sessionId);
     set((state) => {
       const clean = <T,>(rec: Record<string, T>): Record<string, T> => {
@@ -396,6 +418,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         compactionStatus: clean(state.compactionStatus),
         messageQueue: clean(state.messageQueue),
         backgroundTasks: clean(state.backgroundTasks),
+        securedKeys: clean(state.securedKeys),
         agentColorMap: clean(state.agentColorMap),
       };
     });
@@ -757,15 +780,17 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   },
 
   cycleThinkingMode: (sessionId) => {
-    const modes: ThinkingMode[] = ['off', 'thinking', 'ultrathink'];
+    const effortLevels: EffortLevel[] = ['low', 'medium', 'high', 'max'];
     set((state) => {
-      const currentMode = state.thinkingMode[sessionId] || 'thinking';
-      const currentIndex = modes.indexOf(currentMode);
-      const nextIndex = (currentIndex + 1) % modes.length;
+      const currentMode = state.thinkingMode[sessionId] || 'high';
+      // Migrate old value if present
+      const migratedMode = migrateThinkingMode(currentMode);
+      const currentIndex = effortLevels.indexOf(migratedMode);
+      const nextIndex = (currentIndex + 1) % effortLevels.length;
       return {
         thinkingMode: {
           ...state.thinkingMode,
-          [sessionId]: modes[nextIndex],
+          [sessionId]: effortLevels[nextIndex],
         },
       };
     });
@@ -855,7 +880,8 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
     const { addMessage, setStreaming, permissionMode, thinkingMode, selectedModel } = state;
     const mode = permissionMode[sessionId] || 'acceptEdits';
-    const thinking = thinkingMode[sessionId] || 'thinking';
+    // Apply migration to handle old thinking mode values, default to 'high' (full capability)
+    const thinking = migrateThinkingMode(thinkingMode[sessionId] || 'high');
     const model = selectedModel[sessionId]; // undefined = use default
     console.log('[SessionStore] sendMessage - sessionId:', sessionId, 'permissionMode:', mode, 'raw:', permissionMode[sessionId]);
 
@@ -868,11 +894,26 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       ),
     }));
 
-    // Add user message
+    // Intercept and secure any API keys/tokens in the message
+    const { modifiedText, keysDetected } = await window.electronAPI.secureKeys.interceptAndReplace(sessionId, message);
+
+    // Log if keys were detected (without revealing the actual keys)
+    if (keysDetected.length > 0) {
+      console.log(`[SessionStore] 🔒 Intercepted ${keysDetected.length} API key(s):`, keysDetected.map(k => k.description));
+      // Show notification to user that keys were secured
+      set((state) => ({
+        securedKeys: {
+          ...state.securedKeys,
+          [sessionId]: keysDetected,
+        },
+      }));
+    }
+
+    // Add user message (with keys replaced by placeholders)
     const userMessage: ChatMessage = {
       id: Date.now().toString(),
       role: 'user',
-      content: message,
+      content: modifiedText, // Use the secured version
       timestamp: new Date(),
     };
     addMessage(sessionId, userMessage);
@@ -982,6 +1023,28 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         result: tc.result,
         completedAt: tc.completedAt,
       });
+
+      // Handle Edit tool completion for text replacement feature
+      if (tc.name === 'Edit' && tc.status === 'completed') {
+        // Import UI store dynamically to avoid circular dependency
+        import('./ui.store').then(({ useUIStore }) => {
+          const uiStore = useUIStore.getState();
+
+          // Check if this edit was triggered by text editing mode
+          if (uiStore.sessionEditingText[sessionId]) {
+            console.log('[SessionStore] Edit tool completed for text replacement, triggering reload...');
+
+            // Clear editing state
+            uiStore.setSessionEditingText(sessionId, false);
+
+            // Trigger browser reload via custom event
+            // BrowserPreview component will listen for this event
+            window.dispatchEvent(new CustomEvent('grep-browser-reload', {
+              detail: { sessionId }
+            }));
+          }
+        });
+      }
 
       // Check if there are queued messages to inject after this tool completes
       const currentState = get();
@@ -1594,12 +1657,42 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
   // Smart Compact / Compaction status methods
   setCompactionStatus: (sessionId, status) => {
-    set((state) => ({
-      compactionStatus: {
-        ...state.compactionStatus,
-        [sessionId]: status,
-      },
-    }));
+    set((state) => {
+      const currentStatus = state.compactionStatus[sessionId] as (CompactionStatus & { startTime?: number }) | null;
+
+      // If compaction is starting, add start time
+      if (status?.isCompacting && (!currentStatus || !currentStatus.isCompacting)) {
+        return {
+          compactionStatus: {
+            ...state.compactionStatus,
+            [sessionId]: {
+              ...status,
+              startTime: Date.now(),
+            } as CompactionStatus & { startTime: number },
+          },
+        };
+      }
+
+      // If compaction is ending but still has data, preserve start time for display
+      if (status && !status.isCompacting && currentStatus?.startTime) {
+        return {
+          compactionStatus: {
+            ...state.compactionStatus,
+            [sessionId]: {
+              ...status,
+              startTime: currentStatus.startTime,
+            } as CompactionStatus & { startTime: number },
+          },
+        };
+      }
+
+      return {
+        compactionStatus: {
+          ...state.compactionStatus,
+          [sessionId]: status,
+        },
+      };
+    });
   },
 
   subscribeToCompaction: () => {
@@ -1616,10 +1709,22 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     // Subscribe to compaction complete events
     const unsubscribeComplete = window.electronAPI.claude.onCompactionComplete((complete) => {
       console.log('[SessionStore] Compaction complete received:', complete);
+
+      // Update status with completion data (token reduction)
+      const currentStatus = get().compactionStatus[complete.sessionId];
+      if (currentStatus) {
+        setCompactionStatus(complete.sessionId, {
+          ...currentStatus,
+          isCompacting: false,
+          preTokens: complete.preTokens,
+          postTokens: complete.postTokens,
+        } as CompactionStatus & { startTime: number; postTokens: number });
+      }
+
       // Clear compaction status after showing completion briefly
       setTimeout(() => {
         setCompactionStatus(complete.sessionId, null);
-      }, 2000);
+      }, 3000); // Increased to 3s to show the completion status
     });
 
     return () => {

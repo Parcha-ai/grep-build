@@ -1968,22 +1968,42 @@ ${memoriesPrompt}
 
       const isOpus = selectedModel.includes('opus');
 
-      // Opus has stricter limits, other models can use full 100k
-      const ultrathinkTokens = isOpus ? 60000 : 100000;
+      // Effort level to thinking token mapping
+      // Maps new effort levels (low/medium/high/max) to maxThinkingTokens budgets
+      // Also handles legacy values (off/thinking/ultrathink) for backward compatibility
+      const effortToThinkingTokens = (effort: string): number | undefined => {
+        // Migrate legacy values first
+        let migratedEffort = effort;
+        if (effort === 'off') migratedEffort = 'low';
+        if (effort === 'thinking') migratedEffort = 'medium';
+        if (effort === 'ultrathink') migratedEffort = 'high';
 
-      // Effort level mapping via token budgets
-      const thinkingTokensMap: Record<string, number | undefined> = {
-        off: undefined,        // No extended thinking
-        thinking: 10000,       // Medium effort
-        ultrathink: ultrathinkTokens, // High effort
+        switch (migratedEffort) {
+          case 'low':
+            return undefined; // No extended thinking - fast & efficient
+          case 'medium':
+            return 10000; // Balanced effort
+          case 'high':
+            return isOpus ? 60000 : 100000; // Full capability (default)
+          case 'max':
+            if (!isOpus) {
+              console.warn('[Claude Service] ⚠️  max effort only available on Opus 4.6, falling back to high');
+              return 100000; // Fallback to high for non-Opus
+            }
+            return 128000; // Maximum for Opus 4.6
+          default:
+            console.warn(`[Claude Service] Unknown effort level: ${effort}, defaulting to medium`);
+            return 10000; // Default to medium if unknown
+        }
       };
-      const maxThinkingTokens = thinkingTokensMap[thinkingMode || 'thinking'];
 
-      if (thinkingMode === 'ultrathink' && isOpus) {
-        console.log(`[Claude Service] Ultrathink (high effort) with Opus - capping thinking tokens to ${ultrathinkTokens} (model limit: 64,000)`);
-      }
-      if (thinkingMode && thinkingMode !== 'off') {
-        console.log(`[Claude Service] Thinking mode: ${thinkingMode} -> maxThinkingTokens: ${maxThinkingTokens}`);
+      const maxThinkingTokens = effortToThinkingTokens(thinkingMode || 'high');
+
+      if (thinkingMode) {
+        console.log(`[Claude Service] Effort level: ${thinkingMode} -> maxThinkingTokens: ${maxThinkingTokens}`);
+        if (thinkingMode === 'max' && !isOpus) {
+          console.log(`[Claude Service] Note: max effort requested but model is not Opus, using high instead`);
+        }
       }
 
       // Build prompt with attachments
@@ -2377,14 +2397,13 @@ Begin by creating the task structure now.
           // Add MCP servers (browser tools + QMD semantic search if available)
           mcpServers: mcpServersConfig,
           // SSH remote execution: spawn Claude Code on remote machine instead of locally
-          // Note: Using non-persistent createRemoteProcess - the persistent tmux/FIFO approach
-          // has blocking issues with named pipes that cause the read channel to close immediately
+          // Note: Using tmux-based persistence - proven reliable approach
           ...(session.sshConfig ? {
             spawnClaudeCodeProcess: (options: { command: string; args: string[]; cwd?: string; env: Record<string, string | undefined>; signal: AbortSignal }) => {
-              console.log('[Claude Service] Creating SSH remote process for session:', sessionId);
+              console.log('[Claude Service] Creating tmux SSH remote process for session:', sessionId);
               console.log('[Claude Service] SDK spawn options:', { command: options.command, args: options.args, cwd: options.cwd });
-              // Use direct SSH exec - simpler and more reliable than tmux/FIFO
-              return sshService.createRemoteProcess(
+              // Use tmux for persistence
+              return sshService.createPersistentRemoteProcess(
                 sessionId,
                 session.sshConfig!,
                 options
