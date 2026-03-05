@@ -23,5 +23,9 @@ echo ""
 # Kill any existing process on port 9000
 lsof -ti:9000 | xargs kill -9 2>/dev/null || true
 
+# Use a separate user data directory for dev so it doesn't touch production data
+export GREP_DEV_USER_DATA="/tmp/grep-build-dev"
+mkdir -p "$GREP_DEV_USER_DATA"
+
 # Start the dev server with the instance name
 npm run start

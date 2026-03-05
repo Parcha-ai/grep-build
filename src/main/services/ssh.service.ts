@@ -2243,9 +2243,6 @@ exec claude ${escapedArgs} <"${fifoIn}" >"${fifoOut}" 2>&1
 
     console.log('[SSH Service] Environment vars to export:', Object.keys(sdkOptions.env).filter(k => includeVars.includes(k)));
     console.log('[SSH Service] Has ANTHROPIC_API_KEY:', !!sdkOptions.env.ANTHROPIC_API_KEY);
-    console.log('[SSH Service] envExports result:', envExports.substring(0, 200));
-    console.log('[SSH Service] Total env keys from SDK:', Object.keys(sdkOptions.env).length);
-    console.log('[SSH Service] First 10 env keys:', Object.keys(sdkOptions.env).slice(0, 10));
 
     // Filter and escape args
     const filteredArgs = sdkOptions.args.filter(arg => {
@@ -2280,14 +2277,8 @@ exec claude ${escapedArgs} <"${fifoIn}" >"${fifoOut}" 2>&1
       }
     }
 
-    // Remove --resume from persistent sessions — resumed sessions restore old
-    // MCP configs and state that can cause Claude to get stuck. The transcript
-    // is still on disk for context via --continue.
-    const resumeIdx = filteredArgs.indexOf('--resume');
-    if (resumeIdx !== -1 && resumeIdx + 1 < filteredArgs.length) {
-      console.log('[SSH Service] Removing --resume from persistent session args');
-      filteredArgs.splice(resumeIdx, 2);
-    }
+    // Keep --resume so Claude has conversation context.
+    // The --mcp-config we pass overrides the saved one from the resumed session.
 
     const escapedArgs = filteredArgs.map(arg => {
       if (arg.includes(' ') || arg.includes('"') || arg.includes("'") || arg.includes('{')) {

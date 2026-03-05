@@ -31,6 +31,8 @@ npm run make
 
 **IMPORTANT: After running `./scripts/dev.sh`, ALWAYS tell the user the dev instance name** (e.g., "Dev server started: bouncy-penguin"). The user needs this to identify which build is running in the status bar.
 
+**CRITICAL: Never open multiple dev instances for the same piece of work!** Before launching a new dev server, kill any existing dev Electron instances first (those running from `node_modules/electron/dist/`). Only ONE dev instance should be running at a time. The production build (`out/` directory) should be left alone.
+
 ## Development Workflow
 
 **CRITICAL: Always test in dev before building!**

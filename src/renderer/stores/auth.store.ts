@@ -30,22 +30,10 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       set({ isLoading: false });
       return;
     }
-    set({ isLoading: true, error: null });
-    try {
-      const [user, isDevMode] = await Promise.all([
-        window.electronAPI.auth.getUser(),
-        window.electronAPI.dev.getDevMode(),
-      ]);
-      set({ user, isDevMode, isLoading: false });
-
-      if (user) {
-        get().loadRepos();
-      }
-    } catch (error) {
-      set({
-        error: error instanceof Error ? error.message : 'Failed to check auth',
-        isLoading: false,
-      });
+    // Skip auth gate — go straight to the app in dev mode
+    set({ isDevMode: true, isLoading: false });
+    if (hasElectronAPI) {
+      window.electronAPI.dev.setDevMode(true);
     }
   },
 

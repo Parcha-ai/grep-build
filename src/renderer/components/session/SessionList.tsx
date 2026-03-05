@@ -99,7 +99,7 @@ export default function SessionList() {
           projectName = session.name;
         } else {
           // For regular directories, use parent/folder format for disambiguation
-          // e.g., "/Users/aj/dev/parcha/claudette" -> "parcha/claudette"
+          // e.g., "/home/user/dev/myorg/myapp" -> "myorg/myapp"
           const pathParts = projectPath.split('/').filter(Boolean);
           if (pathParts.length >= 2) {
             projectName = `${pathParts[pathParts.length - 2]}/${pathParts[pathParts.length - 1]}`;

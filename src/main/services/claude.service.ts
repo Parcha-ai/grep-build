@@ -1,6 +1,7 @@
 import { query, tool, createSdkMcpServer } from '@anthropic-ai/claude-agent-sdk';
 import type { SDKMessage, SDKUserMessage, Query } from '@anthropic-ai/claude-agent-sdk';
 import type { ImageBlockParam, TextBlockParam } from '@anthropic-ai/sdk/resources';
+import sharp from 'sharp';
 import { z } from 'zod';
 import Store from 'electron-store';
 import * as fs from 'fs';
@@ -2039,6 +2040,8 @@ ${memoriesPrompt}
       }
 
       // Create async generator for prompt with images
+      // Capture `this` for use inside the generator function
+      const resizeImage = this.resizeImageIfNeeded.bind(this);
       async function* createPromptWithImages(): AsyncIterable<SDKUserMessage> {
         const content: (TextBlockParam | ImageBlockParam)[] = [
           { type: 'text', text: fullTextMessage }
@@ -2052,12 +2055,15 @@ ${memoriesPrompt}
             : ext === 'webp' ? 'image/webp'
             : 'image/png';
 
+          // Resize image if needed to stay under Anthropic's dimension limits
+          const resizedData = await resizeImage(attachment.content, mediaType);
+
           content.push({
             type: 'image',
             source: {
               type: 'base64',
               media_type: mediaType as 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp',
-              data: attachment.content,
+              data: resizedData,
             },
           });
         }
@@ -3111,6 +3117,27 @@ Begin by creating the task structure now.
               return;
             }
 
+            // Check for image size errors - auto-rewind past the problematic message
+            if (resultMsg.is_error && resultMsg.result?.includes('exceed max allowed size')) {
+              console.error('[Claude SDK] Image size error detected, attempting auto-repair for:', sessionId);
+              const sdkSessionId = this.sessionStore.get(`sessions.${sessionId}.sdkSessionId`) as string | undefined;
+
+              const repaired = await this.repairOversizedImages(sessionId, sdkSessionId);
+
+              if (repaired) {
+                yield {
+                  type: 'error',
+                  error: '⚠️ An image in the conversation was too large. The problematic message has been removed. Please try again.'
+                };
+              } else {
+                yield {
+                  type: 'error',
+                  error: '❌ Image exceeds maximum size (2000px). Use /rewind to go back before this image, or start a new session.'
+                };
+              }
+              return;
+            }
+
             // Check for other API errors
             if (resultMsg.is_error && resultMsg.result) {
               yield { type: 'error', error: resultMsg.result };
@@ -3304,6 +3331,8 @@ Begin by creating the task structure now.
 
     try {
       // Create an async generator that yields a single user message
+      // Capture `this` for use inside the generator function
+      const resizeImage = this.resizeImageIfNeeded.bind(this);
       async function* createMessageStream(): AsyncIterable<SDKUserMessage> {
         // Build content with any image attachments
         const imageAttachments = attachments?.filter(a => a.type === 'image') || [];
@@ -3321,12 +3350,15 @@ Begin by creating the task structure now.
               : ext === 'webp' ? 'image/webp'
               : 'image/png';
 
+            // Resize image if needed to stay under Anthropic's dimension limits
+            const resizedData = await resizeImage(attachment.content, mediaType);
+
             content.push({
               type: 'image',
               source: {
                 type: 'base64',
                 media_type: mediaType,
-                data: attachment.content,
+                data: resizedData,
               },
             });
           }
@@ -3377,8 +3409,139 @@ Begin by creating the task structure now.
    */
   private getProjectSlug(projectPath: string): string {
     // SDK uses a slug that starts with dash and preserves case
-    // /Users/aj/dev/project -> -Users-aj-dev-project
+    // /home/user/dev/project -> -home-user-dev-project
     return projectPath.replace(/\//g, '-');
+  }
+
+  /**
+   * Resize a base64-encoded image if either dimension exceeds the max allowed size.
+   * Anthropic recommends 1568px max for multi-image requests (hard limit is 2000px).
+   */
+  private async resizeImageIfNeeded(base64Data: string, mediaType: string): Promise<string> {
+    const MAX_DIMENSION = 1568; // Anthropic recommended max (fits well under 2000px limit)
+
+    try {
+      const buffer = Buffer.from(base64Data, 'base64');
+      const metadata = await sharp(buffer).metadata();
+
+      if (!metadata.width || !metadata.height) return base64Data;
+      if (metadata.width <= MAX_DIMENSION && metadata.height <= MAX_DIMENSION) return base64Data;
+
+      console.log(`[Claude Service] Resizing image from ${metadata.width}x${metadata.height} (max ${MAX_DIMENSION}px)`);
+
+      const resized = await sharp(buffer)
+        .resize(MAX_DIMENSION, MAX_DIMENSION, { fit: 'inside', withoutEnlargement: true })
+        .toFormat(mediaType.includes('png') ? 'png' : 'jpeg')
+        .toBuffer();
+
+      console.log(`[Claude Service] Image resized successfully, new size: ${resized.length} bytes`);
+      return resized.toString('base64');
+    } catch (error) {
+      console.error('[Claude Service] Failed to resize image, using original:', error);
+      return base64Data;
+    }
+  }
+
+  /**
+   * Repair a transcript by removing the last user turn that contains oversized images.
+   * Follows the same pattern as repairCorruptedTranscript().
+   */
+  private async repairOversizedImages(sessionId: string, sdkSessionId?: string): Promise<boolean> {
+    try {
+      const resolvedSdkSessionId = sdkSessionId
+        || this.sessionStore.get(`sdkSessionMappings.${sessionId}`) as string | undefined
+        || this.sessionStore.get(`sessions.${sessionId}.sdkSessionId`) as string | undefined;
+
+      if (!resolvedSdkSessionId) {
+        console.log('[Claude] No SDK session ID found, cannot repair oversized images');
+        return false;
+      }
+
+      const claudeDir = path.join(os.homedir(), '.claude', 'projects');
+      const transcriptFilename = `${resolvedSdkSessionId}.jsonl`;
+
+      if (!fs.existsSync(claudeDir)) {
+        console.log('[Claude] Claude projects directory not found:', claudeDir);
+        return false;
+      }
+
+      let transcriptPath: string | null = null;
+      const projectDirs = fs.readdirSync(claudeDir);
+      for (const projectDir of projectDirs) {
+        const candidatePath = path.join(claudeDir, projectDir, transcriptFilename);
+        if (fs.existsSync(candidatePath)) {
+          transcriptPath = candidatePath;
+          break;
+        }
+      }
+
+      if (!transcriptPath) {
+        console.log('[Claude] Transcript file not found:', transcriptFilename);
+        return false;
+      }
+
+      console.log('[Claude] Repairing oversized images in transcript:', transcriptPath);
+
+      const content = fs.readFileSync(transcriptPath, 'utf-8');
+      const lines = content.trim().split('\n');
+
+      if (lines.length === 0) {
+        console.log('[Claude] Transcript is empty, nothing to repair');
+        return false;
+      }
+
+      const entries: Array<{ line: string; parsed: Record<string, unknown> }> = [];
+      for (const line of lines) {
+        if (line.trim()) {
+          try {
+            const parsed = JSON.parse(line);
+            entries.push({ line, parsed });
+          } catch {
+            // Skip unparseable lines
+          }
+        }
+      }
+
+      // Walk backwards to find the last user turn containing image blocks
+      let lastUserTurnStart = -1;
+      for (let i = entries.length - 1; i >= 0; i--) {
+        const entry = entries[i].parsed;
+        const message = entry.message as Record<string, unknown> | undefined;
+        if (entry.type === 'user' || (message && message.role === 'user')) {
+          // Check if this user message contains image content
+          const msgContent = message?.content;
+          const lineStr = entries[i].line;
+          if (lineStr.includes('"type":"image"') || lineStr.includes('"type": "image"') ||
+              (Array.isArray(msgContent) && (msgContent as Array<Record<string, unknown>>).some(b => b.type === 'image'))) {
+            lastUserTurnStart = i;
+            break;
+          }
+        }
+      }
+
+      if (lastUserTurnStart === -1) {
+        console.log('[Claude] Could not find user turn with images to remove');
+        return false;
+      }
+
+      // Create backup before modifying
+      const backupPath = transcriptPath + '.backup.' + Date.now();
+      fs.copyFileSync(transcriptPath, backupPath);
+      console.log('[Claude] Created transcript backup:', backupPath);
+
+      // Remove entries from the last user turn with images onwards
+      const repairedEntries = entries.slice(0, lastUserTurnStart);
+      const repairedContent = repairedEntries.map(e => e.line).join('\n') + '\n';
+
+      fs.writeFileSync(transcriptPath, repairedContent);
+      console.log('[Claude] Transcript repaired - removed', entries.length - lastUserTurnStart, 'entries (oversized image turn)');
+      console.log('[Claude] Original entries:', entries.length, '-> Repaired entries:', repairedEntries.length);
+
+      return true;
+    } catch (error) {
+      console.error('[Claude] Error repairing oversized images:', error);
+      return false;
+    }
   }
 
   /**
