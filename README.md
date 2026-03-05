@@ -4,6 +4,9 @@ A desktop IDE for [Claude Code](https://docs.anthropic.com/en/docs/claude-code).
 
 **Requires an [Anthropic API key](https://console.anthropic.com/).**
 
+<!-- TODO: Add hero screenshot -->
+<!-- ![Grep Build](docs/screenshots/main-view.png) -->
+
 ## Download
 
 Download the latest macOS build from [GitHub Releases](https://github.com/Parcha-ai/grep-build/releases).
@@ -28,6 +31,18 @@ Grep Build wraps Claude's agent capabilities in a native desktop app. Point it a
 2. Enter your [Anthropic API key](https://console.anthropic.com/) when prompted
 3. Open a project folder
 4. Start building
+
+## Using with Claude Code
+
+Grep Build includes a `CLAUDE.md` with built-in skills that Claude Code can use directly. If you develop on Grep Build using Claude Code, these slash commands are available out of the box:
+
+| Command | What it does |
+|---------|-------------|
+| `/dev` | Starts the development server via `./scripts/dev.sh` with hot reload |
+| `/build` | Builds the production app — bumps version, runs QA, packages the binary, creates a git tag |
+| `/build force` | Skips QA and builds immediately |
+
+The `CLAUDE.md` also gives Claude full context on the architecture, IPC patterns, service structure, and file conventions — so it can navigate and modify the codebase effectively from the start.
 
 ## Claude Integration
 
@@ -59,6 +74,8 @@ npm run lint
 # Build distributable
 npm run make
 ```
+
+The dev server uses a separate data directory (`/tmp/grep-build-dev`) so it won't interfere with your production install.
 
 ## Architecture
 
