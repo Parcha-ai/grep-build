@@ -1,91 +1,60 @@
 # Grep Build
 
-An AI-powered development environment built on Electron with Claude integration.
+A desktop IDE for [Claude Code](https://docs.anthropic.com/en/docs/claude-code). Chat with Claude, run commands, preview your app, and manage git — all in one window.
+
+**Requires an [Anthropic API key](https://console.anthropic.com/).**
 
 ## Download
 
-Download the latest release from the [GitHub Releases](https://github.com/Parcha-ai/grep-build/releases) page.
+Download the latest macOS build from [GitHub Releases](https://github.com/Parcha-ai/grep-build/releases).
 
-## Features
+> Building from source works on macOS, Linux, and Windows — see [Development](#development) below.
 
-### AI Chat Interface
-- **Multi-model support**: Switch between Claude Opus 4.5, Sonnet 4.5, Sonnet 4, and Haiku 3.5
-- **Extended thinking**: Three modes - off, thinking (10k tokens), ultrathink (100k tokens)
-- **Permission modes**: Control how Claude executes tools (accept edits, require approval, bypass all, plan only)
-- **Message queueing**: Type messages while Claude is responding - they'll be sent automatically
-- **File mentions**: Use `@` to mention files, folders, or symbols from your codebase
-- **Command palette**: Slash commands (`/commit`, `/agent`, `/skill`) for quick actions
+## What It Does
 
-### Browser Preview
-- Live browser preview with navigation controls
-- **DOM Inspector**: Click elements to capture their selector, HTML, and screenshot
-- Network request monitoring
-- Console log capture
-- Screenshot capture for sending to Claude
+Grep Build wraps Claude's agent capabilities in a native desktop app. Point it at any project folder and you get:
 
-### Integrated Terminal
-- Full PTY terminal emulation via xterm.js
-- Search functionality
-- Web link detection
+- **AI chat** with full tool use — Claude can read, write, and execute code in your project
+- **Integrated terminal** — see exactly what Claude is running
+- **Live browser preview** — watch your app update as Claude makes changes, with a DOM inspector for pointing at elements
+- **Code editor** — Monaco-based editor with quick search and multi-file tabs
+- **Git UI** — branches, diffs, commit history, push/pull
+- **Session management** — multiple projects open at once, each with their own context
+- **Voice input/output** — talk to Claude and hear responses (optional, requires OpenAI/ElevenLabs keys)
 
-### Code Editor
-- Monaco Editor with syntax highlighting
-- Quick file search (`Cmd/Ctrl+P`)
-- Multi-file support with tabs
+## Quick Start
 
-### Git Integration
-- Branch management
-- Commit history visualization
-- Diff viewing
-- Push/pull operations
+1. Download from [Releases](https://github.com/Parcha-ai/grep-build/releases) and open the app
+2. Enter your [Anthropic API key](https://console.anthropic.com/) when prompted
+3. Open a project folder
+4. Start building
 
-### Audio Features
-- Voice input via OpenAI Realtime API
-- Text-to-speech responses via ElevenLabs
-- Configurable voice trigger word
+## Claude Integration
 
-### Session Management
-- Automatic discovery of Claude Code sessions
-- Per-session conversation history
-- Session-specific settings (model, thinking mode, permissions)
+Grep Build uses the [Claude Agent SDK](https://github.com/anthropic/claude-agent-sdk) to give Claude full access to your development environment:
 
-## Getting Started
-
-```bash
-# Clone the repository
-git clone https://github.com/Parcha-ai/grep-build.git
-cd grep-build
-
-# Install dependencies
-npm install
-
-# Start the development server
-./scripts/dev.sh
-```
-
-## Configuration
-
-### API Keys
-
-On first launch, you'll need to configure:
-
-1. **Anthropic API Key** (required): For Claude integration
-2. **ElevenLabs API Key** (optional): For text-to-speech
-3. **OpenAI API Key** (optional): For voice transcription
-
-Access settings via the gear icon in the sidebar.
+| Feature | Details |
+|---------|---------|
+| **Models** | Opus 4.5, Sonnet 4.5, Sonnet 4, Haiku 3.5 |
+| **Thinking** | Off, thinking (10k tokens), ultrathink (100k tokens) |
+| **Permissions** | Accept edits, require approval, bypass all, plan only |
+| **Tools** | File read/write, terminal, browser, git — same as Claude Code CLI |
+| **File mentions** | `@filename` to add files to context |
+| **Slash commands** | `/commit`, `/agent`, `/skill` and more |
 
 ## Development
 
 ```bash
-# Start with hot reload
+# Clone and install
+git clone https://github.com/Parcha-ai/grep-build.git
+cd grep-build
+npm install
+
+# Run in development mode
 ./scripts/dev.sh
 
-# Run linting
+# Lint
 npm run lint
-
-# Package for distribution
-npm run package
 
 # Build distributable
 npm run make
@@ -93,35 +62,17 @@ npm run make
 
 ## Architecture
 
-Grep Build follows Electron's multi-process architecture:
+Electron app with a React renderer and Node.js main process:
 
 ```
 src/
-├── main/              # Main process (Node.js)
-│   ├── index.ts       # App entry, window management
-│   ├── preload.ts     # Secure IPC bridge
-│   ├── services/      # Business logic
-│   └── ipc/           # IPC handlers
-├── renderer/          # Renderer process (React)
-│   ├── App.tsx        # Root component
-│   ├── stores/        # Zustand state management
-│   └── components/    # UI components
-└── shared/            # Shared types and constants
-    ├── types/
-    └── constants/
+├── main/              # Main process — services, IPC handlers, terminal, git
+├── renderer/          # React UI — Zustand stores, components
+└── shared/            # Types and IPC channel constants
 ```
 
-## Tech Stack
-
-- **Framework**: Electron 39
-- **Frontend**: React 18, TypeScript
-- **State**: Zustand
-- **Styling**: Tailwind CSS
-- **Editor**: Monaco Editor
-- **Terminal**: xterm.js + node-pty
-- **AI**: Claude Agent SDK, Anthropic SDK
-- **Build**: Electron Forge, Webpack
+Key technologies: Electron 39, React 18, TypeScript, Zustand, Tailwind CSS, Monaco Editor, xterm.js, node-pty, Claude Agent SDK.
 
 ## License
 
-MIT - see [LICENSE](LICENSE) for details.
+MIT — see [LICENSE](LICENSE).
