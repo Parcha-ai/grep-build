@@ -127,6 +127,11 @@ export class SSHService {
   private connections: Map<string, SSHConnectionInfo> = new Map();
   private connectionTimeout = 30000; // 30 seconds
 
+  // Track active persistent stream connections to avoid duplicate FIFO readers.
+  // The SDK calls spawnClaudeCodeProcess on every query(), so subsequent calls
+  // must reuse the existing streams rather than opening new cat channels.
+  private persistentStreams = new Map<string, { stdin: PassThrough; stdout: PassThrough; active: boolean }>();
+
   // Performance optimization: Cache remote transcripts with TTL
   private sshTranscriptCache = new Map<string, {
     content: string;
@@ -882,6 +887,9 @@ export class SSHService {
    * Disconnect a session's SSH connection
    */
   disconnect(sessionId: string): void {
+    // Clean up persistent stream tracking
+    this.persistentStreams.delete(sessionId);
+
     const conn = this.connections.get(sessionId);
     if (conn) {
       try {
@@ -1987,6 +1995,9 @@ export class SSHService {
     config: SSHConfig
   ): Promise<{ success: boolean; error?: string }> {
     try {
+      // Clean up persistent stream tracking
+      this.persistentStreams.delete(sessionId);
+
       const client = await this.getConnection(sessionId, config);
       const tmuxSessionName = `grep-${sessionId.substring(0, 8)}`;
 
@@ -2219,6 +2230,7 @@ exec claude ${escapedArgs} <"${fifoIn}" >"${fifoOut}" 2>&1
     let killed = false;
     let exitCode: number | null = null;
     const emitter = new EventEmitter();
+    const self = this; // Capture for use in object literal methods
     const tmuxSessionName = `grep-${sessionId.substring(0, 8)}`;
     const fifoIn = `/tmp/grep-${sessionId.substring(0, 8)}-in`;
     const fifoOut = `/tmp/grep-${sessionId.substring(0, 8)}-out`;
@@ -2294,7 +2306,8 @@ exec claude ${escapedArgs} <"${fifoIn}" >"${fifoOut}" 2>&1
       console.log('[SSH Service] Abort signal received for persistent process');
       killed = true;
       // Don't kill the tmux session on abort - that's the point of persistence
-      // Just close our local streams
+      // Just close our local streams and clean up the stream tracking
+      this.persistentStreams.delete(sessionId);
       passThrough.stdout.end();
     };
     sdkOptions.signal.addEventListener('abort', abortHandler);
@@ -2302,6 +2315,29 @@ exec claude ${escapedArgs} <"${fifoIn}" >"${fifoOut}" 2>&1
     // Start async connection and tmux setup
     (async () => {
       try {
+        // Check if we already have active streams for this session.
+        // The SDK calls spawnClaudeCodeProcess on every query(), so we must
+        // reuse existing FIFO connections rather than opening duplicate cat readers.
+        const existing = this.persistentStreams.get(sessionId);
+        if (existing?.active) {
+          console.log('[SSH Service] Reusing existing persistent streams for session:', sessionId);
+          // Forward data from the original FIFO-connected streams to the new passThrough.
+          // The original existing.stdout receives data from the FIFO read channel;
+          // we add a named listener so we can cleanly remove just this one later.
+          const forwardOutput = (data: Buffer) => passThrough.stdout.write(data);
+          const forwardInput = (data: Buffer) => existing.stdin.write(data);
+          existing.stdout.on('data', forwardOutput);
+          passThrough.stdin.on('data', forwardInput);
+          // Clean up only our forwarding listeners when this caller's streams close
+          passThrough.stdout.once('close', () => {
+            existing.stdout.removeListener('data', forwardOutput);
+          });
+          passThrough.stdin.once('close', () => {
+            passThrough.stdin.removeListener('data', forwardInput);
+          });
+          return; // Don't create new cat channels
+        }
+
         console.log('[SSH Service] Getting connection for persistent process...');
         const client = await this.getConnection(sessionId, config);
         console.log('[SSH Service] Got connection, checking for existing session...');
@@ -2360,7 +2396,12 @@ exec claude ${escapedArgs} <"${fifoIn}" >"${fifoOut}" 2>&1
             claudePaths, envExports, escapedArgs, passThrough, emitter, sdkOptions
           );
         }
+
+        // Store streams for reuse by subsequent SDK query() calls.
+        // This must happen after both the reattach and create-new paths.
+        this.persistentStreams.set(sessionId, { stdin: passThrough.stdin, stdout: passThrough.stdout, active: true });
       } catch (error) {
+        this.persistentStreams.delete(sessionId);
         emitter.emit('error', error instanceof Error ? error : new Error(String(error)));
         passThrough.stdout.end();
         sdkOptions.signal.removeEventListener('abort', abortHandler);
@@ -2377,6 +2418,8 @@ exec claude ${escapedArgs} <"${fifoIn}" >"${fifoOut}" 2>&1
         killed = true;
         // Note: We intentionally don't kill the tmux session here
         // The user can explicitly kill it via killPersistentSession
+        // Clean up stream tracking so next call creates fresh connections
+        self.persistentStreams.delete(sessionId);
         passThrough.stdout.end();
         return true;
       },
