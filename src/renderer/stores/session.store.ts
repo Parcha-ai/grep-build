@@ -267,7 +267,19 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         window.electronAPI.ssh.checkPersistentSession(sessionId, session.sshConfig)
           .then(persistentInfo => {
             if (persistentInfo?.isRunning) {
-              console.log(`[SessionStore] SSH session ${sessionId} has active remote Claude in tmux`);
+              console.log(`[SessionStore] SSH session ${sessionId} has active remote Claude in tmux — reconnecting to flush output buffer`);
+              // Immediately reconnect the output FIFO reader to unblock Claude.
+              // Any buffered output will flush through. We don't process it here —
+              // the transcript will have it. This just ensures Claude doesn't stay
+              // blocked on write() waiting for a reader.
+              window.electronAPI.ssh.reconnectPersistentSession(sessionId, session.sshConfig!)
+                .then(result => {
+                  if (result.success) {
+                    console.log(`[SessionStore] Output reader reconnected for ${sessionId} — Claude unblocked`);
+                  } else {
+                    console.error(`[SessionStore] Failed to reconnect:`, result.error);
+                  }
+                });
             }
           })
           .catch(error => {
@@ -1787,6 +1799,12 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       const session = state.sessions.find(s => s.id === sessionId);
       if (!session) {
         console.log('[SessionStore] Session not found for auto-resume:', sessionId);
+        return;
+      }
+
+      // Skip auto-resume for SSH sessions - the remote Claude process persists in tmux
+      if (session.sshConfig) {
+        console.log('[SessionStore] Skipping auto-resume for SSH session (tmux persistence):', sessionId);
         return;
       }
 

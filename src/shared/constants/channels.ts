@@ -179,6 +179,7 @@ export const IPC_CHANNELS = {
   SSH_SETUP_PROGRESS: 'ssh:setup-progress',
   SSH_CHECK_PERSISTENT_SESSION: 'ssh:check-persistent-session',
   SSH_KILL_PERSISTENT_SESSION: 'ssh:kill-persistent-session',
+  SSH_RECONNECT_PERSISTENT_SESSION: 'ssh:reconnect-persistent-session',
   SSH_CHECK_CONNECTION: 'ssh:check-connection',
   SSH_TELEPORT_SESSION: 'ssh:teleport-session',
   SSH_DOWNLOAD_SESSION: 'ssh:download-session',

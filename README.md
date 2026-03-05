@@ -1,6 +1,10 @@
-# Grep
+# Grep Build
 
 An AI-powered development environment built on Electron with Claude integration.
+
+## Download
+
+Download the latest release from the [GitHub Releases](https://github.com/Parcha-ai/grep-build/releases) page.
 
 ## Features
 
@@ -45,18 +49,18 @@ An AI-powered development environment built on Electron with Claude integration.
 - Per-session conversation history
 - Session-specific settings (model, thinking mode, permissions)
 
-## Installation
+## Getting Started
 
 ```bash
 # Clone the repository
-git clone https://github.com/Parcha-ai/claudette.git
-cd claudette
+git clone https://github.com/Parcha-ai/grep-build.git
+cd grep-build
 
 # Install dependencies
 npm install
 
-# Start development server
-npm run start
+# Start the development server
+./scripts/dev.sh
 ```
 
 ## Configuration
@@ -75,7 +79,7 @@ Access settings via the gear icon in the sidebar.
 
 ```bash
 # Start with hot reload
-npm run start
+./scripts/dev.sh
 
 # Run linting
 npm run lint
@@ -89,7 +93,7 @@ npm run make
 
 ## Architecture
 
-Grep follows Electron's multi-process architecture:
+Grep Build follows Electron's multi-process architecture:
 
 ```
 src/
@@ -120,4 +124,4 @@ src/
 
 ## License
 
-MIT
+MIT - see [LICENSE](LICENSE) for details.

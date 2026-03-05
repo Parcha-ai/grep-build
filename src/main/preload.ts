@@ -714,6 +714,15 @@ const electronAPI = {
       success: boolean;
       error?: string;
     }> => ipcRenderer.invoke(IPC_CHANNELS.SSH_KILL_PERSISTENT_SESSION, { sessionId, config }),
+    reconnectPersistentSession: (sessionId: string, config: SSHConfig): Promise<{
+      success: boolean;
+      error?: string;
+    }> => ipcRenderer.invoke(IPC_CHANNELS.SSH_RECONNECT_PERSISTENT_SESSION, { sessionId, config }),
+    onPersistentSessionData: (callback: (data: { sessionId: string; data: string }) => void): (() => void) => {
+      const handler = (_event: IpcRendererEvent, data: { sessionId: string; data: string }) => callback(data);
+      ipcRenderer.on(IPC_CHANNELS.SSH_RECONNECT_PERSISTENT_SESSION + ':data', handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.SSH_RECONNECT_PERSISTENT_SESSION + ':data', handler);
+    },
     checkConnection: (config: SSHConfig): Promise<{
       connected: boolean;
       error?: string;

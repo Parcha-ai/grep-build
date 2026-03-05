@@ -285,6 +285,36 @@ export function registerSSHHandlers(ipcMain: IpcMain): void {
   );
 
   /**
+   * Reconnect to a running persistent session (flush output on app startup)
+   */
+  ipcMain.handle(
+    IPC_CHANNELS.SSH_RECONNECT_PERSISTENT_SESSION,
+    async (event, data: { sessionId: string; config: SSHConfig }) => {
+      console.log('[SSH IPC] Reconnecting persistent session for', data.sessionId);
+      try {
+        const result = await sshService.reconnectPersistentSession(
+          data.sessionId,
+          data.config,
+          (jsonData: string) => {
+            // Forward the streamed data to the renderer as Claude messages
+            event.sender.send(IPC_CHANNELS.SSH_RECONNECT_PERSISTENT_SESSION + ':data', {
+              sessionId: data.sessionId,
+              data: jsonData,
+            });
+          }
+        );
+        return result;
+      } catch (error) {
+        console.error('[SSH IPC] Failed to reconnect persistent session:', error);
+        return {
+          success: false,
+          error: error instanceof Error ? error.message : 'Unknown error',
+        };
+      }
+    }
+  );
+
+  /**
    * Check if SSH connection is available (quick ping)
    */
   ipcMain.handle(

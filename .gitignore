@@ -92,3 +92,16 @@ typings/
 # Electron-Forge
 out/
 .claudette-worktrees/
+
+# Build artifacts
+resources/qmd/
+
+# Internal dev files
+.notes/
+.tessl/
+
+# Ad-hoc test scripts in root
+test-*.js
+test-*.ts
+test-*.sh
+test-*.scpt
