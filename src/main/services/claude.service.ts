@@ -1,14 +1,13 @@
 import { query, tool, createSdkMcpServer } from '@anthropic-ai/claude-agent-sdk';
 import type { SDKMessage, SDKUserMessage, Query } from '@anthropic-ai/claude-agent-sdk';
 import type { ImageBlockParam, TextBlockParam } from '@anthropic-ai/sdk/resources';
-import sharp from 'sharp';
 import { z } from 'zod';
 import Store from 'electron-store';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import type { ChatMessage, ToolCall, Session, QuestionRequest, QuestionResponse, Attachment, ContentBlock, CompactionStatus, CompactionComplete, PlanApprovalRequest, PlanApprovalResponse } from '../../shared/types';
-import { BrowserWindow } from 'electron';
+import { BrowserWindow, nativeImage } from 'electron';
 import { IPC_CHANNELS } from '../../shared/constants/channels';
 import { browserService } from './browser.service';
 import { stagehandService } from './stagehand.service';
@@ -3415,6 +3414,7 @@ Begin by creating the task structure now.
 
   /**
    * Resize a base64-encoded image if either dimension exceeds the max allowed size.
+   * Uses Electron's built-in nativeImage — no external native dependencies needed.
    * Anthropic recommends 1568px max for multi-image requests (hard limit is 2000px).
    */
   private async resizeImageIfNeeded(base64Data: string, mediaType: string): Promise<string> {
@@ -3422,20 +3422,27 @@ Begin by creating the task structure now.
 
     try {
       const buffer = Buffer.from(base64Data, 'base64');
-      const metadata = await sharp(buffer).metadata();
+      const image = nativeImage.createFromBuffer(buffer);
 
-      if (!metadata.width || !metadata.height) return base64Data;
-      if (metadata.width <= MAX_DIMENSION && metadata.height <= MAX_DIMENSION) return base64Data;
+      if (image.isEmpty()) return base64Data;
 
-      console.log(`[Claude Service] Resizing image from ${metadata.width}x${metadata.height} (max ${MAX_DIMENSION}px)`);
+      const { width, height } = image.getSize();
+      if (width <= MAX_DIMENSION && height <= MAX_DIMENSION) return base64Data;
 
-      const resized = await sharp(buffer)
-        .resize(MAX_DIMENSION, MAX_DIMENSION, { fit: 'inside', withoutEnlargement: true })
-        .toFormat(mediaType.includes('png') ? 'png' : 'jpeg')
-        .toBuffer();
+      console.log(`[Claude Service] Resizing image from ${width}x${height} (max ${MAX_DIMENSION}px)`);
 
-      console.log(`[Claude Service] Image resized successfully, new size: ${resized.length} bytes`);
-      return resized.toString('base64');
+      // Calculate new dimensions maintaining aspect ratio
+      const scale = Math.min(MAX_DIMENSION / width, MAX_DIMENSION / height);
+      const newWidth = Math.round(width * scale);
+      const newHeight = Math.round(height * scale);
+
+      const resized = image.resize({ width: newWidth, height: newHeight });
+
+      // Convert back to the appropriate format
+      const resizedBuffer = mediaType.includes('png') ? resized.toPNG() : resized.toJPEG(90);
+
+      console.log(`[Claude Service] Image resized to ${newWidth}x${newHeight}, ${resizedBuffer.length} bytes`);
+      return resizedBuffer.toString('base64');
     } catch (error) {
       console.error('[Claude Service] Failed to resize image, using original:', error);
       return base64Data;

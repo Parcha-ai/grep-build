@@ -60,21 +60,7 @@ const config: ForgeConfig = {
           { name: '@anthropic-ai/sdk', source: path.join(__dirname, 'node_modules', '@anthropic-ai', 'sdk'), dest: path.join(nodeModulesPath, '@anthropic-ai', 'sdk') },
           // Monaco editor assets for code editing
           { name: 'monaco-editor', source: path.join(__dirname, 'node_modules', 'monaco-editor') },
-          // Sharp for image resizing (native module + platform binaries)
-          { name: 'sharp', source: path.join(__dirname, 'node_modules', 'sharp') },
         ];
-
-        // Copy sharp's platform-specific native binaries from @img scope
-        const imgModules = ['@img/sharp-darwin-arm64', '@img/sharp-libvips-darwin-arm64'];
-        for (const imgMod of imgModules) {
-          const imgSource = path.join(__dirname, 'node_modules', ...imgMod.split('/'));
-          if (fs.existsSync(imgSource)) {
-            const imgDest = path.join(nodeModulesPath, ...imgMod.split('/'));
-            await fs.ensureDir(path.dirname(imgDest));
-            await fs.copy(imgSource, imgDest);
-            console.log(`[Packaging] Copied ${imgMod} to ${imgDest}`);
-          }
-        }
 
         for (const dep of deps) {
           const dest = dep.dest || path.join(nodeModulesPath, dep.name);
