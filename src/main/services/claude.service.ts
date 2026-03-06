@@ -1861,10 +1861,9 @@ ${memoriesPrompt}
     model?: string
   ): AsyncGenerator<StreamEvent> {
     const apiKey = this.getApiKey();
-    if (!apiKey) {
-      yield { type: 'error', error: 'API key not configured. Please set your Anthropic API key in settings.' };
-      return;
-    }
+
+    // Get session for working directory
+    const session = this.sessionStore.get(`sessions.${sessionId}`) as Session | undefined;
 
     // Validate message is not empty to prevent API error "text content blocks must be non-empty"
     if (!userMessage || userMessage.trim() === '') {
@@ -1877,9 +1876,6 @@ ${memoriesPrompt}
       // For image-only messages, use a minimal placeholder
       userMessage = 'Please analyze this image.';
     }
-
-    // Get session for working directory
-    const session = this.sessionStore.get(`sessions.${sessionId}`) as Session | undefined;
     if (!session) {
       yield { type: 'error', error: 'Session not found' };
       return;
@@ -2393,7 +2389,7 @@ Begin by creating the task structure now.
           // Pass environment with API key and enable agent teams
           env: {
             ...process.env,
-            ANTHROPIC_API_KEY: apiKey,
+            ...(apiKey ? { ANTHROPIC_API_KEY: apiKey } : {}),
             CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS: '1',
             ...this.getFoundryEnvVars(),
           },
@@ -3118,21 +3114,42 @@ Begin by creating the task structure now.
             }
 
             // Check for image size errors - auto-rewind past the problematic message
-            if (resultMsg.is_error && resultMsg.result?.includes('exceed max allowed size')) {
+            if (resultMsg.is_error && (resultMsg.result?.includes('exceed max allowed size') || resultMsg.result?.includes('exceeds the dimension limit'))) {
               console.error('[Claude SDK] Image size error detected, attempting auto-repair for:', sessionId);
               const sdkSessionId = this.sessionStore.get(`sessions.${sessionId}.sdkSessionId`) as string | undefined;
 
               const repaired = await this.repairOversizedImages(sessionId, sdkSessionId);
 
               if (repaired) {
+                // Kill persistent SSH session so it restarts with repaired transcript
+                if (session.sshConfig) {
+                  try {
+                    await sshService.killPersistentSession(sessionId, session.sshConfig);
+                  } catch (e) {
+                    console.error('[Claude SDK] Failed to kill persistent SSH session after repair:', e);
+                  }
+                }
                 yield {
                   type: 'error',
                   error: '⚠️ An image in the conversation was too large. The problematic message has been removed. Please try again.'
                 };
               } else {
+                // Repair failed (e.g. SSH session where transcript is remote) — clear SDK session and kill persistent process to start fresh
+                console.log('[Claude SDK] Repair failed, clearing SDK session to start fresh for:', sessionId);
+                this.sessionStore.delete(`sessions.${sessionId}.sdkSessionId`);
+                this.sessionStore.delete(`sdkSessionMappings.${sessionId}`);
+                // Kill the persistent SSH session so the remote claude process restarts fresh
+                if (session.sshConfig) {
+                  try {
+                    await sshService.killPersistentSession(sessionId, session.sshConfig);
+                    console.log('[Claude SDK] Killed persistent SSH session for fresh start:', sessionId);
+                  } catch (e) {
+                    console.error('[Claude SDK] Failed to kill persistent SSH session:', e);
+                  }
+                }
                 yield {
                   type: 'error',
-                  error: '❌ Image exceeds maximum size (2000px). Use /rewind to go back before this image, or start a new session.'
+                  error: '⚠️ An image in the conversation history was too large. Starting fresh conversation — please try your message again.'
                 };
               }
               return;
@@ -3258,6 +3275,11 @@ Begin by creating the task structure now.
             error: '⚠️ Session had corrupted thinking data. Starting fresh session - please try your message again.'
           };
         }
+      } else if (errorMessage.match(/auth|unauthorized|api.?key|invalid.*key|not authenticated|login required/i)) {
+        yield {
+          type: 'error',
+          error: 'Authentication failed. Either set your Anthropic API key in Settings → API Keys, or run `claude login` in your terminal to authenticate via OAuth.'
+        };
       } else {
         yield { type: 'error', error: errorMessage };
       }
@@ -3465,34 +3487,58 @@ Begin by creating the task structure now.
         return false;
       }
 
-      const claudeDir = path.join(os.homedir(), '.claude', 'projects');
       const transcriptFilename = `${resolvedSdkSessionId}.jsonl`;
-
-      if (!fs.existsSync(claudeDir)) {
-        console.log('[Claude] Claude projects directory not found:', claudeDir);
-        return false;
-      }
-
+      const session = this.sessionStore.get(`sessions.${sessionId}`) as Session | undefined;
+      let content: string | null = null;
       let transcriptPath: string | null = null;
-      const projectDirs = fs.readdirSync(claudeDir);
-      for (const projectDir of projectDirs) {
-        const candidatePath = path.join(claudeDir, projectDir, transcriptFilename);
-        if (fs.existsSync(candidatePath)) {
-          transcriptPath = candidatePath;
-          break;
+      let isRemote = false;
+
+      if (session?.sshConfig) {
+        // SSH session — find and read transcript on remote machine
+        isRemote = true;
+        console.log('[Claude] Searching for remote transcript:', transcriptFilename);
+        try {
+          // Construct the expected path: ~/.claude/projects/<encoded-workdir>/<sessionId>.jsonl
+          // Claude encodes the workdir by replacing / with - (keeping leading -)
+          const workdir = session.sshConfig.remoteWorkdir || '/tmp';
+          const encodedDir = workdir.replace(/\//g, '-');
+          transcriptPath = `~/.claude/projects/${encodedDir}/${transcriptFilename}`;
+          console.log('[Claude] Trying remote transcript path:', transcriptPath);
+          content = await sshService.readRemoteFile(sessionId, session.sshConfig, transcriptPath);
+        } catch (e) {
+          console.error('[Claude] Failed to read remote transcript:', e);
+          return false;
         }
+      } else {
+        // Local session — find transcript in ~/.claude/projects/
+        const claudeDir = path.join(os.homedir(), '.claude', 'projects');
+        if (!fs.existsSync(claudeDir)) {
+          console.log('[Claude] Claude projects directory not found:', claudeDir);
+          return false;
+        }
+        const projectDirs = fs.readdirSync(claudeDir);
+        for (const projectDir of projectDirs) {
+          const candidatePath = path.join(claudeDir, projectDir, transcriptFilename);
+          if (fs.existsSync(candidatePath)) {
+            transcriptPath = candidatePath;
+            break;
+          }
+        }
+        if (!transcriptPath) {
+          console.log('[Claude] Transcript file not found:', transcriptFilename);
+          return false;
+        }
+        content = fs.readFileSync(transcriptPath, 'utf-8');
       }
 
-      if (!transcriptPath) {
-        console.log('[Claude] Transcript file not found:', transcriptFilename);
+      if (!content || !transcriptPath) {
+        console.log('[Claude] No transcript content to repair');
         return false;
       }
 
       console.log('[Claude] Repairing oversized images in transcript:', transcriptPath);
 
-      const content = fs.readFileSync(transcriptPath, 'utf-8');
       const lines = content.trim().split('\n');
-
       if (lines.length === 0) {
         console.log('[Claude] Transcript is empty, nothing to repair');
         return false;
@@ -3516,9 +3562,8 @@ Begin by creating the task structure now.
         const entry = entries[i].parsed;
         const message = entry.message as Record<string, unknown> | undefined;
         if (entry.type === 'user' || (message && message.role === 'user')) {
-          // Check if this user message contains image content
-          const msgContent = message?.content;
           const lineStr = entries[i].line;
+          const msgContent = message?.content;
           if (lineStr.includes('"type":"image"') || lineStr.includes('"type": "image"') ||
               (Array.isArray(msgContent) && (msgContent as Array<Record<string, unknown>>).some(b => b.type === 'image'))) {
             lastUserTurnStart = i;
@@ -3532,16 +3577,21 @@ Begin by creating the task structure now.
         return false;
       }
 
-      // Create backup before modifying
-      const backupPath = transcriptPath + '.backup.' + Date.now();
-      fs.copyFileSync(transcriptPath, backupPath);
-      console.log('[Claude] Created transcript backup:', backupPath);
-
       // Remove entries from the last user turn with images onwards
       const repairedEntries = entries.slice(0, lastUserTurnStart);
       const repairedContent = repairedEntries.map(e => e.line).join('\n') + '\n';
 
-      fs.writeFileSync(transcriptPath, repairedContent);
+      if (isRemote && session?.sshConfig) {
+        // Write repaired transcript back to remote machine
+        await sshService.writeRemoteFile(sessionId, session.sshConfig, transcriptPath, repairedContent);
+      } else {
+        // Local backup and write
+        const backupPath = transcriptPath + '.backup.' + Date.now();
+        fs.copyFileSync(transcriptPath, backupPath);
+        console.log('[Claude] Created transcript backup:', backupPath);
+        fs.writeFileSync(transcriptPath, repairedContent);
+      }
+
       console.log('[Claude] Transcript repaired - removed', entries.length - lastUserTurnStart, 'entries (oversized image turn)');
       console.log('[Claude] Original entries:', entries.length, '-> Repaired entries:', repairedEntries.length);
 

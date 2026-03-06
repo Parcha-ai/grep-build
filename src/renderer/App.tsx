@@ -288,10 +288,13 @@ function ElectronApp() {
 
       await useAuthStore.getState().checkAuth();
 
-      // Check for API key and show onboarding if missing
+      // Check for API key and show onboarding if missing (and not previously skipped)
       const hasKey = await useUIStore.getState().checkApiKey();
       if (!hasKey) {
-        useUIStore.getState().openOnboarding();
+        const settings = await window.electronAPI?.settings?.get?.();
+        if (!settings?.onboardingSkipped) {
+          useUIStore.getState().openOnboarding();
+        }
       }
 
       setIsInitialized(true);

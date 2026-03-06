@@ -226,6 +226,7 @@ export interface AppSettings {
   foundryDefaultSonnetModel?: string;
   foundryDefaultHaikuModel?: string;
   foundryDefaultOpusModel?: string;
+  onboardingSkipped?: boolean;
 }
 
 // Permission request from Agent SDK

@@ -564,7 +564,7 @@ export default function SettingsDialog() {
       {/* Anthropic API Key */}
       <div className="space-y-2">
         <label className="block text-xs font-mono text-claude-text-secondary uppercase tracking-wider">
-          Anthropic API Key (Required)
+          Anthropic API Key
         </label>
         <ApiKeyInput
           value={apiKey}
@@ -588,6 +588,7 @@ export default function SettingsDialog() {
           >
             console.anthropic.com
           </a>
+          . Or skip this and run <span className="text-claude-text">claude login</span> in your terminal to use OAuth.
         </p>
       </div>
 

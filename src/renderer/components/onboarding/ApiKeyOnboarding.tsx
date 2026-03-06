@@ -37,6 +37,11 @@ export default function ApiKeyOnboarding() {
     setIsSaving(false);
   };
 
+  const handleSkip = async () => {
+    await window.electronAPI?.settings?.set?.({ onboardingSkipped: true });
+    closeOnboarding();
+  };
+
   const handleAdvancedSettings = () => {
     closeOnboarding();
     openSettings();
@@ -72,7 +77,7 @@ export default function ApiKeyOnboarding() {
             </div>
           </div>
           <p className="text-sm font-mono text-claude-text-secondary leading-relaxed">
-            To get started, you'll need an Anthropic API key. This key allows Grep to communicate with Claude for code assistance, chat, and more.
+            Enter an Anthropic API key, or skip if you've already logged in with <span className="text-claude-text">claude login</span>.
           </p>
         </div>
 
@@ -149,6 +154,14 @@ export default function ApiKeyOnboarding() {
                   Continue
                 </>
               )}
+            </button>
+
+            <button
+              onClick={handleSkip}
+              className="w-full flex items-center justify-center gap-2 px-4 py-3 border border-claude-border text-claude-text font-mono text-sm uppercase tracking-wider hover:bg-claude-bg transition-colors"
+              style={{ borderRadius: 0 }}
+            >
+              Skip — I've already run claude login
             </button>
 
             <button
