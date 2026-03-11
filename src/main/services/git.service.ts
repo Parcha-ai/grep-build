@@ -2,6 +2,7 @@ import simpleGit, { SimpleGit, LogResult } from 'simple-git';
 import * as path from 'path';
 import * as fs from 'fs';
 import Store from 'electron-store';
+import { getSessionStoreName } from '../store-names';
 import type { Commit, Branch, FileChange, Session } from '../../shared/types';
 
 interface BranchWatcher {
@@ -19,7 +20,7 @@ export class GitService {
   private branchChangeCallback: BranchChangeCallback | null = null;
 
   constructor() {
-    this.store = new Store({ name: 'claudette-sessions' });
+    this.store = new Store({ name: getSessionStoreName() });
   }
 
   /**

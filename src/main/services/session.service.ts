@@ -7,6 +7,7 @@ import { app } from 'electron';
 import simpleGit from 'simple-git';
 import { DockerService } from './docker.service';
 import { GitService } from './git.service';
+import { getSessionStoreName } from '../store-names';
 import type { Session, SessionStatus } from '../../shared/types';
 import Anthropic from '@anthropic-ai/sdk';
 
@@ -48,7 +49,7 @@ export class SessionService extends EventEmitter {
 
   constructor() {
     super();
-    this.store = new Store({ name: 'claudette-sessions' });
+    this.store = new Store({ name: getSessionStoreName() });
     this.dockerService = new DockerService();
     this.gitService = new GitService();
     this.sessionsPath = path.join(app.getPath('userData'), 'sessions');
@@ -353,7 +354,19 @@ Only return the title, nothing else.`
       if (now - this.lastDiscoveryTime > this.DISCOVERY_CACHE_TTL) {
         this.backgroundDiscoverSessions();
       }
-      return this.getMergedSessions();
+      const stored = this.getSessions();
+      const starredStored = stored.filter(s => s.isStarred && s.sshConfig);
+      const merged = this.getMergedSessions();
+      const starredMerged = merged.filter(s => s.isStarred && s.sshConfig);
+      console.log(`[Session] listSessions: ${stored.length} stored (${starredStored.length} starred SSH), ${this.discoveredSessionsCache.size} discovered, ${merged.length} merged (${starredMerged.length} starred SSH)`);
+      // Show sessions that are in merged but NOT in stored (came from discoveredSessionsCache)
+      const storedIds = new Set(stored.map(s => s.id));
+      const fromCache = starredMerged.filter(s => !storedIds.has(s.id));
+      if (fromCache.length > 0) {
+        console.log(`[Session]   ${fromCache.length} starred SSH from discoveredCache (not in sessions store):`);
+        fromCache.forEach(s => console.log(`[Session]     ${s.name} (${s.id.substring(0, 8)})`));
+      }
+      return merged;
     }
 
     // Only do blocking discovery if cache is completely empty

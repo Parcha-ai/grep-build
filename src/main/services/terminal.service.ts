@@ -2,6 +2,7 @@ import * as pty from 'node-pty';
 import { v4 as uuid } from 'uuid';
 import Store from 'electron-store';
 import { ClientChannel } from 'ssh2';
+import { getSessionStoreName } from '../store-names';
 import { DockerService } from './docker.service';
 import { sshService } from './ssh.service';
 import type { Session, SSHConfig } from '../../shared/types';
@@ -31,7 +32,7 @@ export class TerminalService {
   private dockerService: DockerService;
 
   constructor() {
-    this.store = new Store({ name: 'claudette-sessions' });
+    this.store = new Store({ name: getSessionStoreName() });
     this.dockerService = new DockerService();
   }
 

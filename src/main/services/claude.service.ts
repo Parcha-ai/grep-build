@@ -3,6 +3,7 @@ import type { SDKMessage, SDKUserMessage, Query } from '@anthropic-ai/claude-age
 import type { ImageBlockParam, TextBlockParam } from '@anthropic-ai/sdk/resources';
 import { z } from 'zod';
 import Store from 'electron-store';
+import { getSessionStoreName } from '../store-names';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
@@ -91,7 +92,7 @@ export class ClaudeService {
 
   constructor() {
     this.store = new Store({ name: 'claudette-settings' });
-    this.sessionStore = new Store({ name: 'claudette-sessions' });
+    this.sessionStore = new Store({ name: getSessionStoreName() });
   }
 
   setMainWindow(window: BrowserWindow | null): void {
