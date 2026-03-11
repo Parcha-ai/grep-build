@@ -2462,7 +2462,7 @@ Begin by creating the task structure now.
                     console.log('[Claude Service] Using cached plan from:', planFilePath);
                   } else {
                   // Check if this is a remote SSH session
-                  const session = this.sessionStore.get(`session-${sessionId}`) as any;
+                  const session = this.sessionStore.get(`sessions.${sessionId}`) as any;
 
                   if (session?.sshConfig) {
                     // Remote session: read plan file from remote server
@@ -3207,6 +3207,15 @@ Begin by creating the task structure now.
           console.log('[Claude SDK] Query complete, exiting message loop');
           break;
         }
+      }
+
+      // Detect abnormal stream termination (e.g., tmux session killed externally)
+      // If the message loop exits without receiving a 'result' message, the remote
+      // process likely died. Emit an error so the UI doesn't hang on "thinking...".
+      if (!queryComplete && session?.sshConfig) {
+        console.error('[Claude SDK] Stream ended without result message — remote process may have died');
+        yield { type: 'error', error: 'Remote session disconnected. The remote process may have stopped. Try sending your message again to reconnect.' };
+        return;
       }
 
       // Final flush before creating message

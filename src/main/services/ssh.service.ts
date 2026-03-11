@@ -1038,11 +1038,46 @@ export class SSHService {
         return;
       }
 
-      // Persistent SSH sessions keep long-lived channels open for FIFO I/O.
-      // Skip exec-based heartbeats while those streams are active to avoid
-      // false-positive timeouts from channel pressure.
+      // For persistent SSH sessions, check if the tmux session is still alive
+      // instead of running a generic `echo ok` heartbeat. This detects cases
+      // where the remote process died (killed externally, crashed, etc.) and
+      // the app would otherwise hang forever waiting for data.
       if (this.hasActivePersistentStreams(sessionId)) {
         this.healthCheckFailures.delete(sessionId);
+        try {
+          const tmuxName = `grep-${sessionId.substring(0, 8)}`;
+          const result = await new Promise<string>((resolve, reject) => {
+            const timeout = setTimeout(() => reject(new Error('tmux check timeout')), 10000);
+            conn.client.exec(
+              `tmux has-session -t "${tmuxName}" 2>/dev/null && echo "ALIVE" || echo "DEAD"`,
+              (err, channel) => {
+                if (err) { clearTimeout(timeout); reject(err); return; }
+                let output = '';
+                channel.on('data', (data: Buffer) => { output += data.toString(); });
+                channel.stderr.on('data', () => { /* drain */ });
+                channel.on('close', () => { clearTimeout(timeout); resolve(output.trim()); });
+                channel.on('error', (e: Error) => { clearTimeout(timeout); reject(e); });
+              }
+            );
+          });
+
+          if (result === 'DEAD') {
+            console.error(`[SSH Service] tmux session ${tmuxName} is dead — cleaning up streams for ${sessionId.substring(0, 8)}`);
+            // Clean up the dead persistent streams
+            this.closePersistentChannels(sessionId);
+            const streams = this.persistentStreams.get(sessionId);
+            if (streams) {
+              // Signal end-of-data so the SDK's message iterator terminates
+              streams.stdout.end();
+            }
+            this.persistentStreams.delete(sessionId);
+            this.persistentForwarders.delete(sessionId);
+            this.persistentOutputOffsets.delete(sessionId);
+            this.stopHealthCheck(sessionId);
+          }
+        } catch {
+          // Connection issues handled by ssh2 keepalive, don't escalate
+        }
         return;
       }
 
