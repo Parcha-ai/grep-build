@@ -8,7 +8,7 @@ Build the Grep Build production application for distribution.
 Requires QA approval before building. This is the safe, recommended approach.
 
 **Workflow:**
-1. Start the dev server (`npm run start`)
+1. Start the dev server (`./scripts/dev.sh`)
 2. Wait for user to test and confirm everything works
 3. Ask explicitly: "Dev build is running. Please test and confirm when ready to build production."
 4. Only proceed with production build after explicit user approval
@@ -21,17 +21,22 @@ Builds immediately without QA check. Use when you're confident the build is read
 2. **MERGE TO MASTER FIRST** - Push branch and merge to master (see Merge to Master section)
 3. Run `npm run make` on master
 4. Create git tag
-5. Open built application
+5. Push to both remotes (`origin` and `public`)
+6. Open built application
 
 ## Build Steps (after QA approval or in force mode)
 
-1. **BUMP THE VERSION** in `package.json` (increment patch version, e.g., 0.0.22 → 0.0.23)
+1. **BUMP THE VERSION** in `package.json` (increment patch version, e.g., 0.0.68 → 0.0.69)
 2. **MERGE TO MASTER FIRST** - Push branch and merge to master (see Merge to Master section)
 3. **CHECKOUT MASTER** - Switch to master branch after merge
 4. Run `npm run make` to create the distributable application
-5. **CREATE A RELEASE TAG** with `git tag v{version}` (e.g., `git tag v0.0.23`)
-6. **PUSH THE TAG** with `git push origin v{version}`
-7. Open the built application from `out/Grep Build-darwin-arm64/Grep Build.app`
+5. **CREATE A RELEASE TAG** with `git tag v{version}`
+6. **PUSH TO BOTH REMOTES**:
+   ```bash
+   git push origin master && git push origin v{version}
+   git push public master && git push public v{version}
+   ```
+7. Open the built application from `out/v{version}/Grep Build-darwin-arm64/Grep Build.app`
 8. Report the build status and location of the artifact
 
 ## Pre-flight Check (Standard Mode)
@@ -50,6 +55,13 @@ Before building, confirm:
 ```bash
 npm run make
 ```
+
+## Git Remotes
+
+- `origin` → `Parcha-ai/claudette` (private repo)
+- `public` → `Parcha-ai/grep-build` (public repo — releases go here)
+
+Always push to BOTH remotes after building.
 
 ## Merge to Master
 
@@ -77,10 +89,26 @@ npm run make
 ## Post-build
 
 After successful build:
-- Create a git tag: `git tag v{version}` (e.g., `git tag v0.0.23`)
-- Push the tag: `git push origin v{version}`
-- Open the application: `open "out/Grep Build-darwin-arm64/Grep Build.app"`
-- Report the build artifacts location: `out/make/`
+- Create a git tag: `git tag v{version}`
+- Push tag and master to both remotes:
+  ```bash
+  git push origin v{version} && git push public master && git push public v{version}
+  ```
+- Open the application: `open "out/v{version}/Grep Build-darwin-arm64/Grep Build.app"`
+- Report the build artifacts location: `out/v{version}/make/`
+
+## Build Output Structure
+
+Electron Forge outputs to versioned directories:
+```
+out/v{version}/
+├── Grep Build-darwin-arm64/
+│   └── Grep Build.app          ← the runnable app
+└── make/
+    ├── zip/darwin/arm64/
+    │   └── Grep Build-darwin-arm64-{version}.zip
+    └── Grep Build-{version}-arm64.dmg
+```
 
 ## Version Bumping
 

@@ -1,6 +1,6 @@
 # Create GitHub Release
 
-Create a GitHub release on the **grep-build** public repo and attach the build artifacts for download.
+Create a GitHub release on the **Parcha-ai/grep-build** public repo and attach the build artifacts for download.
 
 ## Arguments: $ARGUMENTS
 
@@ -10,19 +10,18 @@ If arguments are provided, they are treated as additional release notes to inclu
 
 1. **Read version** from `package.json` to determine the current version (e.g., `0.0.69`)
 
-2. **Push to grep-build repo**: Ensure master and the version tag are pushed to the `public` remote (Parcha-ai/grep-build):
+2. **Ensure tag and master are pushed to both remotes**:
    ```bash
-   git push public master
-   git push public v{version}
+   git push origin master && git push origin v{version}
+   git push public master && git push public v{version}
    ```
    - If the tag doesn't exist locally: create it with `git tag v{version}` first
-   - Also push to `origin` (Parcha-ai/claudette) if not already pushed
+   - `origin` = Parcha-ai/claudette (private), `public` = Parcha-ai/grep-build (public)
 
-3. **Verify build artifact exists**: Look for artifacts at:
+3. **Verify build artifacts exist**: Look for:
    - `out/v{version}/make/zip/darwin/arm64/Grep Build-darwin-arm64-{version}.zip`
    - `out/v{version}/make/Grep Build-{version}-arm64.dmg`
-   - If neither exists, check `out/make/` as fallback
-   - If no artifacts exist at all, tell the user to run `/build` or `/build force` first and STOP
+   - If neither exists, tell the user to run `/build` or `/build force` first and STOP
 
 4. **Generate release notes**: Get commits since the previous tag using:
    ```bash
@@ -30,7 +29,7 @@ If arguments are provided, they are treated as additional release notes to inclu
    ```
    Format these as a markdown bullet list under a "## Changes" heading.
 
-5. **Create the GitHub release** on grep-build using `gh release create`:
+5. **Create the GitHub release** on grep-build:
    ```bash
    gh release create v{version} \
      "out/v{version}/make/zip/darwin/arm64/Grep Build-darwin-arm64-{version}.zip" \
@@ -49,19 +48,22 @@ If arguments are provided, they are treated as additional release notes to inclu
    EOF
    )"
    ```
-   - Use `--repo Parcha-ai/grep-build` to target the public repo
+   - **MUST use `--repo Parcha-ai/grep-build`** — releases go to the public repo
+   - Attach both zip and dmg artifacts
    - Use `--latest` flag to mark as the latest release
-   - Attach both zip and dmg if available
+   - Note: upload takes several minutes (~500MB of artifacts)
 
-6. **Report the result**: Print the release URL returned by `gh release create`
+6. **Report the result**: Print the release URL (e.g., `https://github.com/Parcha-ai/grep-build/releases/tag/v{version}`)
 
 ## Important Notes
 
 - Releases go to **Parcha-ai/grep-build** (public), NOT Parcha-ai/claudette (private)
-- The `public` git remote points to grep-build, `origin` points to claudette
+- Git remotes: `origin` = claudette (private), `public` = grep-build (public)
 - This skill does NOT build the application. Run `/build` or `/build force` first.
 - This skill does NOT bump versions. The version in `package.json` is used as-is.
-- The artifacts are macOS ARM64 only (Apple Silicon).
+- Artifacts are macOS ARM64 only (Apple Silicon).
 - Build output is in `out/v{version}/` (versioned directory from electron-forge).
-- If a release for this version already exists, `gh release create` will fail. In that case, ask the user if they want to delete the existing release first with `gh release delete v{version} --repo Parcha-ai/grep-build --yes` and retry.
-- Always confirm the release URL with the user after creation.
+- If a release for this version already exists, ask the user if they want to delete it first:
+  ```bash
+  gh release delete v{version} --repo Parcha-ai/grep-build --yes
+  ```
